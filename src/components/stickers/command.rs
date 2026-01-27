@@ -26,6 +26,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use crate::windows::StickerWindowEvent;
 use crate::{components::ExtendedIconName, storage::ArcStickerStore};
 
@@ -338,6 +341,12 @@ impl CommandSticker {
         };
 
         let mut cmd = Command::new(path);
+
+        #[cfg(target_os = "windows")]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
 
         if !args.is_empty() {
             cmd.args(args);
