@@ -441,7 +441,7 @@ impl Sticker for TimerSticker {
     }
 
     fn min_window_size() -> gpui::Size<i32> {
-        Size::new(300, 200)
+        Size::new(200, 100)
     }
 
     fn default_window_size() -> gpui::Size<i32> {

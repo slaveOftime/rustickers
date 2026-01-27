@@ -108,7 +108,7 @@ impl Sticker for MarkdownSticker {
     }
 
     fn min_window_size() -> gpui::Size<i32> {
-        gpui::size(300, 200)
+        gpui::size(200, 100)
     }
 
     fn default_window_size() -> gpui::Size<i32> {

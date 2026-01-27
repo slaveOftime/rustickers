@@ -698,7 +698,7 @@ impl super::Sticker for CommandSticker {
     }
 
     fn min_window_size() -> gpui::Size<i32> {
-        gpui::size(200, 200)
+        gpui::size(100, 100)
     }
 
     fn default_window_size() -> gpui::Size<i32> {
