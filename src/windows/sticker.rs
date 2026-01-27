@@ -4,7 +4,7 @@ use gpui::{
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Root, Sizable, TitleBar,
+    ActiveTheme, IconName, Root, TitleBar,
     alert::Alert,
     button::Button,
     h_flex,
@@ -34,6 +34,9 @@ pub struct StickerWindow {
     store: ArcStickerStore,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     detail: StickerDetail,
+
+    is_tick_started: bool,
+    is_tick_start_pending: bool,
 
     view: Box<dyn StickerView>,
     error: Option<String>,
@@ -195,6 +198,8 @@ impl StickerWindow {
             store,
             detail,
             sticker_events_tx,
+            is_tick_started: false,
+            is_tick_start_pending: false,
             view,
             hovered: false,
             last_mouse_move_at: None,
@@ -363,6 +368,26 @@ impl StickerWindow {
         .detach();
     }
 
+    fn try_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_tick_started {
+            self.tick_bounds_state(window, cx);
+            self.tick_hover_state(window, cx);
+        } else if !self.is_tick_start_pending {
+            self.is_tick_start_pending = true;
+            println!("StickerWindow: scheduled tick delay, so window bound will be stable.");
+            cx.spawn(async |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(1500))
+                    .await;
+                let _ = this.update(cx, |this, _| {
+                    this.is_tick_started = true;
+                    this.is_tick_start_pending = false;
+                });
+            })
+            .detach();
+        }
+    }
+
     fn header_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.hovered {
             return Empty.into_any_element();
@@ -382,7 +407,6 @@ impl StickerWindow {
                     .border_0()
                     .cursor_pointer()
                     .icon(IconName::Close)
-                    .small()
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()
@@ -428,10 +452,9 @@ impl StickerWindow {
 
 impl Render for StickerWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(cx.theme().font_size);
+        self.try_tick(window, cx);
 
-        self.tick_bounds_state(window, cx);
-        self.tick_hover_state(window, cx);
+        window.set_rem_size(cx.theme().font_size);
 
         v_flex()
             .text_color(cx.theme().foreground)
