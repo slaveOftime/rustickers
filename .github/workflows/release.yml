@@ -27,11 +27,11 @@ jobs:
             artifact_suffix: windows-x86_64
             binary_ext: ".exe"
             artifact_ext: ".zip"
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_suffix: linux-x86_64
-            binary_ext: ""
-            artifact_ext: ".tar.gz"
+          # - os: ubuntu-latest
+          #   target: x86_64-unknown-linux-gnu
+          #   artifact_suffix: linux-x86_64
+          #   binary_ext: ""
+          #   artifact_ext: ".tar.gz"
           - os: macos-14
             target: aarch64-apple-darwin
             artifact_suffix: macos-aarch64
