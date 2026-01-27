@@ -23,6 +23,9 @@ which = "8.0.0"
 winsplit = "0.1.0"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 notify-rust = "4.11.7"
+async-compat = "0.2.5"
+futures = "0.3.31"
+reqwest = "0.13.1"
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.

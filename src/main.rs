@@ -5,6 +5,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod components;
 mod hotkey;
+mod http;
 mod ipc;
 mod model;
 mod storage;
@@ -48,7 +49,10 @@ fn main() {
         println!("Failed to start global hotkey listener: {err:#}");
     }
 
-    let app = Application::new().with_assets(components::Assets);
+    let app = Application::new()
+        .with_assets(components::Assets)
+        .with_http_client(http::ReqwestClient::new());
+
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
 
     app.run(move |cx: &mut App| {
