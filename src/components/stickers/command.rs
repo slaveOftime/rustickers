@@ -1,6 +1,6 @@
 use gpui::{
     Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Image, ImageFormat,
-    ImageSource, ObjectFit, Render, Window, div, img, prelude::*, transparent_white,
+    ImageSource, Render, Window, div, img, prelude::*, transparent_white,
 };
 use gpui_component::{
     Sizable,
@@ -14,15 +14,13 @@ use gpui_component::{
     v_flex, yellow_500,
 };
 use serde::{Deserialize, Serialize};
-use std::thread;
 use std::{
     process::{Command, Stdio},
     str::FromStr,
-    sync::{Arc, Mutex},
-};
-use std::{
     sync::atomic::{AtomicBool, Ordering},
     sync::mpsc::{self, TryRecvError},
+    sync::{Arc, Mutex, RwLock},
+    thread,
     time::Duration,
 };
 
@@ -453,8 +451,9 @@ impl CommandSticker {
             cx.background_executor()
                 .timer(Duration::from_millis(100))
                 .await;
+            let result_temp = Arc::new(RwLock::new(String::new()));
             loop {
-                let mut result_temp = String::new();
+                let result_temp = result_temp.clone();
                 match rx.try_recv() {
                     Ok(event) => match event {
                         CmdEvent::Output(line) | CmdEvent::Error(line) => {
@@ -467,8 +466,8 @@ impl CommandSticker {
                                         result.push('\n');
                                     }
                                     CommandResult::Html(_) | CommandResult::Svg(_) => {
-                                        result_temp.push_str(&line);
-                                        result_temp.push('\n');
+                                        *result_temp.write().unwrap() += &line;
+                                        *result_temp.write().unwrap() += "\n";
                                     }
                                 }
                                 cx.notify();
@@ -479,7 +478,7 @@ impl CommandSticker {
                                 CommandResult::Text(_) | CommandResult::Markdown(_) => {}
                                 CommandResult::Html(ref mut result)
                                 | CommandResult::Svg(ref mut result) => {
-                                    *result = Some(result_temp);
+                                    *result = Some(result_temp.read().unwrap().clone());
                                 }
                             });
                             break;
@@ -679,7 +678,7 @@ impl CommandSticker {
                 x.clone().into_bytes(),
             ))))
             .size_full()
-            .object_fit(ObjectFit::Cover)
+            .object_fit(gpui::ObjectFit::Fill)
             .into_any_element(),
             CommandResult::Svg(None) => Empty.into_any_element(),
         };
