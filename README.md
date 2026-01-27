@@ -1,4 +1,4 @@
-# Rustickers (Fun Stickers)
+# Rustickers
 
 A tiny desktop sticker app for quick notes, timers, and command outputs — built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and backed by a local SQLite database.
 
