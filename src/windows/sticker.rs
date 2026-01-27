@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Empty, IntoElement,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     MouseButton, Render, Rgba, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
 };
@@ -25,7 +25,6 @@ use crate::{
     windows::StickerWindowEvent,
 };
 
-const HOVER_IDLE_TIMEOUT: Duration = Duration::from_millis(1800);
 const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 
 static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new());
@@ -36,13 +35,10 @@ pub struct StickerWindow {
     detail: StickerDetail,
 
     is_tick_started: bool,
-    is_tick_start_pending: bool,
 
     view: Box<dyn StickerView>,
     error: Option<String>,
 
-    hovered: bool,
-    last_mouse_move_at: Option<Instant>,
     last_bounds: Option<(i32, i32, i32, i32)>,
     last_bounds_change_at: Option<Instant>,
 }
@@ -199,10 +195,7 @@ impl StickerWindow {
             detail,
             sticker_events_tx,
             is_tick_started: false,
-            is_tick_start_pending: false,
             view,
-            hovered: false,
-            last_mouse_move_at: None,
             last_bounds: None,
             last_bounds_change_at: None,
             error: None,
@@ -238,32 +231,8 @@ impl StickerWindow {
         cx.notify();
     }
 
-    fn tick_hover_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.hovered {
-            return;
-        }
-
-        let should_hide = self
-            .last_mouse_move_at
-            .map(|t| t.elapsed() > HOVER_IDLE_TIMEOUT)
-            .unwrap_or(true);
-
-        if should_hide {
-            self.hovered = false;
-            cx.notify();
-        } else {
-            window.request_animation_frame();
-        }
-    }
-
     fn tick_bounds_state(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let bounds = window.bounds();
-        let current = (
-            bounds.left().to_f64() as i32,
-            bounds.top().to_f64() as i32,
-            bounds.size.width.to_f64() as i32,
-            bounds.size.height.to_f64() as i32,
-        );
+        let current = self.current_bounds(window);
 
         let changed = self.last_bounds.map(|prev| prev != current).unwrap_or(true);
 
@@ -282,6 +251,25 @@ impl StickerWindow {
                 window.request_animation_frame();
             }
         }
+    }
+
+    fn try_tick(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.is_tick_started {
+            self.tick_bounds_state(window, cx);
+        } else if window.is_window_hovered() {
+            self.is_tick_started = true;
+            self.last_bounds = Some(self.current_bounds(window));
+        }
+    }
+
+    fn current_bounds(&self, window: &Window) -> (i32, i32, i32, i32) {
+        let bounds = window.bounds();
+        (
+            bounds.left().to_f64() as i32,
+            bounds.top().to_f64() as i32,
+            bounds.size.width.to_f64() as i32,
+            bounds.size.height.to_f64() as i32,
+        )
     }
 
     fn change_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -368,31 +356,7 @@ impl StickerWindow {
         .detach();
     }
 
-    fn try_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_tick_started {
-            self.tick_bounds_state(window, cx);
-            self.tick_hover_state(window, cx);
-        } else if !self.is_tick_start_pending {
-            self.is_tick_start_pending = true;
-            println!("StickerWindow: scheduled tick delay, so window bound will be stable.");
-            cx.spawn(async |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(1500))
-                    .await;
-                let _ = this.update(cx, |this, _| {
-                    this.is_tick_started = true;
-                    this.is_tick_start_pending = false;
-                });
-            })
-            .detach();
-        }
-    }
-
     fn header_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.hovered {
-            return Empty.into_any_element();
-        }
-
         h_flex()
             .absolute()
             .left_0()
@@ -413,11 +377,6 @@ impl StickerWindow {
     }
 
     fn footer_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.hovered {
-            return Empty.into_any_element();
-        }
-
-        // Functional approach to generating color swatches
         let color_options = h_flex()
             .gap_1()
             .children(StickerColor::ALL.iter().map(|&theme| {
@@ -466,13 +425,6 @@ impl Render for StickerWindow {
                 ..self.detail.color.bg()
             })
             .window_control_area(WindowControlArea::Drag)
-            .on_mouse_move(cx.listener(|this, _, _, cx| {
-                this.last_mouse_move_at = Some(Instant::now());
-                if !this.hovered {
-                    this.hovered = true;
-                    cx.notify();
-                }
-            }))
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 if !window.is_window_active() {
                     window.activate_window();
@@ -492,7 +444,11 @@ impl Render for StickerWindow {
                 )
             })
             .child(self.view.element())
-            .child(self.header_view(cx))
-            .child(self.footer_view(cx))
+            .when(window.is_window_hovered(), |view| {
+                view.child(self.header_view(cx))
+            })
+            .when(window.is_window_hovered(), |view| {
+                view.child(self.footer_view(cx))
+            })
     }
 }
