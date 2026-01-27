@@ -1,0 +1,4 @@
+# Build a self-contained Windows MSVC binary (no VCRUNTIME140.dll dependency)
+# by statically linking the MSVC CRT.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
