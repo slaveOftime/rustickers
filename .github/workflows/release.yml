@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: rustickers
+
+jobs:
+  build-and-upload:
+    name: Build (${{ matrix.artifact_suffix }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x86_64
+            binary_ext: ".exe"
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64
+            binary_ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_suffix: macos-x86_64
+            binary_ext: ""
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_suffix: macos-aarch64
+            binary_ext: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zip \
+            pkg-config \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev
+
+      - name: Build (release)
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $bin = "${env:BIN_NAME}${{ matrix.binary_ext }}"
+          $src = "target\\${{ matrix.target }}\\release\\$bin"
+          if (-not (Test-Path $src)) {
+            throw "Binary not found at $src"
+          }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $src -Destination dist\ -Force
+
+          # Include common docs if present
+          Get-ChildItem -Path . -Filter "README*" -File -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName -Destination dist\ -Force }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination dist\ -Force }
+
+          $zip = "${env:BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "dist\\*" -DestinationPath $zip -Force
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bin="${BIN_NAME}${{ matrix.binary_ext }}"
+          src="target/${{ matrix.target }}/release/${BIN_NAME}"
+          if [[ ! -f "$src" ]]; then
+            echo "Binary not found at $src" >&2
+            exit 1
+          fi
+
+          rm -rf dist
+          mkdir -p dist
+          cp "$src" "dist/$bin"
+
+          if [[ -f "README.md" ]]; then cp README.md dist/; fi
+          if [[ -f "README" ]]; then cp README dist/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
+
+          zip_name="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}.zip"
+          (cd dist && zip -r "../$zip_name" .)
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "${{ env.BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}.zip"
+          fail_on_unmatched_files: true
