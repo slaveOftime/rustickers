@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Rustickers
+Comment=Desktop stickers for notes, timers, and command outputs
+Exec=rustickers
+Icon=rustickers
+Terminal=false
+Categories=Utility;
+StartupWMClass=rustickers

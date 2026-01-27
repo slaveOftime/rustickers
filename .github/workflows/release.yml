@@ -12,6 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   BIN_NAME: rustickers
+  MACOS_APP_NAME: Rustickers
 
 jobs:
   build-and-upload:
@@ -25,14 +26,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_suffix: windows-x86_64
             binary_ext: ".exe"
+            artifact_ext: ".zip"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64
             binary_ext: ""
+            artifact_ext: ".tar.gz"
           - os: macos-14
             target: aarch64-apple-darwin
             artifact_suffix: macos-aarch64
             binary_ext: ""
+            artifact_ext: ".zip"
 
     steps:
       - name: Checkout
@@ -75,6 +79,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $artifact = "${env:BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+
           $bin = "${env:BIN_NAME}${{ matrix.binary_ext }}"
           $src = "target\\${{ matrix.target }}\\release\\$bin"
           if (-not (Test-Path $src)) {
@@ -88,17 +94,15 @@ jobs:
           Get-ChildItem -Path . -Filter "README*" -File -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName -Destination dist\ -Force }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination dist\ -Force }
 
-          $zip = "${env:BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "dist\\*" -DestinationPath $zip -Force
+          if (Test-Path $artifact) { Remove-Item $artifact -Force }
+          Compress-Archive -Path "dist\\*" -DestinationPath $artifact -Force
 
-      - name: Package (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
 
-          bin="${BIN_NAME}${{ matrix.binary_ext }}"
           src="target/${{ matrix.target }}/release/${BIN_NAME}"
           if [[ ! -f "$src" ]]; then
             echo "Binary not found at $src" >&2
@@ -107,17 +111,98 @@ jobs:
 
           rm -rf dist
           mkdir -p dist
-          cp "$src" "dist/$bin"
+          cp "$src" "dist/${BIN_NAME}"
+          chmod +x "dist/${BIN_NAME}"
+
+          # Linux desktop integration helpers
+          cp "assets/icon.png" "dist/${BIN_NAME}.png"
+          cp "packaging/linux/${BIN_NAME}.desktop" "dist/${BIN_NAME}.desktop"
+          cp "packaging/linux/install.sh" "dist/install.sh"
+          chmod +x "dist/install.sh"
 
           if [[ -f "README.md" ]]; then cp README.md dist/; fi
           if [[ -f "README" ]]; then cp README dist/; fi
           if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
 
-          zip_name="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}.zip"
-          (cd dist && zip -r "../$zip_name" .)
+          artifact="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          tar -C dist -czf "$artifact" .
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          src="target/${{ matrix.target }}/release/${BIN_NAME}"
+          if [[ ! -f "$src" ]]; then
+            echo "Binary not found at $src" >&2
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+
+          rm -rf dist
+          mkdir -p dist
+
+          app_dir="dist/${MACOS_APP_NAME}.app"
+          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+
+          cp "$src" "$app_dir/Contents/MacOS/${BIN_NAME}"
+          chmod +x "$app_dir/Contents/MacOS/${BIN_NAME}"
+
+          # Build icon.icns from assets/icon.png
+          iconset_dir="$(mktemp -d)/icon.iconset"
+          sips -z 16 16     "assets/icon.png" --out "$iconset_dir/icon_16x16.png" >/dev/null
+          sips -z 32 32     "assets/icon.png" --out "$iconset_dir/icon_16x16@2x.png" >/dev/null
+          sips -z 32 32     "assets/icon.png" --out "$iconset_dir/icon_32x32.png" >/dev/null
+          sips -z 64 64     "assets/icon.png" --out "$iconset_dir/icon_32x32@2x.png" >/dev/null
+          sips -z 128 128   "assets/icon.png" --out "$iconset_dir/icon_128x128.png" >/dev/null
+          sips -z 256 256   "assets/icon.png" --out "$iconset_dir/icon_128x128@2x.png" >/dev/null
+          sips -z 256 256   "assets/icon.png" --out "$iconset_dir/icon_256x256.png" >/dev/null
+          sips -z 512 512   "assets/icon.png" --out "$iconset_dir/icon_256x256@2x.png" >/dev/null
+          sips -z 512 512   "assets/icon.png" --out "$iconset_dir/icon_512x512.png" >/dev/null
+          sips -z 1024 1024 "assets/icon.png" --out "$iconset_dir/icon_512x512@2x.png" >/dev/null
+          iconutil -c icns "$iconset_dir" -o "$app_dir/Contents/Resources/icon.icns"
+
+          cat > "$app_dir/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleExecutable</key>
+            <string>${BIN_NAME}</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.slaveoftime.rustickers</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>${MACOS_APP_NAME}</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${version}</string>
+            <key>CFBundleVersion</key>
+            <string>${version}</string>
+            <key>CFBundleIconFile</key>
+            <string>icon</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>11.0</string>
+          </dict>
+          </plist>
+          EOF
+
+          if [[ -f "README.md" ]]; then cp README.md dist/; fi
+          if [[ -f "README" ]]; then cp README dist/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
+
+          artifact="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          if [[ -f "$artifact" ]]; then rm -f "$artifact"; fi
+          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$artifact"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "${{ env.BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}.zip"
+          files: "${{ env.BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
           fail_on_unmatched_files: true

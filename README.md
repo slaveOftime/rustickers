@@ -60,7 +60,19 @@ Typical locations:
 
 ## Releases
 
-This repo’s GitHub Actions workflow builds zip artifacts for Windows, Linux, and macOS when you push a tag like `v0.1.0`.
+This repo’s GitHub Actions workflow builds release artifacts when you push a tag like `v0.1.0`:
+
+- **Windows**: a `.zip` with `rustickers.exe`
+- **Linux**: a `.tar.gz` containing `rustickers`, `rustickers.desktop`, `rustickers.png`, and `install.sh`
+- **macOS**: a `.zip` containing `Rustickers.app` (with a generated `.icns` app icon)
+
+### Linux install (from release tarball)
+
+Extract the `.tar.gz`, then run:
+
+```bash
+./install.sh
+```
 
 ## Project structure (high level)
 
