@@ -15,8 +15,6 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 
-use notify_rust::Notification;
-
 use crate::windows::StickerWindowEvent;
 use crate::{components::IconName, storage::ArcStickerStore};
 
@@ -259,6 +257,25 @@ impl TimerSticker {
         }
     }
 
+    fn spawn_for_beep(&self, cx: &Context<Self>) {
+        cx.spawn(async |this, cx| {
+            let start = crate::utils::time::now_unix_millis();
+            loop {
+                if crate::utils::time::now_unix_millis() - start < 10000
+                    && let Ok(true) = this.read_with(cx, |this, _| this.is_just_finished)
+                {
+                    play_beep();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                } else {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn spawn_for_timer(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |e, cx| {
             cx.background_executor()
@@ -275,20 +292,16 @@ impl TimerSticker {
                     if remaining_secs <= 0 {
                         is_just_finished = true;
                         start_info.state = TimerState::Finished;
-
                         cx.activate(true);
-
-                        let _ = Notification::new()
-                            .appname("Rustickers")
-                            .summary("Timer finished")
-                            .body("Your timer is done.")
-                            .show();
                     }
 
                     cx.notify();
                 }
 
                 this.is_just_finished = is_just_finished;
+                if is_just_finished {
+                    this.spawn_for_beep(cx);
+                }
 
                 if remaining_secs <= 0
                     || crate::utils::time::now_unix_millis() - this.last_save_time_while_countdown
@@ -496,5 +509,21 @@ fn effective_remaining_secs(timer: &TimerContent) -> i32 {
         remaining_secs.max(0)
     } else {
         timer.duration_secs.max(0)
+    }
+}
+
+fn play_beep() {
+    #[cfg(windows)]
+    unsafe {
+        // Beep(frequency_hz, duration_ms)
+        let _ = windows_sys::Win32::System::Diagnostics::Debug::Beep(880, 200);
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Best-effort fallback: terminal bell.
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(b"\x07");
+        let _ = std::io::stdout().flush();
     }
 }

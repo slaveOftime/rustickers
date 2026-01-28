@@ -25,6 +25,7 @@ notify-rust = "4.11.7"
 async-compat = "0.2.5"
 futures = "0.3.31"
 reqwest = "0.13.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.
