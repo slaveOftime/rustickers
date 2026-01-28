@@ -36,6 +36,22 @@ fn main() {
     let _ =
         crate::utils::logging::LoggingGuards::init(&app_paths).expect("Logging should initialize");
 
+    tracing::info!(
+        app_version = env!("CARGO_PKG_VERSION"),
+        debug_build = cfg!(debug_assertions),
+        "Starting Rustickers"
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        tracing::debug!(
+            gpui_disable_direct_composition = std::env::var("GPUI_DISABLE_DIRECT_COMPOSITION")
+                .as_deref()
+                .unwrap_or(""),
+            "Windows WebView environment configured"
+        );
+    }
+
     let mut single_instance = match crate::ipc::SingleInstance::acquire("rustickers") {
         Ok(instance) => Some(instance),
         Err(ipc::AcquireError::AlreadyRunning) => {
@@ -47,6 +63,8 @@ fn main() {
             return;
         }
     };
+
+    tracing::debug!("Single-instance lock acquired");
 
     let (ipc_events_tx, ipc_events_rx) = mpsc::channel::<IpcEvent>();
     let (sticker_events_tx, sticker_events_rx) = mpsc::channel::<StickerWindowEvent>();
@@ -96,6 +114,7 @@ fn main() {
         let app_paths = app_paths.clone();
         let main_window_handle_clone = main_window_handle.clone();
         cx.spawn(async move |cx| {
+            tracing::info!(db_path = %app_paths.db_path.display(), "Opening sticker store");
             let store: ArcStickerStore = match open_sqlite(app_paths.db_path).await {
                 Ok(store) => store,
                 Err(err) => {
@@ -104,8 +123,11 @@ fn main() {
                 }
             };
 
+            tracing::info!("Sticker store opened");
+
             match store.get_open_sticker_ids().await {
                 Ok(sticker_ids) => {
+                    tracing::debug!(count = sticker_ids.len(), "Restoring open stickers");
                     for id in sticker_ids {
                         let store = store.clone();
                         let sticker_events_tx = sticker_events_tx.clone();
@@ -125,6 +147,7 @@ fn main() {
                 match MainWindow::open(cx, sticker_events_rx, sticker_events_tx.clone(), store) {
                     Ok(window) => {
                         let _ = main_window_handle_clone.set(window.clone());
+                        tracing::info!("Main window opened");
                     }
                     Err(err) => {
                         tracing::error!(error = ?err, "Failed to open main window");

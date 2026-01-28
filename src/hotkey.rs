@@ -23,6 +23,7 @@ pub fn start_global_hotkey_listener(ipc_events_tx: Sender<IpcEvent>) -> anyhow::
     std::thread::Builder::new()
         .name("global-hotkey-listener".to_string())
         .spawn(move || {
+            tracing::info!("Global hotkey listener started");
             if let Err(err) = start_listen(ipc_events_tx) {
                 tracing::error!(error = %err, "Global hotkey listener stopped");
             }
@@ -54,6 +55,12 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                         if !state.s_down {
                             state.s_down = true;
                             if state.shift && primary_modifier_down(*state) {
+                                tracing::debug!(
+                                    ctrl = state.ctrl,
+                                    shift = state.shift,
+                                    meta = state.meta,
+                                    "Hotkey triggered: show"
+                                );
                                 let _ = ipc_events_tx.send(IpcEvent::Show);
                             }
                         }

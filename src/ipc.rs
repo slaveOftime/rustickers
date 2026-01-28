@@ -85,23 +85,29 @@ impl SingleInstance {
             return;
         };
 
-        thread::spawn(move || {
-            // Reference style: filter_map to handle initial connection errors
-            for conn in listener.incoming().filter_map(handle_incoming_error) {
-                // Wrap in BufReader immediately
-                let mut reader = BufReader::new(conn);
-                let mut buffer = String::new();
+        if let Err(err) = thread::Builder::new()
+            .name("ipc-server".to_string())
+            .spawn(move || {
+                tracing::info!("IPC server thread started");
+                // Reference style: filter_map to handle initial connection errors
+                for conn in listener.incoming().filter_map(handle_incoming_error) {
+                    // Wrap in BufReader immediately
+                    let mut reader = BufReader::new(conn);
+                    let mut buffer = String::new();
 
-                // Read a line (blocking until \n is received or connection closes)
-                if let Ok(_) = reader.read_line(&mut buffer) {
-                    tracing::debug!(cmd = %buffer.trim(), "Received IPC command");
-                    // Check protocol
-                    if buffer.trim() == "SHOW" {
-                        let _ = ipc_events_tx.send(IpcEvent::Show);
+                    // Read a line (blocking until \n is received or connection closes)
+                    if let Ok(_) = reader.read_line(&mut buffer) {
+                        tracing::debug!(cmd = %buffer.trim(), "Received IPC command");
+                        // Check protocol
+                        if buffer.trim() == "SHOW" {
+                            let _ = ipc_events_tx.send(IpcEvent::Show);
+                        }
                     }
                 }
-            }
-        });
+            })
+        {
+            tracing::error!(error = %err, "Failed to spawn IPC server thread");
+        }
     }
 }
 
