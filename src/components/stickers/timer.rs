@@ -441,16 +441,18 @@ impl TimerSticker {
                             })),
                     ),
             ),
-            TimerState::Finished => view.child(
-                Button::new("reset")
-                    .icon(IconName::Adjustments)
-                    .bg(transparent_white())
-                    .border_0()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.is_just_finished = false;
-                        this.change_state(cx, TimerState::Finished)
-                    })),
-            ),
+            TimerState::Finished => view.when(window.is_window_hovered(), |view| {
+                view.child(
+                    Button::new("reset")
+                        .icon(IconName::Adjustments)
+                        .bg(transparent_white())
+                        .border_0()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.is_just_finished = false;
+                            this.change_state(cx, TimerState::Finished)
+                        })),
+                )
+            }),
         };
 
         return view.into_any_element();
