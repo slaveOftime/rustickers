@@ -5,6 +5,7 @@ use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
 pub mod stickers;
+pub mod webview;
 
 #[derive(RustEmbed)]
 #[folder = "./assets"]

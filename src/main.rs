@@ -26,6 +26,12 @@ use windows::main::MainWindow;
 use windows::sticker::StickerWindow;
 
 fn main() {
+    // Required this for Windows to render the WebView.
+    #[cfg(target_os = "windows")]
+    unsafe {
+        std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
+    }
+
     let mut single_instance = match crate::ipc::SingleInstance::acquire("rustickers") {
         Ok(instance) => Some(instance),
         Err(ipc::AcquireError::AlreadyRunning) => {

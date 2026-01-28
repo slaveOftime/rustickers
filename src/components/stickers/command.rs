@@ -27,8 +27,8 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::windows::StickerWindowEvent;
 use crate::{components::ExtendedIconName, storage::ArcStickerStore};
+use crate::{components::webview::SimpleWebView, windows::StickerWindowEvent};
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
 
@@ -78,6 +78,7 @@ pub struct CommandSticker {
     scheduler_cron_input: Entity<InputState>,
 
     result: CommandResult,
+    result_html_entity: Option<Entity<SimpleWebView>>,
 
     process: Option<Arc<Mutex<std::process::Child>>>,
     stopping: bool,
@@ -113,6 +114,13 @@ impl CommandSticker {
         };
         let cron_entity = cx.new(|cx| InputState::new(window, cx).default_value(cron));
 
+        let result_html_entity = match &cmd.result {
+            CommandResult::Html(Some(x)) => {
+                Some(cx.new(|cx| SimpleWebView::new(x.as_str(), window, cx)))
+            }
+            _ => None,
+        };
+
         cx.subscribe(&cron_entity, |this, v, evt, cx| match evt {
             InputEvent::Change => {
                 this.scheduler = Some(Scheduler::Cron(v.read(cx).value().trim().to_string()));
@@ -137,6 +145,7 @@ impl CommandSticker {
             environments: cx.new(|cx| {
                 InputState::new(window, cx)
                     .multi_line(true)
+                    .auto_grow(1, 10)
                     .default_value(envs_value)
             }),
             workdir: cx.new(|cx| {
@@ -147,6 +156,7 @@ impl CommandSticker {
             scheduler: cmd.scheduler,
             scheduler_cron_input: cron_entity,
             result: cmd.result,
+            result_html_entity,
 
             process: None,
             stopping: false,
@@ -218,7 +228,7 @@ impl CommandSticker {
         self.schedule_cancel.is_some()
     }
 
-    fn start(&mut self, cx: &mut Context<Self>) {
+    fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.is_schedule_active() {
             self.stop_schedule();
         }
@@ -226,7 +236,7 @@ impl CommandSticker {
         let content = self.build_content(cx);
         match content.scheduler.clone() {
             None => {
-                self.run(cx);
+                self.run(window, cx);
             }
             Some(Scheduler::Cron(expr)) => {
                 if expr.is_empty() {
@@ -249,70 +259,74 @@ impl CommandSticker {
                 self.error = None;
                 self.schedule_cancel = Some(cancel.clone());
 
-                cx.spawn(async move |this, cx| {
-                    loop {
-                        if cancel.load(Ordering::SeqCst) {
-                            break;
-                        }
-
-                        let now = chrono::Local::now();
-                        let next = schedule.upcoming(chrono::Local).next();
-                        let Some(next) = next else {
-                            let _ = this.update(cx, |this, _| this.stop_schedule());
-                            break;
-                        };
-
-                        let next_str = next.format("%Y-%m-%d %H:%M:%S").to_string();
-                        let _ = this.update(cx, |this, cx| {
-                            this.next_scheduled_at = Some(next_str);
-                            cx.notify();
-                        });
-
-                        // Compute delay with signed math first to avoid underflow when
-                        // `next` is already in the past.
-                        let delay_ms_i64 = next.timestamp_millis() - now.timestamp_millis();
-                        if delay_ms_i64 <= 0 {
-                            let _ = this.update(cx, |this, cx| {
-                                if this.process.is_none() && !this.stopping {
-                                    this.stop(cx);
-                                    this.run(cx);
-                                }
-                            });
-                            continue;
-                        }
-
-                        // Make the wait cancellable: instead of awaiting one long timer (which
-                        // can't be interrupted), sleep in small chunks and check `cancel`.
-                        let mut remaining_ms = delay_ms_i64 as u64;
-                        while remaining_ms > 0 {
+                let entity = cx.entity();
+                window
+                    .spawn(cx, async move |window| {
+                        loop {
                             if cancel.load(Ordering::SeqCst) {
                                 break;
                             }
-                            let chunk = remaining_ms.min(MAX_SLEEP_CHUNK_MS);
-                            cx.background_executor()
-                                .timer(Duration::from_millis(chunk))
-                                .await;
-                            remaining_ms = remaining_ms.saturating_sub(chunk);
-                        }
 
-                        if cancel.load(Ordering::SeqCst) {
-                            break;
-                        }
+                            let now = chrono::Local::now();
+                            let next = schedule.upcoming(chrono::Local).next();
+                            let Some(next) = next else {
+                                let _ =
+                                    window.update_entity(&entity, |this, _| this.stop_schedule());
+                                break;
+                            };
 
-                        let _ = this.update(cx, |this, cx| {
-                            if this.process.is_none() && !this.stopping {
-                                this.stop(cx);
-                                this.run(cx);
+                            let next_str = next.format("%Y-%m-%d %H:%M:%S").to_string();
+                            let _ = window.update_entity(&entity, |this, cx| {
+                                this.next_scheduled_at = Some(next_str);
+                                cx.notify();
+                            });
+
+                            // Compute delay with signed math first to avoid underflow when
+                            // `next` is already in the past.
+                            let delay_ms_i64 = next.timestamp_millis() - now.timestamp_millis();
+                            if delay_ms_i64 <= 0 {
+                                let _ = window.update_window_entity(&entity, |this, window, cx| {
+                                    if this.process.is_none() && !this.stopping {
+                                        this.stop(cx);
+                                        this.run(window, cx);
+                                    }
+                                });
+                                continue;
                             }
-                        });
-                    }
-                })
-                .detach();
+
+                            // Make the wait cancellable: instead of awaiting one long timer (which
+                            // can't be interrupted), sleep in small chunks and check `cancel`.
+                            let mut remaining_ms = delay_ms_i64 as u64;
+                            while remaining_ms > 0 {
+                                if cancel.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                let chunk = remaining_ms.min(MAX_SLEEP_CHUNK_MS);
+                                window
+                                    .background_executor()
+                                    .timer(Duration::from_millis(chunk))
+                                    .await;
+                                remaining_ms = remaining_ms.saturating_sub(chunk);
+                            }
+
+                            if cancel.load(Ordering::SeqCst) {
+                                break;
+                            }
+
+                            let _ = window.update_window_entity(&entity, |this, window, cx| {
+                                if this.process.is_none() && !this.stopping {
+                                    this.stop(cx);
+                                    this.run(window, cx);
+                                }
+                            });
+                        }
+                    })
+                    .detach();
             }
         }
     }
 
-    fn run(&mut self, cx: &mut Context<Self>) {
+    fn run(&mut self, window: &Window, cx: &mut Context<Self>) {
         let content = self.build_content(cx);
         if content.command.trim().is_empty() {
             self.error = Some("Command cannot be empty".to_string());
@@ -377,7 +391,7 @@ impl CommandSticker {
 
         let (tx, rx) = mpsc::channel();
         self.handle_stdout_and_err(cx, tx, process);
-        self.handle_cmd_events(cx, rx);
+        self.handle_cmd_events(window, cx, rx);
     }
 
     fn handle_stdout_and_err(
@@ -439,7 +453,12 @@ impl CommandSticker {
         });
     }
 
-    fn handle_cmd_events(&mut self, cx: &mut Context<Self>, rx: mpsc::Receiver<CmdEvent>) {
+    fn handle_cmd_events(
+        &mut self,
+        window: &Window,
+        cx: &Context<Self>,
+        rx: mpsc::Receiver<CmdEvent>,
+    ) {
         match self.result {
             CommandResult::Text(ref mut result) | CommandResult::Markdown(ref mut result) => {
                 *result = None;
@@ -447,62 +466,89 @@ impl CommandSticker {
             CommandResult::Html(_) | CommandResult::Svg(_) => {}
         }
 
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
-            let result_temp = Arc::new(RwLock::new(String::new()));
-            loop {
-                let result_temp = result_temp.clone();
-                match rx.try_recv() {
-                    Ok(event) => match event {
-                        CmdEvent::Output(line) | CmdEvent::Error(line) => {
-                            let _ = this.update(cx, move |this, cx| {
-                                match this.result {
-                                    CommandResult::Text(ref mut result)
-                                    | CommandResult::Markdown(ref mut result) => {
-                                        let result = result.get_or_insert_with(String::new);
-                                        result.push_str(&line);
-                                        result.push('\n');
-                                    }
-                                    CommandResult::Html(_) | CommandResult::Svg(_) => {
-                                        *result_temp.write().unwrap() += &line;
-                                        *result_temp.write().unwrap() += "\n";
-                                    }
-                                }
-                                cx.notify();
-                            });
+        match &self.result {
+            CommandResult::Html(_) => {}
+            _ => {
+                self.result_html_entity = None;
+            }
+        };
+
+        let entity = cx.entity();
+        window
+            .spawn(cx, async move |window| {
+                window
+                    .background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+
+                let result_temp = Arc::new(RwLock::new(String::new()));
+                loop {
+                    let result_temp = result_temp.clone();
+                    match rx.try_recv() {
+                        Ok(event) => match event {
+                            CmdEvent::Output(line) | CmdEvent::Error(line) => {
+                                let _ = window.update_entity(
+                                    &entity,
+                                    move |this: &mut CommandSticker, cx| {
+                                        match this.result {
+                                            CommandResult::Text(ref mut result)
+                                            | CommandResult::Markdown(ref mut result) => {
+                                                let result = result.get_or_insert_with(String::new);
+                                                result.push_str(&line);
+                                                result.push('\n');
+                                            }
+                                            CommandResult::Html(_) | CommandResult::Svg(_) => {
+                                                *result_temp.write().unwrap() += &line;
+                                                *result_temp.write().unwrap() += "\n";
+                                            }
+                                        }
+                                        cx.notify();
+                                    },
+                                );
+                            }
+                            CmdEvent::Done => {
+                                let _ = window.update_entity(
+                                    &entity,
+                                    move |this: &mut CommandSticker, _| match this.result {
+                                        CommandResult::Text(_) | CommandResult::Markdown(_) => {}
+                                        CommandResult::Html(ref mut result)
+                                        | CommandResult::Svg(ref mut result) => {
+                                            *result = Some(result_temp.read().unwrap().clone());
+                                        }
+                                    },
+                                );
+                                break;
+                            }
+                        },
+                        Err(TryRecvError::Empty) => {
+                            window
+                                .background_executor()
+                                .timer(Duration::from_millis(50))
+                                .await;
                         }
-                        CmdEvent::Done => {
-                            let _ = this.update(cx, move |this, _| match this.result {
-                                CommandResult::Text(_) | CommandResult::Markdown(_) => {}
-                                CommandResult::Html(ref mut result)
-                                | CommandResult::Svg(ref mut result) => {
-                                    *result = Some(result_temp.read().unwrap().clone());
-                                }
-                            });
+                        Err(TryRecvError::Disconnected) => {
                             break;
                         }
-                    },
-                    Err(TryRecvError::Empty) => {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(50))
-                            .await;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        break;
                     }
                 }
-            }
 
-            let _ = this.update(cx, move |this, cx| {
-                this.process = None;
-                this.stopping = false;
-                this.save_config(cx);
-                cx.notify();
-            });
-        })
-        .detach();
+                let _ = window.update_window_entity(
+                    &entity,
+                    move |this: &mut CommandSticker, window, cx| {
+                        this.process = None;
+                        this.stopping = false;
+                        this.result_html_entity = match &this.result {
+                            CommandResult::Html(Some(x)) => {
+                                Some(cx.new(|cx| SimpleWebView::new(x.as_str(), window, cx)))
+                            }
+                            _ => None,
+                        };
+                        this.save_config(cx);
+                        cx.notify();
+                    },
+                );
+            })
+            .detach();
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -537,81 +583,70 @@ impl CommandSticker {
         v_form()
             .child(field().label("Command").child(Input::new(&self.command)))
             .child(
-                field()
-                    .label("Envs (KEY=VALUE per line)")
-                    .child(Input::new(&self.environments)),
-            )
-            .child(
-                field()
-                    .label("Working dir (optional)")
-                    .child(Input::new(&self.workdir)),
-            )
-            .child(
-                field().label("Output type").child(
-                    div().py_1().w_full().overflow_x_scrollbar().child(
-                        h_flex()
-                            .gap_1()
-                            .child(
-                                Button::new("text")
-                                    .label("text")
-                                    .small()
-                                    .when(
-                                        match self.result {
-                                            CommandResult::Text(_) => true,
-                                            _ => false,
-                                        },
-                                        |v| v.primary(),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.result = CommandResult::Text(None)
-                                    })),
-                            )
-                            .child(
-                                Button::new("markdown")
-                                    .label("markdown")
-                                    .small()
-                                    .when(
-                                        match self.result {
-                                            CommandResult::Markdown(_) => true,
-                                            _ => false,
-                                        },
-                                        |v| v.primary(),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.result = CommandResult::Markdown(None)
-                                    })),
-                            )
-                            .child(
-                                Button::new("html")
-                                    .label("html")
-                                    .small()
-                                    .when(
-                                        match self.result {
-                                            CommandResult::Html(_) => true,
-                                            _ => false,
-                                        },
-                                        |v| v.primary(),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.result = CommandResult::Html(None)
-                                    })),
-                            )
-                            .child(
-                                Button::new("svg")
-                                    .label("svg")
-                                    .small()
-                                    .when(
-                                        match self.result {
-                                            CommandResult::Svg(_) => true,
-                                            _ => false,
-                                        },
-                                        |v| v.primary(),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.result = CommandResult::Svg(None)
-                                    })),
-                            ),
-                    ),
+                field().label("Render output as").child(
+                    h_flex()
+                        .gap_1()
+                        .flex_wrap()
+                        .child(
+                            Button::new("text")
+                                .label("text")
+                                .small()
+                                .when(
+                                    match self.result {
+                                        CommandResult::Text(_) => true,
+                                        _ => false,
+                                    },
+                                    |v| v.primary(),
+                                )
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.result = CommandResult::Text(None)
+                                })),
+                        )
+                        .child(
+                            Button::new("markdown")
+                                .label("markdown")
+                                .small()
+                                .when(
+                                    match self.result {
+                                        CommandResult::Markdown(_) => true,
+                                        _ => false,
+                                    },
+                                    |v| v.primary(),
+                                )
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.result = CommandResult::Markdown(None)
+                                })),
+                        )
+                        .child(
+                            Button::new("html")
+                                .label("html")
+                                .small()
+                                .when(
+                                    match self.result {
+                                        CommandResult::Html(_) => true,
+                                        _ => false,
+                                    },
+                                    |v| v.primary(),
+                                )
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.result = CommandResult::Html(None)
+                                })),
+                        )
+                        .child(
+                            Button::new("svg")
+                                .label("svg")
+                                .small()
+                                .when(
+                                    match self.result {
+                                        CommandResult::Svg(_) => true,
+                                        _ => false,
+                                    },
+                                    |v| v.primary(),
+                                )
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.result = CommandResult::Svg(None)
+                                })),
+                        ),
                 ),
             )
             .child(
@@ -621,40 +656,49 @@ impl CommandSticker {
                         .w_full()
                         .gap_1()
                         .child(
-                            div().overflow_x_scrollbar().child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(
-                                        Button::new("none")
-                                            .label("none")
-                                            .small()
-                                            .when(self.scheduler.is_none(), |v| v.primary())
-                                            .on_click(cx.listener(|this, _, _, _| {
-                                                this.scheduler = None;
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("cron")
-                                            .label("cron")
-                                            .small()
-                                            .when(
-                                                matches!(self.scheduler, Some(Scheduler::Cron(_))),
-                                                |v| v.primary(),
-                                            )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                // by default, every one minute
-                                                let cron = "0 */1 * * * *";
-                                                this.scheduler_cron_input.update(cx, |this, cx| {
-                                                    this.set_value(cron, window, cx)
-                                                });
-                                            })),
-                                    ),
-                            ),
+                            h_flex()
+                                .gap_1()
+                                .flex_wrap()
+                                .child(
+                                    Button::new("none")
+                                        .label("none")
+                                        .small()
+                                        .when(self.scheduler.is_none(), |v| v.primary())
+                                        .on_click(cx.listener(|this, _, _, _| {
+                                            this.scheduler = None;
+                                        })),
+                                )
+                                .child(
+                                    Button::new("cron")
+                                        .label("cron")
+                                        .small()
+                                        .when(
+                                            matches!(self.scheduler, Some(Scheduler::Cron(_))),
+                                            |v| v.primary(),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            // by default, every one minute
+                                            let cron = "0 */1 * * * *";
+                                            this.scheduler_cron_input.update(cx, |this, cx| {
+                                                this.set_value(cron, window, cx)
+                                            });
+                                        })),
+                                ),
                         )
                         .when(matches!(self.scheduler, Some(Scheduler::Cron(_))), |v| {
                             v.child(Input::new(&self.scheduler_cron_input))
                         }),
                 ),
+            )
+            .child(
+                field()
+                    .label("Working dir (optional)")
+                    .child(Input::new(&self.workdir)),
+            )
+            .child(
+                field()
+                    .label("Envs (KEY=VALUE per line)")
+                    .child(Input::new(&self.environments)),
             )
             .into_any_element()
     }
@@ -671,10 +715,13 @@ impl CommandSticker {
                 .scrollable(true)
                 .into_any_element(),
             CommandResult::Markdown(None) => Empty.into_any_element(),
-            CommandResult::Html(Some(x)) => TextView::html("output", x.clone(), window, cx)
-                .selectable(true)
-                .scrollable(true)
-                .into_any_element(),
+            CommandResult::Html(Some(x)) => match self.result_html_entity.clone() {
+                Some(entity) => entity.into_any_element(),
+                None => TextView::html("output", x.clone(), window, cx)
+                    .selectable(true)
+                    .scrollable(true)
+                    .into_any_element(),
+            },
             CommandResult::Html(None) => Empty.into_any_element(),
             CommandResult::Svg(Some(x)) => img(ImageSource::Image(Arc::new(Image::from_bytes(
                 ImageFormat::Svg,
@@ -737,13 +784,13 @@ impl Render for CommandSticker {
                         .icon(ExtendedIconName::Play)
                         .primary()
                         .flex_shrink_0()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.start(cx);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start(window, cx);
                         })),
                 );
         } else {
             root = root.child(
-                div().p_1().h_full().flex_shrink().overflow_hidden().child(
+                div().h_full().flex_shrink().overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
                         .child(self.result_view(window, cx)),
@@ -753,58 +800,54 @@ impl Render for CommandSticker {
             if self.process.is_some() || self.is_schedule_active() {
                 if window.is_window_hovered() && (!self.stopping || self.is_schedule_active()) {
                     root = root.child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_1()
-                            .absolute()
-                            .left_0()
-                            .bottom_0()
-                            .child(
-                                Button::new("stop")
-                                    .icon(ExtendedIconName::Stop)
-                                    .when_some(self.next_scheduled_at.clone(), |view, x| {
-                                        view.tooltip(format!("Next run at {}", x))
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.stop_schedule();
-                                        this.stop(cx);
-                                    })),
-                            ),
+                        h_flex().items_center().justify_between().gap_1().child(
+                            Button::new("stop")
+                                .icon(ExtendedIconName::Stop)
+                                .when_some(self.next_scheduled_at.clone(), |view, x| {
+                                    view.tooltip(format!("Next run at {}", x))
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.stop_schedule();
+                                    this.stop(cx);
+                                })),
+                        ),
                     );
                 }
             } else {
-                root = root.child(
-                    h_flex()
-                        .w_full()
-                        .gap_1()
-                        .child(
-                            Button::new("reset")
-                                .icon(ExtendedIconName::Adjustments)
-                                .bg(transparent_white())
-                                .border_0()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    match this.result {
-                                        CommandResult::Text(ref mut result)
-                                        | CommandResult::Markdown(ref mut result)
-                                        | CommandResult::Html(ref mut result)
-                                        | CommandResult::Svg(ref mut result) => {
-                                            *result = None;
+                root = root.when(window.is_window_hovered(), |view| {
+                    view.child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                Button::new("reset")
+                                    .icon(ExtendedIconName::Adjustments)
+                                    .bg(transparent_white())
+                                    .border_0()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.result_html_entity = None;
+                                        match this.result {
+                                            CommandResult::Text(ref mut result)
+                                            | CommandResult::Markdown(ref mut result)
+                                            | CommandResult::Html(ref mut result)
+                                            | CommandResult::Svg(ref mut result) => {
+                                                *result = None;
+                                            }
                                         }
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("restart")
-                                .icon(ExtendedIconName::Play)
-                                .bg(transparent_white())
-                                .border_0()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.start(cx);
-                                })),
-                        ),
-                );
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("restart")
+                                    .icon(ExtendedIconName::Play)
+                                    .bg(transparent_white())
+                                    .border_0()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.start(window, cx);
+                                    })),
+                            ),
+                    )
+                });
             }
         }
 
