@@ -31,20 +31,40 @@ impl AssetSource for Assets {
 }
 
 #[allow(dead_code)]
-pub enum ExtendedIconName {
+pub enum IconName {
     Play,
     Pause,
+    Plus,
     Stop,
     Adjustments,
+    Close,
+    Command,
+    DocumentText,
+    Bell,
+    Minus,
+    Minimize,
+    Search,
+    SortAscending,
+    SortDescending,
 }
 
-impl IconNamed for ExtendedIconName {
+impl IconNamed for IconName {
     fn path(self) -> SharedString {
         match self {
-            ExtendedIconName::Play => "icons/extended/play.svg".into(),
-            ExtendedIconName::Pause => "icons/extended/pause.svg".into(),
-            ExtendedIconName::Stop => "icons/extended/stop.svg".into(),
-            ExtendedIconName::Adjustments => "icons/extended/adjustments.svg".into(),
+            IconName::Play => "icons/play.svg".into(),
+            IconName::Pause => "icons/pause.svg".into(),
+            IconName::Plus => "icons/plus.svg".into(),
+            IconName::Stop => "icons/stop.svg".into(),
+            IconName::Adjustments => "icons/adjustments.svg".into(),
+            IconName::Close => "icons/close.svg".into(),
+            IconName::Command => "icons/command.svg".into(),
+            IconName::DocumentText => "icons/document-text.svg".into(),
+            IconName::Bell => "icons/bell.svg".into(),
+            IconName::Minus => "icons/minus.svg".into(),
+            IconName::Minimize => "icons/minimize.svg".into(),
+            IconName::Search => "icons/search.svg".into(),
+            IconName::SortAscending => "icons/sort-ascending.svg".into(),
+            IconName::SortDescending => "icons/sort-descending.svg".into(),
         }
     }
 }

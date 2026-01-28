@@ -27,7 +27,7 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::{components::ExtendedIconName, storage::ArcStickerStore};
+use crate::{components::IconName, storage::ArcStickerStore};
 use crate::{components::webview::SimpleWebView, windows::StickerWindowEvent};
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
@@ -781,7 +781,7 @@ impl Render for CommandSticker {
                 .child(
                     Button::new("start")
                         .label("Start")
-                        .icon(ExtendedIconName::Play)
+                        .icon(IconName::Play)
                         .flex_shrink_0()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.start(window, cx);
@@ -801,7 +801,7 @@ impl Render for CommandSticker {
                     root = root.child(
                         h_flex().items_center().justify_between().gap_1().child(
                             Button::new("stop")
-                                .icon(ExtendedIconName::Stop)
+                                .icon(IconName::Stop)
                                 .when_some(self.next_scheduled_at.clone(), |view, x| {
                                     view.tooltip(format!("Next run at {}", x))
                                 })
@@ -820,7 +820,7 @@ impl Render for CommandSticker {
                             .gap_1()
                             .child(
                                 Button::new("reset")
-                                    .icon(ExtendedIconName::Adjustments)
+                                    .icon(IconName::Adjustments)
                                     .bg(transparent_white())
                                     .border_0()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -838,7 +838,7 @@ impl Render for CommandSticker {
                             )
                             .child(
                                 Button::new("restart")
-                                    .icon(ExtendedIconName::Play)
+                                    .icon(IconName::Play)
                                     .bg(transparent_white())
                                     .border_0()
                                     .on_click(cx.listener(|this, _, window, cx| {

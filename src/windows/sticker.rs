@@ -4,7 +4,7 @@ use gpui::{
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Root, TitleBar,
+    ActiveTheme, Root, TitleBar,
     alert::Alert,
     button::Button,
     h_flex,
@@ -17,8 +17,9 @@ use std::{
 };
 
 use crate::{
-    components::stickers::{
-        command::CommandSticker, markdown::MarkdownSticker, timer::TimerSticker, *,
+    components::{
+        IconName,
+        stickers::{command::CommandSticker, markdown::MarkdownSticker, timer::TimerSticker, *},
     },
     model::sticker::{StickerColor, StickerDetail, StickerState, StickerType},
     storage::ArcStickerStore,

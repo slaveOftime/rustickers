@@ -2876,17 +2876,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-component-assets"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5842ea3f1e596fbc611894dcc0266df7125bc226f603ca313f5460b700503564"
-dependencies = [
- "anyhow",
- "gpui",
- "rust-embed",
-]
-
-[[package]]
 name = "gpui-component-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6153,7 +6142,6 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "gpui-component-assets",
  "interprocess",
  "mimalloc",
  "notify-rust",

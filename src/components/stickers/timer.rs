@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use notify_rust::Notification;
 
 use crate::windows::StickerWindowEvent;
-use crate::{components::ExtendedIconName, storage::ArcStickerStore};
+use crate::{components::IconName, storage::ArcStickerStore};
 
 use super::Sticker;
 
@@ -324,7 +324,7 @@ impl TimerSticker {
             )
             .child(
                 Button::new("timer-start")
-                    .icon(ExtendedIconName::Play)
+                    .icon(IconName::Play)
                     .bg(transparent_white())
                     .border_0()
                     .on_click(cx.listener(|s, _, _, cx| s.start(cx))),
@@ -396,7 +396,7 @@ impl TimerSticker {
             TimerState::Running => view.when(window.is_window_hovered(), |view| {
                 view.child(
                     Button::new("pause")
-                        .icon(ExtendedIconName::Pause)
+                        .icon(IconName::Pause)
                         .bg(transparent_white())
                         .border_0()
                         .on_click(
@@ -409,7 +409,7 @@ impl TimerSticker {
                     .gap_1()
                     .child(
                         Button::new("reset")
-                            .icon(ExtendedIconName::Adjustments)
+                            .icon(IconName::Adjustments)
                             .bg(transparent_white())
                             .border_0()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -419,7 +419,7 @@ impl TimerSticker {
                     )
                     .child(
                         Button::new("resume")
-                            .icon(ExtendedIconName::Play)
+                            .icon(IconName::Play)
                             .bg(transparent_white())
                             .border_0()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -430,7 +430,7 @@ impl TimerSticker {
             ),
             TimerState::Finished => view.child(
                 Button::new("reset")
-                    .icon(ExtendedIconName::Adjustments)
+                    .icon(IconName::Adjustments)
                     .bg(transparent_white())
                     .border_0()
                     .on_click(cx.listener(|this, _, _, cx| {

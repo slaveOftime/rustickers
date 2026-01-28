@@ -16,6 +16,7 @@ use gpui_component::*;
 use std::sync::mpsc::{self};
 use std::time::Duration;
 
+use crate::components::IconName;
 use crate::components::stickers::Sticker;
 use crate::components::stickers::command::CommandSticker;
 use crate::components::stickers::markdown::MarkdownSticker;
@@ -579,8 +580,8 @@ impl Render for MainWindow {
 
 fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
     match sticker_type {
-        StickerType::Markdown => IconName::File,
-        StickerType::Command => IconName::ChevronRight,
+        StickerType::Markdown => IconName::DocumentText,
+        StickerType::Command => IconName::Command,
         StickerType::Timer => IconName::Bell,
     }
 }
