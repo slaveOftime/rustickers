@@ -34,8 +34,6 @@ pub struct StickerWindow {
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     detail: StickerDetail,
 
-    is_tick_started: bool,
-
     view: Box<dyn StickerView>,
     error: Option<String>,
 
@@ -194,7 +192,6 @@ impl StickerWindow {
             store,
             detail,
             sticker_events_tx,
-            is_tick_started: false,
             view,
             last_bounds: None,
             last_bounds_change_at: None,
@@ -254,11 +251,11 @@ impl StickerWindow {
     }
 
     fn try_tick(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.is_tick_started {
+        if window.is_window_hovered() {
+            if self.last_bounds.is_none() {
+                self.last_bounds = Some(self.current_bounds(window));
+            }
             self.tick_bounds_state(window, cx);
-        } else if window.is_window_hovered() {
-            self.is_tick_started = true;
-            self.last_bounds = Some(self.current_bounds(window));
         }
     }
 
