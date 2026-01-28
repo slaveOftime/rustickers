@@ -1,6 +1,6 @@
 use gpui::{
     Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Image, ImageFormat,
-    ImageSource, Render, Window, div, img, prelude::*, transparent_white,
+    ImageSource, Render, Window, div, img, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     Sizable,
@@ -661,9 +661,12 @@ impl CommandSticker {
 
     fn result_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = match &self.result {
-            CommandResult::Text(Some(x)) => div().text_sm().child(x.clone()).into_any_element(),
+            CommandResult::Text(Some(x)) => {
+                div().p_1().text_sm().child(x.clone()).into_any_element()
+            }
             CommandResult::Text(None) => Empty.into_any_element(),
             CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone(), window, cx)
+                .p_1()
                 .selectable(true)
                 .scrollable(true)
                 .into_any_element(),
@@ -683,12 +686,7 @@ impl CommandSticker {
             CommandResult::Svg(None) => Empty.into_any_element(),
         };
 
-        div()
-            .relative()
-            .size_full()
-            .p_2()
-            .child(view)
-            .into_any_element()
+        div().relative().size_full().child(view).into_any_element()
     }
 }
 
@@ -708,6 +706,8 @@ impl super::Sticker for CommandSticker {
 
 impl Render for CommandSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_rem_size(px(14.0));
+
         let mut root = v_flex().relative().size_full();
 
         let has_result = match &self.result {
@@ -751,29 +751,27 @@ impl Render for CommandSticker {
             );
 
             if self.process.is_some() || self.is_schedule_active() {
-                if !self.stopping || self.is_schedule_active() {
-                    let mut view = h_flex().items_center().justify_between().gap_1().child(
-                        Button::new("stop")
-                            .icon(ExtendedIconName::Stop)
-                            .bg(transparent_white())
-                            .border_0()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.stop_schedule();
-                                this.stop(cx);
-                            })),
+                if window.is_window_hovered() && (!self.stopping || self.is_schedule_active()) {
+                    root = root.child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_1()
+                            .absolute()
+                            .left_0()
+                            .bottom_0()
+                            .child(
+                                Button::new("stop")
+                                    .icon(ExtendedIconName::Stop)
+                                    .when_some(self.next_scheduled_at.clone(), |view, x| {
+                                        view.tooltip(format!("Next run at {}", x))
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.stop_schedule();
+                                        this.stop(cx);
+                                    })),
+                            ),
                     );
-
-                    if let Some(t) = self.next_scheduled_at.as_deref() {
-                        view = view.child(
-                            div()
-                                .text_xs()
-                                .opacity(0.75)
-                                .pr_2()
-                                .child(format!("Next run: {t}")),
-                        );
-                    }
-
-                    root = root.child(view);
                 }
             } else {
                 root = root.child(

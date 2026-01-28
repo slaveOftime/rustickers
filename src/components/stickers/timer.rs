@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Entity, Size, Window, div,
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window, div,
     prelude::*, px, transparent_white,
 };
 use gpui_component::{
@@ -333,105 +333,114 @@ impl TimerSticker {
     }
 
     fn countdown_view(&mut self, cx: &mut Context<Self>, window: &mut Window) -> AnyElement {
-        if let Some(start_info) = &self.timer.start_info {
-            let remaining_secs = match start_info.state {
-                TimerState::Running => effective_remaining_secs(&self.timer),
-                TimerState::Paused => start_info.remaining_secs,
-                TimerState::Finished => 0,
-            };
+        let Some(start_info) = &self.timer.start_info else {
+            return Empty.into_any_element();
+        };
 
-            let title = self.title.read(cx).value();
+        let remaining_secs = match start_info.state {
+            TimerState::Running => effective_remaining_secs(&self.timer),
+            TimerState::Paused => start_info.remaining_secs,
+            TimerState::Finished => 0,
+        };
 
-            let (h, m, s) = crate::utils::time::secs_to_hms(remaining_secs as i64);
-            let label = format!("{:02} : {:02} : {:02}", h, m, s);
+        let title = self.title.read(cx).value();
 
-            let percentage = if self.timer.duration_secs > 0 {
-                let elapsed_secs = self.timer.duration_secs.saturating_sub(remaining_secs);
-                elapsed_secs as f64 / self.timer.duration_secs as f64
-            } else {
-                0.0
-            };
+        let (h, m, s) = crate::utils::time::secs_to_hms(remaining_secs as i64);
+        let label = format!("{:02} : {:02} : {:02}", h, m, s);
 
-            return v_flex()
-                .size_full()
-                .p_3()
-                .gap_2()
-                .items_center()
-                .justify_center()
-                .relative()
-                .when(!self.is_just_finished, |view| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .bottom_0()
-                            .bg(green_500().opacity(0.1))
-                            .w(px((window.bounds().size.width.to_f64() * percentage) as f32)),
-                    )
-                })
-                .when(self.is_just_finished, |view| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .bottom_0()
-                            .bg(green_500())
-                            .right_0()
-                            .with_animation(
-                                "indicator",
-                                Animation::new(Duration::from_millis(800)).repeat(),
-                                |v, x| v.opacity(0.3 * x),
-                            ),
-                    )
-                })
-                .when(!title.is_empty(), |view| view.child(title))
-                .child(div().text_2xl().font_bold().child(label))
-                .child(match start_info.state {
-                    TimerState::Running => Button::new("pause")
+        let percentage = if self.timer.duration_secs > 0 {
+            let elapsed_secs = self.timer.duration_secs.saturating_sub(remaining_secs);
+            elapsed_secs as f64 / self.timer.duration_secs as f64
+        } else {
+            0.0
+        };
+
+        let mut view = v_flex()
+            .size_full()
+            .p_3()
+            .gap_1()
+            .items_center()
+            .justify_center()
+            .relative()
+            .when(!self.is_just_finished, |view| {
+                view.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .bg(green_500().opacity(0.1))
+                        .w(px((window.bounds().size.width.to_f64() * percentage) as f32)),
+                )
+            })
+            .when(self.is_just_finished, |view| {
+                view.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .bg(green_500())
+                        .right_0()
+                        .with_animation(
+                            "indicator",
+                            Animation::new(Duration::from_millis(800)).repeat(),
+                            |v, x| v.opacity(0.3 * x),
+                        ),
+                )
+            })
+            .when(!title.is_empty(), |view| view.child(title))
+            .child(div().text_2xl().font_bold().child(label));
+
+        view = match start_info.state {
+            TimerState::Running => view.when(window.is_window_hovered(), |view| {
+                view.child(
+                    Button::new("pause")
                         .icon(ExtendedIconName::Pause)
                         .bg(transparent_white())
                         .border_0()
-                        .on_click(cx.listener(|s, _, _, cx| s.change_state(cx, TimerState::Paused)))
-                        .into_any_element(),
-                    TimerState::Paused => h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("reset")
-                                .icon(ExtendedIconName::Adjustments)
-                                .bg(transparent_white())
-                                .border_0()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.is_just_finished = false;
-                                    this.change_state(cx, TimerState::Finished)
-                                })),
-                        )
-                        .child(
-                            Button::new("resume")
-                                .icon(ExtendedIconName::Play)
-                                .bg(transparent_white())
-                                .border_0()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.is_just_finished = false;
-                                    this.change_state(cx, TimerState::Running)
-                                })),
-                        )
-                        .into_any_element(),
-                    TimerState::Finished => Button::new("reset")
-                        .icon(ExtendedIconName::Adjustments)
-                        .bg(transparent_white())
-                        .border_0()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.is_just_finished = false;
-                            this.change_state(cx, TimerState::Finished)
-                        }))
-                        .into_any_element(),
-                })
-                .into_any_element();
-        }
+                        .on_click(
+                            cx.listener(|s, _, _, cx| s.change_state(cx, TimerState::Paused)),
+                        ),
+                )
+            }),
+            TimerState::Paused => view.child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("reset")
+                            .icon(ExtendedIconName::Adjustments)
+                            .bg(transparent_white())
+                            .border_0()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.is_just_finished = false;
+                                this.change_state(cx, TimerState::Finished)
+                            })),
+                    )
+                    .child(
+                        Button::new("resume")
+                            .icon(ExtendedIconName::Play)
+                            .bg(transparent_white())
+                            .border_0()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.is_just_finished = false;
+                                this.change_state(cx, TimerState::Running)
+                            })),
+                    ),
+            ),
+            TimerState::Finished => view.child(
+                Button::new("reset")
+                    .icon(ExtendedIconName::Adjustments)
+                    .bg(transparent_white())
+                    .border_0()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.is_just_finished = false;
+                        this.change_state(cx, TimerState::Finished)
+                    })),
+            ),
+        };
 
-        return div().into_any_element();
+        return view.into_any_element();
     }
 }
 
