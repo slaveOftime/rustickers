@@ -210,7 +210,7 @@ impl CommandSticker {
 
             if let Err(err) = sticker_events_tx.send(StickerWindowEvent::TitleChanged { id, title })
             {
-                println!("Failed to send sticker title changed event: {err:#}");
+                tracing::warn!(id, error = %err, "Failed to send sticker title changed event");
             }
 
             if let Err(err) = store.update_sticker_content(id, json).await {
@@ -573,7 +573,7 @@ impl CommandSticker {
                     kill_process(&mut process);
                 }
                 Err(err) => {
-                    println!("CommandSticker: failed to lock process for killing: {err}");
+                    tracing::warn!(error = %err, "CommandSticker: failed to lock process for killing");
                 }
             };
         });

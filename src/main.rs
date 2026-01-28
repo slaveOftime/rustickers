@@ -32,18 +32,22 @@ fn main() {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
 
+    let app_paths = AppPaths::new().expect("App paths should initialize");
+    let _ =
+        crate::utils::logging::LoggingGuards::init(&app_paths).expect("Logging should initialize");
+
     let mut single_instance = match crate::ipc::SingleInstance::acquire("rustickers") {
         Ok(instance) => Some(instance),
         Err(ipc::AcquireError::AlreadyRunning) => {
+            tracing::info!("Another instance is already running; exiting");
             return;
         }
         Err(ipc::AcquireError::Io(err)) => {
-            println!("Failed to acquire single instance: {err:#}");
+            tracing::error!(error = %err, "Failed to acquire single instance");
             return;
         }
     };
 
-    let app_paths = AppPaths::new().expect("App paths should initialize");
     let (ipc_events_tx, ipc_events_rx) = mpsc::channel::<IpcEvent>();
     let (sticker_events_tx, sticker_events_rx) = mpsc::channel::<StickerWindowEvent>();
 
@@ -52,7 +56,7 @@ fn main() {
     }
 
     if let Err(err) = crate::hotkey::start_global_hotkey_listener(ipc_events_tx.clone()) {
-        println!("Failed to start global hotkey listener: {err:#}");
+        tracing::error!(error = %err, "Failed to start global hotkey listener");
     }
 
     let app = Application::new()
@@ -95,7 +99,7 @@ fn main() {
             let store: ArcStickerStore = match open_sqlite(app_paths.db_path).await {
                 Ok(store) => store,
                 Err(err) => {
-                    println!("Failed to open store: {err:?}");
+                    tracing::error!(error = ?err, "Failed to open store");
                     return;
                 }
             };
@@ -108,12 +112,12 @@ fn main() {
                         if let Err(err) =
                             StickerWindow::open_async(cx, sticker_events_tx, store, id).await
                         {
-                            println!("Failed to open sticker window for id {id}: {err:?}");
+                            tracing::warn!(id, error = ?err, "Failed to open sticker window");
                         }
                     }
                 }
                 Err(err) => {
-                    println!("Failed to get open sticker ids from store: {err:?}");
+                    tracing::error!(error = ?err, "Failed to get open sticker ids from store");
                 }
             }
 
@@ -123,7 +127,7 @@ fn main() {
                         let _ = main_window_handle_clone.set(window.clone());
                     }
                     Err(err) => {
-                        println!("Failed to open main window: {err:?}");
+                        tracing::error!(error = ?err, "Failed to open main window");
                     }
                 }
             });

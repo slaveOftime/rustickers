@@ -145,7 +145,7 @@ impl MainWindow {
             });
 
             if let Err(err) = updated {
-                println!("Failed to process sticker window events: {err:#}");
+                tracing::warn!(error = %err, "Failed to process sticker window events");
             }
         }
     }

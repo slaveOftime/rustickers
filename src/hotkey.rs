@@ -24,7 +24,7 @@ pub fn start_global_hotkey_listener(ipc_events_tx: Sender<IpcEvent>) -> anyhow::
         .name("global-hotkey-listener".to_string())
         .spawn(move || {
             if let Err(err) = start_listen(ipc_events_tx) {
-                eprintln!("Global hotkey listener stopped: {err:#}");
+                tracing::error!(error = %err, "Global hotkey listener stopped");
             }
         })?;
 

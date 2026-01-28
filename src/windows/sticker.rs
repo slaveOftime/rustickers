@@ -340,7 +340,7 @@ impl StickerWindow {
 
         cx.spawn(async move |cx| {
             if let Err(err) = store.update_sticker_state(id, StickerState::Close).await {
-                eprintln!("Error saving state on close: {}", err);
+                tracing::error!(id, error = %err, "Error saving state on close");
             }
 
             let _ = events.send(StickerWindowEvent::Closed { id });

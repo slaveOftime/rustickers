@@ -76,9 +76,10 @@ impl MarkdownSticker {
 
             if let Err(err) = sticker_events_tx.send(StickerWindowEvent::TitleChanged { id, title })
             {
-                println!(
-                    "Failed to send title changed event for markdown sticker {}: {:?}",
-                    id, err
+                tracing::warn!(
+                    id,
+                    error = %err,
+                    "Failed to send title changed event for markdown sticker"
                 );
             }
 

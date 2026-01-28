@@ -166,9 +166,10 @@ impl TimerSticker {
 
             if let Err(err) = sticker_events_tx.send(StickerWindowEvent::TitleChanged { id, title })
             {
-                println!(
-                    "Failed to send title changed event for timer sticker {}: {:?}",
-                    id, err
+                tracing::warn!(
+                    id,
+                    error = %err,
+                    "Failed to send title changed event for timer sticker"
                 );
             }
 
@@ -309,7 +310,7 @@ impl TimerSticker {
                 {
                     this.save_timer_state(cx);
                     this.last_save_time_while_countdown = crate::utils::time::now_unix_millis();
-                    println!("Timer sticker {} state saved.", this.id);
+                    tracing::trace!(id = this.id, "Timer sticker state saved");
                 }
             });
         })

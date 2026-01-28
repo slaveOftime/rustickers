@@ -58,6 +58,19 @@ Typical locations:
 - **macOS**: `~/Library/Application Support/rustickers/data/stickers.db`
 - **Linux**: `~/.local/share/rustickers/data/stickers.db`
 
+## Logging
+
+Rustickers writes logs to a daily-rotating file under the same app data directory as the database:
+
+- **Windows**: `%LOCALAPPDATA%\rustickers\data\logs\`
+- **macOS**: `~/Library/Application Support/rustickers/data/logs/`
+- **Linux**: `~/.local/share/rustickers/data/logs/`
+
+Log level can be configured with:
+
+- `RUSTICKERS_LOG` (preferred), e.g. `RUSTICKERS_LOG=debug`
+- `RUST_LOG` (fallback)
+
 ## Releases
 
 This repo’s GitHub Actions workflow builds release artifacts when you push a tag like `v0.1.0`:

@@ -54,7 +54,11 @@ impl SqliteStore {
 #[async_trait::async_trait]
 impl super::StickerStore for SqliteStore {
     async fn insert_sticker(&self, sticker: StickerDetail) -> anyhow::Result<i64> {
-        println!("Insert sticker: {:?}", sticker.title);
+        tracing::debug!(
+            sticker_type = ?sticker.sticker_type,
+            title_len = sticker.title.len(),
+            "Insert sticker"
+        );
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -87,7 +91,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn delete_sticker(&self, id: i64) -> anyhow::Result<()> {
-        println!("Delete sticker: {}", id);
+        tracing::debug!(id, "Delete sticker");
         sqlx::query("DELETE FROM stickers WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
@@ -97,7 +101,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn get_sticker(&self, id: i64) -> anyhow::Result<StickerDetail> {
-        println!("Get sticker detail: {}", id);
+        tracing::debug!(id, "Get sticker detail");
         let row = sqlx::query_as::<_, StickerDetail>(
             "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at FROM stickers WHERE id = ?1",
         )
@@ -110,7 +114,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn update_sticker_color(&self, id: i64, color: String) -> anyhow::Result<()> {
-        println!("Update sticker color: {} to {}", id, color);
+        tracing::debug!(id, color = %color, "Update sticker color");
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -133,7 +137,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn update_sticker_title(&self, id: i64, title: String) -> anyhow::Result<()> {
-        println!("Update sticker title: {} to {}", id, title);
+        tracing::debug!(id, title_len = title.len(), "Update sticker title");
         let now = crate::utils::time::now_unix_millis();
 
         sqlx::query(
@@ -162,10 +166,7 @@ impl super::StickerStore for SqliteStore {
         width: i32,
         height: i32,
     ) -> anyhow::Result<()> {
-        println!(
-            "Update sticker bounds: {} to left={}, top={}, width={}, height={}",
-            id, left, top, width, height
-        );
+        tracing::debug!(id, left, top, width, height, "Update sticker bounds");
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -194,7 +195,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn update_sticker_content(&self, id: i64, content: String) -> anyhow::Result<()> {
-        println!("Update sticker content: {} to new content", id);
+        tracing::debug!(id, content_len = content.len(), "Update sticker content");
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -217,7 +218,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn update_sticker_state(&self, id: i64, state: StickerState) -> anyhow::Result<()> {
-        println!("Update sticker state: {} to {:?}", id, state);
+        tracing::debug!(id, state = ?state, "Update sticker state");
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -240,7 +241,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn update_sticker_top_most(&self, id: i64, top_most: bool) -> anyhow::Result<()> {
-        println!("Update sticker top_most: {} to {}", id, top_most);
+        tracing::debug!(id, top_most, "Update sticker top_most");
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -269,10 +270,7 @@ impl super::StickerStore for SqliteStore {
         limit: i64,
         offset: i64,
     ) -> anyhow::Result<Vec<StickerBrief>> {
-        println!(
-            "Query stickers: search={:?}, order_by={:?}, limit={}, offset={}",
-            search, order_by, limit, offset
-        );
+        tracing::debug!(has_search = search.as_ref().map(|s| !s.is_empty()).unwrap_or(false), order_by = ?order_by, limit, offset, "Query stickers");
 
         let search_pattern: Option<String> = search.map(|s| format!("%{}%", s));
         let order_sql = order_by.to_sql();
@@ -298,7 +296,10 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn count_stickers(&self, search: Option<String>) -> anyhow::Result<i64> {
-        println!("Count stickers: search={:?}", search);
+        tracing::debug!(
+            has_search = search.as_ref().map(|s| !s.is_empty()).unwrap_or(false),
+            "Count stickers"
+        );
 
         let search_pattern: Option<String> = search.map(|s| format!("%{}%", s));
 
@@ -314,7 +315,7 @@ impl super::StickerStore for SqliteStore {
     }
 
     async fn get_open_sticker_ids(&self) -> anyhow::Result<Vec<i64>> {
-        println!("Get open sticker ids");
+        tracing::debug!("Get open sticker ids");
 
         let rows = sqlx::query_scalar::<_, i64>("SELECT id FROM stickers WHERE state = 'open'")
             .fetch_all(&self.pool)

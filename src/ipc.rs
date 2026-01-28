@@ -52,11 +52,11 @@ impl SingleInstance {
                         Err(AcquireError::AlreadyRunning)
                     }
                     Err(err) => {
-                        println!("Failed to connect to existing instance: {err}");
+                        tracing::warn!(error = %err, "Failed to connect to existing instance");
                         // Connection failed - might be a corpse socket.
                         // If this is a filesystem socket (Unix/macOS), try to clean it up.
                         if name.is_path() && !cfg!(windows) {
-                            println!("Removing stale socket file: {:?}", token);
+                            tracing::info!(socket_path = %token, "Removing stale socket file");
                             let _ = std::fs::remove_file(&token);
                             // Retry binding with new options
                             let retry_opts = ListenerOptions::new().name(name.clone());
@@ -94,7 +94,7 @@ impl SingleInstance {
 
                 // Read a line (blocking until \n is received or connection closes)
                 if let Ok(_) = reader.read_line(&mut buffer) {
-                    println!("Received IPC command: {}", buffer.trim());
+                    tracing::debug!(cmd = %buffer.trim(), "Received IPC command");
                     // Check protocol
                     if buffer.trim() == "SHOW" {
                         let _ = ipc_events_tx.send(IpcEvent::Show);
@@ -112,7 +112,7 @@ fn handle_incoming_error(conn: io::Result<Stream>) -> Option<Stream> {
     match conn {
         Ok(c) => Some(c),
         Err(e) => {
-            eprintln!("Incoming IPC connection failed: {e}");
+            tracing::warn!(error = %e, "Incoming IPC connection failed");
             None
         }
     }
@@ -126,7 +126,7 @@ fn connect_and_signal(name: &Name) -> io::Result<()> {
             Ok(mut stream) => {
                 stream.write_all(b"SHOW\n")?;
                 stream.flush()?;
-                println!("Signaled existing instance to show.");
+                tracing::info!("Signaled existing instance to show");
                 return Ok(());
             }
             Err(e) => {
@@ -147,7 +147,7 @@ fn connect_and_signal(name: &Name) -> io::Result<()> {
     let mut stream = Stream::connect(name.clone())?;
     stream.write_all(b"SHOW\n")?;
     stream.flush()?;
-    println!("Signaled existing instance to show.");
+    tracing::info!("Signaled existing instance to show");
     Ok(())
 }
 

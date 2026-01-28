@@ -20,4 +20,13 @@ impl AppPaths {
 
         Ok(Self { db_path })
     }
+
+    pub fn log_dir(&self) -> PathBuf {
+        // Keep logs in a dedicated folder alongside the database.
+        // If the db path changes in the future, logs follow automatically.
+        self.db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("logs")
+    }
 }
