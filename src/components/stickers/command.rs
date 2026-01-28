@@ -782,7 +782,6 @@ impl Render for CommandSticker {
                     Button::new("start")
                         .label("Start")
                         .icon(ExtendedIconName::Play)
-                        .primary()
                         .flex_shrink_0()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.start(window, cx);
