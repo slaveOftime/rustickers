@@ -6,6 +6,8 @@ A tiny desktop sticker app for quick notes, timers, and command outputs — buil
 - **Global hotkey**: show the main window anytime. (ctrl+shift+s)
 - **Persistent**: sticker windows restore on restart (position/size/state)
 
+![demo1](./screenshots/demo1.png)
+
 ## What you can do
 
 ### Sticker types
@@ -76,19 +78,5 @@ Log level can be configured with:
 This repo’s GitHub Actions workflow builds release artifacts when you push a tag like `v0.1.0`:
 
 - **Windows**: a `.zip` with `rustickers.exe`
-- **Linux**: a `.tar.gz` containing `rustickers`, `rustickers.desktop`, `rustickers.png`, and `install.sh`
+- **Linux**: (not working right now) a `.tar.gz` containing `rustickers`, `rustickers.desktop`, `rustickers.png`, and `install.sh`
 - **macOS**: a `.zip` containing `Rustickers.app` (with a generated `.icns` app icon)
-
-### Linux install (from release tarball)
-
-Extract the `.tar.gz`, then run:
-
-```bash
-./install.sh
-```
-
-## Project structure (high level)
-
-- UI: GPUI windows in `src/windows/` and sticker components in `src/components/stickers/`
-- Storage: SQLite implementation + migrations in `src/storage/` and `migrations/`
-- Global hotkey + single-instance IPC: `src/hotkey.rs`, `src/ipc.rs`
