@@ -73,7 +73,7 @@ pub struct CommandSticker {
 
     command: Entity<InputState>,
     environments: Entity<InputState>,
-    workdir: Entity<InputState>,
+    working_dir: Entity<InputState>,
     scheduler: Option<Scheduler>,
     scheduler_cron_input: Entity<InputState>,
 
@@ -108,6 +108,26 @@ impl CommandSticker {
         let envs_value = cmd.environments;
         let workdir_value = cmd.working_dir;
 
+        let command = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(command_value)
+                .placeholder("command with args")
+        });
+
+        let environments = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .auto_grow(1, 10)
+                .default_value(envs_value)
+                .placeholder("KEY=VALUE per line")
+        });
+
+        let working_dir = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(workdir_value)
+                .placeholder("Optional")
+        });
+
         let cron = match &cmd.scheduler {
             Some(Scheduler::Cron(cron)) => cron.clone(),
             _ => String::new(),
@@ -137,22 +157,9 @@ impl CommandSticker {
             store,
             sticker_events_tx,
 
-            command: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(command_value)
-                    .validate(|v, _| !v.trim().is_empty())
-            }),
-            environments: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .multi_line(true)
-                    .auto_grow(1, 10)
-                    .default_value(envs_value)
-            }),
-            workdir: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(workdir_value)
-                    .validate(|v, _| std::fs::exists(v.trim()).is_ok())
-            }),
+            command,
+            environments,
+            working_dir,
             scheduler: cmd.scheduler,
             scheduler_cron_input: cron_entity,
             result: cmd.result,
@@ -171,7 +178,7 @@ impl CommandSticker {
         CommandContent {
             command: self.command.read(cx).value().trim().to_string(),
             environments: self.environments.read(cx).value().to_string(),
-            working_dir: self.workdir.read(cx).value().to_string(),
+            working_dir: self.working_dir.read(cx).value().to_string(),
             scheduler: self.scheduler.clone(),
             result: self.result.clone(),
         }
@@ -692,12 +699,12 @@ impl CommandSticker {
             )
             .child(
                 field()
-                    .label("Working dir (optional)")
-                    .child(Input::new(&self.workdir)),
+                    .label("Working directory")
+                    .child(Input::new(&self.working_dir)),
             )
             .child(
                 field()
-                    .label("Envs (KEY=VALUE per line)")
+                    .label("Environments")
                     .child(Input::new(&self.environments)),
             )
             .into_any_element()

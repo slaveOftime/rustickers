@@ -16,16 +16,8 @@ impl SimpleWebView {
             let mut builder = wry::WebViewBuilder::new()
                 .with_user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .with_transparent(true);
-
-            let source = source.trim();
-            let is_url = source
-                .get(..7)
-                .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
-                || source
-                    .get(..8)
-                    .is_some_and(|p| p.eq_ignore_ascii_case("https://"));
-
-            builder = if is_url {
+            
+            builder = if crate::utils::url::is_url(source) {
                 println!("Loading URL in webview: {}", source);
                 builder.with_url(source)
             } else {
