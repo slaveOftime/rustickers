@@ -6,8 +6,9 @@ use crate::ipc::IpcEvent;
 struct KeyState {
     ctrl: bool,
     shift: bool,
+    alt: bool,
     meta: bool,
-    s_down: bool,
+    r_down: bool,
 }
 
 fn primary_modifier_down(state: KeyState) -> bool {
@@ -47,17 +48,18 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
         match event.event_type {
             EventType::KeyPress(key) => {
                 match key {
+                    Key::Alt => state.alt = true,
                     Key::ControlLeft | Key::ControlRight => state.ctrl = true,
                     Key::ShiftLeft | Key::ShiftRight => state.shift = true,
                     Key::MetaLeft | Key::MetaRight => state.meta = true,
-                    Key::KeyS => {
+                    Key::KeyR => {
                         // Debounce key-repeat while held.
-                        if !state.s_down {
-                            state.s_down = true;
-                            if state.shift && primary_modifier_down(*state) {
+                        if !state.r_down {
+                            state.r_down = true;
+                            if state.alt && primary_modifier_down(*state) {
                                 tracing::debug!(
+                                    alt = state.alt,
                                     ctrl = state.ctrl,
-                                    shift = state.shift,
                                     meta = state.meta,
                                     "Hotkey triggered: show"
                                 );
@@ -69,10 +71,11 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                 }
             }
             EventType::KeyRelease(key) => match key {
+                Key::Alt => state.alt = false,
                 Key::ControlLeft | Key::ControlRight => state.ctrl = false,
                 Key::ShiftLeft | Key::ShiftRight => state.shift = false,
                 Key::MetaLeft | Key::MetaRight => state.meta = false,
-                Key::KeyS => state.s_down = false,
+                Key::KeyR => state.r_down = false,
                 _ => {}
             },
             _ => {}

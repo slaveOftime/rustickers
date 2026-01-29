@@ -3,7 +3,7 @@
 A tiny desktop sticker app for quick notes, timers, and command outputs — built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and backed by a local SQLite database.
 
 - **Single instance**: launching again focuses the existing app
-- **Global hotkey**: show the main window anytime. (ctrl+shift+s)
+- **Global hotkey**: show the main window anytime.
 - **Persistent**: sticker windows restore on restart (position/size/state)
 
 ![demo1](./screenshots/demo1.png)
@@ -26,8 +26,8 @@ A tiny desktop sticker app for quick notes, timers, and command outputs — buil
 
 ## Hotkeys
 
-- **Show main window**: `Ctrl + Shift + S`
-  - On macOS: `Cmd + Shift + S` also works
+- **Show main window**: `Ctrl + Alt + R`
+  - On macOS: `Cmd + Alt + R` also works
 - **Markdown sticker save**: `Ctrl + S` (while editing)
 
 ## Running
