@@ -173,17 +173,12 @@ impl Render for MarkdownSticker {
                         }),
                     )
                     .child(
-                        TextView::markdown(
-                            "markdown-preview",
-                            self.editor.read(cx).value(),
-                            window,
-                            cx,
-                        )
-                        .py_1()
-                        .px_2()
-                        .size_full()
-                        .selectable(true)
-                        .scrollable(true),
+                        TextView::markdown("markdown-preview", self.editor.read(cx).value())
+                            .py_1()
+                            .px_2()
+                            .size_full()
+                            .selectable(true)
+                            .scrollable(true),
                     )
                     .child(
                         div()

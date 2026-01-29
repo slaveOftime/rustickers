@@ -2,6 +2,7 @@ use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     MouseButton, Render, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
+    transparent_black,
 };
 use gpui_component::{
     ActiveTheme, Root, TitleBar,
@@ -75,7 +76,7 @@ impl StickerWindow {
             ));
         }
 
-        cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail))?
+        cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail))
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {
@@ -145,7 +146,7 @@ impl StickerWindow {
             |window, cx| {
                 let view =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
+                cx.new(|cx| Root::new(view, window, cx).bg(transparent_black().alpha(0.0)))
             },
         )?;
 

@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = "0.2.2"
-gpui-component = { version = "0.5.0", features = ["webview"] }
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4" }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4"}
+wry = { version = "0.53.3", package = "lb-wry" }
 anyhow = "1.0.95"
 async-trait = "0.1.85"
 directories = "6.0.0"

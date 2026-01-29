@@ -2,7 +2,7 @@ use gpui::{
     AnyWindowHandle, App, AsyncApp, Bounds, Context, Entity, IntoElement, MouseButton,
     MouseUpEvent, Render, SharedString, TitlebarOptions, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowOptions, div, prelude::*,
-    px, rgb, rgba, size,
+    px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::Root;
 use gpui_component::alert::Alert;
@@ -65,7 +65,7 @@ impl MainWindow {
                 let view = cx.new(|cx| {
                     MainWindow::new(window, cx, sticker_events_rx, sticker_events_tx, store)
                 });
-                cx.new(|cx| Root::new(view, window, cx))
+                cx.new(|cx| Root::new(view, window, cx).bg(transparent_black().alpha(0.0)))
             },
         )
         .map(|x| x.into())

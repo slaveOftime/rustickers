@@ -12,7 +12,7 @@ mod storage;
 mod utils;
 mod windows;
 
-use gpui::{AnyWindowHandle, App, Application, transparent_black};
+use gpui::{AnyWindowHandle, App, Application, rgb};
 use gpui_component::{Theme, ThemeMode};
 
 use std::sync::{Arc, OnceLock, mpsc};
@@ -70,11 +70,8 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
-
-        // This is needed to make window background fully transparent because gpui-component RootView is is use it as the default background.
-        // Next version can be removed
         let theme = cx.global_mut::<Theme>();
-        theme.background = transparent_black().alpha(0.0);
+        theme.background = rgb(0x151104).into();
 
         let main_window_handle_clone = main_window_handle.clone();
         cx.spawn(async move |cx| {

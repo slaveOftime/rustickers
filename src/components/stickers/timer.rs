@@ -341,17 +341,22 @@ impl TimerSticker {
             .items_center()
             .p_2()
             .gap_3()
-            .child(Input::new(&self.title).min_w(px(100.0)).max_w(px(200.0)))
+            .child(
+                Input::new(&self.title)
+                    .small()
+                    .min_w(px(100.0))
+                    .max_w(px(200.0)),
+            )
             .child(
                 h_flex()
                     .max_w(px(300.0))
                     .items_center()
                     .gap_2()
-                    .child(Select::new(&self.hours))
+                    .child(Select::new(&self.hours).small())
                     .child(":")
-                    .child(Select::new(&self.minutes))
+                    .child(Select::new(&self.minutes).small())
                     .child(":")
-                    .child(Select::new(&self.seconds)),
+                    .child(Select::new(&self.seconds).small()),
             )
             .child(
                 Button::new("timer-start")

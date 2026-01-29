@@ -757,12 +757,7 @@ impl CommandSticker {
             .into_any_element()
     }
 
-    fn result_view(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        bg_color: Rgba,
-    ) -> AnyElement {
+    fn result_view(&mut self, bg_color: Rgba) -> AnyElement {
         let empty_view = div().size_full().bg(bg_color).into_any_element();
         let view = match &self.result {
             CommandResult::Text(Some(x)) => div()
@@ -774,7 +769,7 @@ impl CommandSticker {
                 .child(x.clone())
                 .into_any_element(),
             CommandResult::Text(None) => empty_view,
-            CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone(), window, cx)
+            CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone())
                 .bg(bg_color)
                 .p_1()
                 .size_full()
@@ -869,7 +864,7 @@ impl Render for CommandSticker {
                 div().h_full().flex_shrink().overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
-                        .child(self.result_view(window, cx, bg_color)),
+                        .child(self.result_view(bg_color)),
                 ),
             );
 
