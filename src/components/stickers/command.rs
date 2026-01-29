@@ -122,13 +122,15 @@ impl CommandSticker {
         let command = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(command_value)
+                .multi_line(true)
+                .auto_grow(1, 5)
                 .placeholder("command with args")
         });
 
         let environments = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
-                .auto_grow(1, 10)
+                .auto_grow(1, 5)
                 .default_value(envs_value)
                 .placeholder("KEY=VALUE per line")
         });
@@ -375,6 +377,8 @@ impl CommandSticker {
             cx.notify();
             return;
         };
+
+        tracing::debug!("Running command: {} {:?}", program, args);
 
         let mut cmd = Command::new(path);
 
