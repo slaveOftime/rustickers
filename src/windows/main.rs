@@ -347,7 +347,6 @@ impl MainWindow {
             .border_0()
             .opacity(0.8)
             .dropdown_menu(move |menu, window, cx| {
-                let root_entity = root_entity.clone();
                 let order_by = root_entity.read(cx).order;
                 menu.item(
                     PopupMenuItem::new(order_label(StickerOrderBy::CreatedDesc))

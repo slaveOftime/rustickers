@@ -47,6 +47,9 @@ pub enum IconName {
     SortAscending,
     SortDescending,
     Forward,
+    ArrowUp,
+    ArrowDown,
+    Check,
 }
 
 impl IconNamed for IconName {
@@ -67,6 +70,9 @@ impl IconNamed for IconName {
             IconName::SortAscending => "icons/sort-ascending.svg".into(),
             IconName::SortDescending => "icons/sort-descending.svg".into(),
             IconName::Forward => "icons/forward.svg".into(),
+            IconName::ArrowUp => "icons/arrow-up.svg".into(),
+            IconName::ArrowDown => "icons/arrow-down.svg".into(),
+            IconName::Check => "icons/check.svg".into(),
         }
     }
 }
