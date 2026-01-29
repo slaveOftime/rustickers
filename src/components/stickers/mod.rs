@@ -4,6 +4,7 @@ use crate::model::sticker::StickerColor;
 
 pub mod command;
 pub mod markdown;
+pub mod paint;
 pub mod timer;
 
 pub trait Sticker: Sized {

@@ -20,7 +20,10 @@ use std::{
 use crate::{
     components::{
         IconName,
-        stickers::{command::CommandSticker, markdown::MarkdownSticker, timer::TimerSticker, *},
+        stickers::{
+            command::CommandSticker, markdown::MarkdownSticker, paint::PaintSticker,
+            timer::TimerSticker, *,
+        },
     },
     model::sticker::{StickerColor, StickerDetail, StickerState, StickerType},
     storage::ArcStickerStore,
@@ -114,6 +117,7 @@ impl StickerWindow {
             StickerType::Timer => TimerSticker::min_window_size(),
             StickerType::Markdown => MarkdownSticker::min_window_size(),
             StickerType::Command => CommandSticker::min_window_size(),
+            StickerType::Paint => PaintSticker::min_window_size(),
         };
 
         let current_size = if detail.width > 0 && detail.height > 0 {
@@ -123,6 +127,7 @@ impl StickerWindow {
                 StickerType::Timer => TimerSticker::default_window_size(),
                 StickerType::Markdown => MarkdownSticker::default_window_size(),
                 StickerType::Command => CommandSticker::default_window_size(),
+                StickerType::Paint => PaintSticker::default_window_size(),
             }
         };
 
@@ -240,6 +245,17 @@ impl StickerWindow {
             }))),
             StickerType::Command => Box::new(StickerViewEntity::new(cx.new(|cx| {
                 CommandSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx.clone(),
+                )
+            }))),
+            StickerType::Paint => Box::new(StickerViewEntity::new(cx.new(|cx| {
+                PaintSticker::new(
                     id,
                     color,
                     store,
@@ -447,7 +463,6 @@ impl Render for StickerWindow {
             .font_family(cx.theme().font_family.clone())
             .relative()
             .size_full()
-            .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 if !window.is_window_active() {
                     window.activate_window();

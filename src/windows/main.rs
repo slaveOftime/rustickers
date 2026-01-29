@@ -20,6 +20,7 @@ use crate::components::IconName;
 use crate::components::stickers::Sticker;
 use crate::components::stickers::command::CommandSticker;
 use crate::components::stickers::markdown::MarkdownSticker;
+use crate::components::stickers::paint::PaintSticker;
 use crate::components::stickers::timer::TimerSticker;
 use crate::model::sticker::*;
 use crate::storage::ArcStickerStore;
@@ -194,6 +195,7 @@ impl MainWindow {
             StickerType::Markdown => MarkdownSticker::default_window_size(),
             StickerType::Command => CommandSticker::default_window_size(),
             StickerType::Timer => TimerSticker::default_window_size(),
+            StickerType::Paint => PaintSticker::default_window_size(),
         };
 
         let detail = StickerDetail {
@@ -413,6 +415,13 @@ impl MainWindow {
                             this.create_sticker(cx, &StickerType::Command);
                         })),
                 )
+                .item(
+                    PopupMenuItem::new("paint")
+                        .icon(sticker_type_icon(&StickerType::Paint))
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            this.create_sticker(cx, &StickerType::Paint);
+                        })),
+                )
             })
             .into_any_element()
     }
@@ -587,6 +596,7 @@ fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
         StickerType::Markdown => IconName::DocumentText,
         StickerType::Command => IconName::Command,
         StickerType::Timer => IconName::Bell,
+        StickerType::Paint => IconName::Adjustments,
     }
 }
 
