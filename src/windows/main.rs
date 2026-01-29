@@ -422,36 +422,41 @@ impl MainWindow {
         let title = sticker.title.clone();
         let updated = crate::utils::time::format_unix_millis(sticker.updated_at);
 
-        let main =
-            div()
-                .flex_shrink_0()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(div().text_color(sticker.color.swatch()).child(
-                            Icon::new(sticker_type_icon(&sticker.sticker_type)).with_size(px(14.)),
-                        ))
-                        .child(div().text_sm().overflow_hidden().pr_2().child(
-                            if title.is_empty() {
+        let main = div()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().text_color(sticker.color.swatch()).child(
+                        Icon::new(sticker_type_icon(&sticker.sticker_type)).with_size(px(14.)),
+                    ))
+                    .child(
+                        div()
+                            .text_sm()
+                            .overflow_hidden()
+                            .line_clamp(3)
+                            .text_ellipsis()
+                            .pr_2()
+                            .child(if title.is_empty() {
                                 "...".to_string()
                             } else {
                                 title.clone()
-                            },
-                        )),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .opacity(0.75)
-                        .text_right()
-                        .child(format!("Updated: {updated}")),
-                );
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .opacity(0.75)
+                    .text_right()
+                    .child(format!("Updated: {updated}")),
+            );
 
         div()
             .bg(sticker.color.bg())
