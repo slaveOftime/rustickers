@@ -254,16 +254,8 @@ impl StickerWindow {
                     sticker_events_tx.clone(),
                 )
             }))),
-            StickerType::Paint => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                PaintSticker::new(
-                    id,
-                    color,
-                    store,
-                    content,
-                    window,
-                    cx,
-                    sticker_events_tx.clone(),
-                )
+            StickerType::Paint => Box::new(StickerViewEntity::new(cx.new(|_| {
+                PaintSticker::new(id, color, store, content, sticker_events_tx.clone())
             }))),
         }
     }

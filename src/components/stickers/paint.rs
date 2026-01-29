@@ -1,8 +1,9 @@
 use gpui::{
-    Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
-    Render, Rgba, Window, WindowControlArea, canvas, div, point, prelude::*, px, rgb, rgba, size,
+    AnyElement, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
+    Pixels, Point, Render, Rgba, Window, WindowControlArea, canvas, div, point, prelude::*, px,
+    rgb, rgba, size,
 };
-use gpui_component::{Sizable, button::Button, h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{h_flex, scroll::ScrollableElement, v_flex};
 use serde::{Deserialize, Serialize};
 
 use crate::{model::sticker::StickerColor, storage::ArcStickerStore, windows::StickerWindowEvent};
@@ -49,14 +50,11 @@ struct PaintStroke {
 struct PaintContentV1 {
     #[serde(default)]
     lines: Vec<Vec<PaintPoint>>,
-    #[serde(default)]
-    dashed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintContent {
     strokes: Vec<PaintStroke>,
-    dashed: bool,
     current_color: u32,
 }
 
@@ -64,7 +62,6 @@ impl Default for PaintContent {
     fn default() -> Self {
         Self {
             strokes: Vec::new(),
-            dashed: false,
             current_color: PAINT_COLORS[0],
         }
     }
@@ -84,7 +81,6 @@ pub struct PaintSticker {
     _sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
 
     strokes: Vec<PaintStroke>,
-    dashed: bool,
     current_color: u32,
     painting: bool,
 
@@ -97,8 +93,6 @@ impl PaintSticker {
         color: StickerColor,
         store: ArcStickerStore,
         content: &str,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
         let content = serde_json::from_str::<PaintContentAny>(content)
@@ -113,7 +107,6 @@ impl PaintSticker {
                             color: PAINT_COLORS[0],
                         })
                         .collect(),
-                    dashed: v1.dashed,
                     current_color: PAINT_COLORS[0],
                 },
             })
@@ -124,7 +117,6 @@ impl PaintSticker {
             store,
             _sticker_events_tx: sticker_events_tx,
             strokes: content.strokes,
-            dashed: content.dashed,
             current_color: content.current_color,
             painting: false,
             error: None,
@@ -134,7 +126,6 @@ impl PaintSticker {
     fn build_content(&self) -> PaintContent {
         PaintContent {
             strokes: self.strokes.clone(),
-            dashed: self.dashed,
             current_color: self.current_color,
         }
     }
@@ -170,38 +161,12 @@ impl PaintSticker {
         true
     }
 
-    fn clear(&mut self, cx: &mut Context<Self>) {
-        self.strokes.clear();
-        cx.notify();
-    }
-}
-
-impl super::Sticker for PaintSticker {
-    fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
-        self.save_state(cx)
-    }
-
-    fn min_window_size() -> gpui::Size<i32> {
-        size(100, 100)
-    }
-
-    fn default_window_size() -> gpui::Size<i32> {
-        size(400, 300)
-    }
-
-    fn set_color(&mut self, color: StickerColor) {
-        self.color = color;
-    }
-}
-
-impl Render for PaintSticker {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let strokes = self.strokes.clone();
-        let dashed = self.dashed;
+    fn toolbar_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let current_color = self.current_color;
 
         let mut color_picker = h_flex()
             .gap_1()
+            .py_1()
             .items_center()
             .flex_shrink()
             .overflow_x_scrollbar();
@@ -215,7 +180,7 @@ impl Render for PaintSticker {
                     .rounded_full()
                     .cursor_pointer()
                     .occlude()
-                    .when(is_selected, |v| v.border_2().border_color(rgb(0xffffff)))
+                    .when(is_selected, |v| v.border_1().border_color(rgb(0xffffff)))
                     .when(!is_selected, |v| {
                         v.border_1().border_color(rgba(0x00000000))
                     })
@@ -229,32 +194,22 @@ impl Render for PaintSticker {
             );
         }
 
-        let toolbar = h_flex()
+        h_flex()
             .window_control_area(WindowControlArea::Drag)
             .items_center()
+            .justify_between()
             .gap_2()
+            .p_1()
             .w_full()
-            .child("Draw")
-            .child(
-                Button::new("paint-dash")
-                    .label(if dashed { "Solid" } else { "Dashed" })
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.dashed = !this.dashed;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("paint-clear")
-                    .label("Clear")
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.clear(cx);
-                    })),
-            )
-            .child(color_picker);
+            .overflow_hidden()
+            .child(color_picker)
+            .into_any_element()
+    }
 
-        let canvas_view = div()
+    fn canvas_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let strokes = self.strokes.clone();
+
+        div()
             .size_full()
             .child(
                 canvas(
@@ -266,9 +221,6 @@ impl Render for PaintSticker {
                             }
 
                             let mut builder = PathBuilder::stroke(px(2.));
-                            if dashed {
-                                builder = builder.dash_array(&[px(6.), px(4.)]);
-                            }
 
                             for (i, p) in stroke.points.iter().enumerate() {
                                 let p = p.to_gpui();
@@ -316,17 +268,41 @@ impl Render for PaintSticker {
                     cx.notify();
                     this.save_state(cx);
                 }),
-            );
+            )
+            .into_any_element()
+    }
+}
 
+impl super::Sticker for PaintSticker {
+    fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.save_state(cx)
+    }
+
+    fn min_window_size() -> gpui::Size<i32> {
+        size(100, 100)
+    }
+
+    fn default_window_size() -> gpui::Size<i32> {
+        size(400, 300)
+    }
+
+    fn set_color(&mut self, color: StickerColor) {
+        self.color = color;
+    }
+}
+
+impl Render for PaintSticker {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .gap_2()
-            .p_2()
             .bg(Rgba {
                 a: 0.85,
                 ..self.color.bg()
             })
-            .child(toolbar)
-            .child(canvas_view)
+            .when(window.is_window_hovered(), |v| {
+                v.child(self.toolbar_view(cx))
+            })
+            .child(self.canvas_view(cx))
     }
 }
