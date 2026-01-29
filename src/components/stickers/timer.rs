@@ -341,12 +341,7 @@ impl TimerSticker {
             .items_center()
             .p_2()
             .gap_3()
-            .child(
-                Input::new(&self.title)
-                    .small()
-                    .min_w(px(100.0))
-                    .max_w(px(200.0)),
-            )
+            .child(Input::new(&self.title).small().w(px(160.0)))
             .child(
                 h_flex()
                     .max_w(px(300.0))
