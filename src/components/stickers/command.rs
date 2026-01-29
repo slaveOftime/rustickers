@@ -10,6 +10,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
+    switch::Switch,
     text::TextView,
     v_flex, yellow_500,
 };
@@ -40,7 +41,9 @@ struct CommandContent {
     environments: String,
     working_dir: String,
     scheduler: Option<Scheduler>,
+    run_immediately: bool,
     result: CommandResult,
+    stream_result: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +66,8 @@ impl Default for CommandContent {
             environments: String::new(),
             working_dir: String::new(),
             scheduler: None,
+            run_immediately: true,
+            stream_result: false,
             result: CommandResult::Text(None),
         }
     }
@@ -79,6 +84,8 @@ pub struct CommandSticker {
     working_dir: Entity<InputState>,
     scheduler: Option<Scheduler>,
     scheduler_cron_input: Entity<InputState>,
+    run_immediately: bool,
+    stream_result: bool,
 
     result: CommandResult,
     result_html_entity: Option<Entity<SimpleWebView>>,
@@ -149,9 +156,6 @@ impl CommandSticker {
             InputEvent::Change => {
                 this.scheduler = Some(Scheduler::Cron(v.read(cx).value().trim().to_string()));
             }
-            InputEvent::Blur | InputEvent::PressEnter { .. } => {
-                this.save_config(cx);
-            }
             _ => {}
         })
         .detach();
@@ -167,8 +171,10 @@ impl CommandSticker {
             working_dir,
             scheduler: cmd.scheduler,
             scheduler_cron_input: cron_entity,
+            run_immediately: cmd.run_immediately,
             result: cmd.result,
             result_html_entity,
+            stream_result: cmd.stream_result,
 
             process: None,
             stopping: false,
@@ -185,7 +191,9 @@ impl CommandSticker {
             environments: self.environments.read(cx).value().to_string(),
             working_dir: self.working_dir.read(cx).value().to_string(),
             scheduler: self.scheduler.clone(),
+            run_immediately: self.run_immediately,
             result: self.result.clone(),
+            stream_result: self.stream_result,
         }
     }
 
@@ -241,6 +249,8 @@ impl CommandSticker {
     }
 
     fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let _ = self.save_config(cx);
+
         if self.is_schedule_active() {
             self.stop_schedule();
         }
@@ -265,6 +275,10 @@ impl CommandSticker {
                         return;
                     }
                 };
+
+                if self.run_immediately {
+                    self.run(window, cx);
+                }
 
                 let cancel = Arc::new(AtomicBool::new(false));
 
@@ -354,8 +368,6 @@ impl CommandSticker {
         }
 
         let workdir = content.working_dir.trim();
-
-        let _ = self.save_config(cx);
 
         let program = args.remove(0);
         let Ok(path) = which::which(&program) else {
@@ -471,19 +483,24 @@ impl CommandSticker {
         cx: &Context<Self>,
         rx: mpsc::Receiver<CmdEvent>,
     ) {
-        match self.result {
-            CommandResult::Text(ref mut result) | CommandResult::Markdown(ref mut result) => {
-                *result = None;
+        if self.stream_result {
+            match self.result {
+                CommandResult::Text(ref mut result)
+                | CommandResult::Markdown(ref mut result)
+                | CommandResult::Html(ref mut result)
+                | CommandResult::Svg(ref mut result) => {
+                    *result = None;
+                }
             }
-            CommandResult::Html(_) | CommandResult::Svg(_) => {}
+            self.result_html_entity = None;
+        } else {
+            match &self.result {
+                CommandResult::Html(_) => {}
+                _ => {
+                    self.result_html_entity = None;
+                }
+            };
         }
-
-        match &self.result {
-            CommandResult::Html(_) => {}
-            _ => {
-                self.result_html_entity = None;
-            }
-        };
 
         let entity = cx.entity();
         window
@@ -570,6 +587,7 @@ impl CommandSticker {
         };
 
         self.stopping = true;
+        self.save_config(cx);
         cx.notify();
 
         thread::spawn(move || {
@@ -662,6 +680,17 @@ impl CommandSticker {
                 ),
             )
             .child(
+                field().label("Stream output").child(
+                    Switch::new("stream_output")
+                        .label("will clean old result when running")
+                        .small()
+                        .checked(self.stream_result)
+                        .on_click(
+                            cx.listener(|this, _, _, _| this.stream_result = !this.stream_result),
+                        ),
+                ),
+            )
+            .child(
                 field().label("Schedule").child(
                     v_flex()
                         .py_1()
@@ -702,6 +731,19 @@ impl CommandSticker {
                         }),
                 ),
             )
+            .when(self.scheduler.is_some(), |v| {
+                v.child(
+                    field().label("Run immediately").child(
+                        Switch::new("run_immediately")
+                            .label("run without next schedule")
+                            .small()
+                            .checked(self.run_immediately)
+                            .on_click(cx.listener(|this, _, _, _| {
+                                this.run_immediately = !this.run_immediately
+                            })),
+                    ),
+                )
+            })
             .child(
                 field()
                     .label("Working directory")
@@ -726,6 +768,8 @@ impl CommandSticker {
             CommandResult::Text(Some(x)) => div()
                 .p_1()
                 .text_sm()
+                .size_full()
+                .overflow_scrollbar()
                 .bg(bg_color)
                 .child(x.clone())
                 .into_any_element(),
@@ -733,6 +777,7 @@ impl CommandSticker {
             CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone(), window, cx)
                 .bg(bg_color)
                 .p_1()
+                .size_full()
                 .selectable(true)
                 .scrollable(true)
                 .into_any_element(),
@@ -809,13 +854,15 @@ impl Render for CommandSticker {
                         .child(v_flex().overflow_y_scrollbar().child(self.form(cx))),
                 )
                 .child(
-                    Button::new("start")
-                        .label("Start")
-                        .icon(IconName::Play)
-                        .flex_shrink_0()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.start(window, cx);
-                        })),
+                    h_flex().child(
+                        Button::new("start")
+                            .icon(IconName::Play)
+                            .bg(transparent_white())
+                            .border_0()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start(window, cx);
+                            })),
+                    ),
                 );
         } else {
             root = root.child(
@@ -848,41 +895,39 @@ impl Render for CommandSticker {
                     );
                 }
             } else {
-                root = root.when(window.is_window_hovered(), |view| {
-                    view.child(
-                        h_flex()
-                            .bg(bg_color)
-                            .w_full()
-                            .gap_1()
-                            .child(
-                                Button::new("reset")
-                                    .icon(IconName::Adjustments)
-                                    .bg(transparent_white())
-                                    .border_0()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.result_html_entity = None;
-                                        match this.result {
-                                            CommandResult::Text(ref mut result)
-                                            | CommandResult::Markdown(ref mut result)
-                                            | CommandResult::Html(ref mut result)
-                                            | CommandResult::Svg(ref mut result) => {
-                                                *result = None;
-                                            }
+                root = root.child(
+                    h_flex()
+                        .bg(bg_color)
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            Button::new("reset")
+                                .icon(IconName::Adjustments)
+                                .bg(transparent_white())
+                                .border_0()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.result_html_entity = None;
+                                    match this.result {
+                                        CommandResult::Text(ref mut result)
+                                        | CommandResult::Markdown(ref mut result)
+                                        | CommandResult::Html(ref mut result)
+                                        | CommandResult::Svg(ref mut result) => {
+                                            *result = None;
                                         }
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("restart")
-                                    .icon(IconName::Play)
-                                    .bg(transparent_white())
-                                    .border_0()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.start(window, cx);
-                                    })),
-                            ),
-                    )
-                });
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("restart")
+                                .icon(IconName::Play)
+                                .bg(transparent_white())
+                                .border_0()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.start(window, cx);
+                                })),
+                        ),
+                );
             }
         }
 
