@@ -263,6 +263,18 @@ impl TimerSticker {
         }
     }
 
+    fn restart(&mut self, cx: &mut Context<Self>) {
+        self.is_just_finished = false;
+
+        if let Some(start_info) = &mut self.timer.start_info {
+            start_info.started_at_ms = crate::utils::time::now_unix_millis();
+            start_info.remaining_secs = self.timer.duration_secs;
+            start_info.state = TimerState::Running;
+
+            self.save_timer_state(cx);
+        }
+    }
+
     fn spawn_for_beep(&self, cx: &Context<Self>) {
         cx.spawn(async |this, cx| {
             let start = crate::utils::time::now_unix_millis();
@@ -449,14 +461,27 @@ impl TimerSticker {
             ),
             TimerState::Finished => view.when(window.is_window_hovered(), |view| {
                 view.child(
-                    Button::new("reset")
-                        .icon(IconName::Adjustments)
-                        .bg(transparent_white())
-                        .border_0()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.is_just_finished = false;
-                            this.change_state(cx, TimerState::Finished)
-                        })),
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("reset")
+                                .icon(IconName::Adjustments)
+                                .bg(transparent_white())
+                                .border_0()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.is_just_finished = false;
+                                    this.change_state(cx, TimerState::Finished)
+                                })),
+                        )
+                        .child(
+                            Button::new("restart")
+                                .icon(IconName::Forward)
+                                .bg(transparent_white())
+                                .border_0()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.restart(cx);
+                                })),
+                        ),
                 )
             }),
         };

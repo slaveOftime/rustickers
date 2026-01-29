@@ -46,6 +46,7 @@ pub enum IconName {
     Search,
     SortAscending,
     SortDescending,
+    Forward,
 }
 
 impl IconNamed for IconName {
@@ -65,6 +66,7 @@ impl IconNamed for IconName {
             IconName::Search => "icons/search.svg".into(),
             IconName::SortAscending => "icons/sort-ascending.svg".into(),
             IconName::SortDescending => "icons/sort-descending.svg".into(),
+            IconName::Forward => "icons/forward.svg".into(),
         }
     }
 }
