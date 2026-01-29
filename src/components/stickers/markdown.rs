@@ -1,6 +1,6 @@
 use gpui::{
-    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowControlArea, div,
-    prelude::*, px, rgba,
+    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, Rgba, Window, WindowControlArea,
+    div, prelude::*, px, rgba,
 };
 use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, Sizable, h_flex};
@@ -10,13 +10,13 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::model::sticker::StickerColor;
 use crate::storage::ArcStickerStore;
 use crate::windows::StickerWindowEvent;
 
-use super::Sticker;
-
 pub struct MarkdownSticker {
     id: i64,
+    color: StickerColor,
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     editor: Entity<InputState>,
@@ -27,6 +27,7 @@ pub struct MarkdownSticker {
 impl MarkdownSticker {
     pub fn new(
         id: i64,
+        color: StickerColor,
         store: ArcStickerStore,
         content: &str,
         window: &mut Window,
@@ -43,6 +44,7 @@ impl MarkdownSticker {
 
         Self {
             id,
+            color,
             store,
             sticker_events_tx,
             editor,
@@ -103,7 +105,7 @@ impl MarkdownSticker {
     }
 }
 
-impl Sticker for MarkdownSticker {
+impl super::Sticker for MarkdownSticker {
     fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_state(cx)
     }
@@ -115,11 +117,18 @@ impl Sticker for MarkdownSticker {
     fn default_window_size() -> gpui::Size<i32> {
         gpui::size(400, 300)
     }
+
+    fn set_color(&mut self, color: StickerColor) {
+        self.color = color;
+    }
 }
 
 impl Render for MarkdownSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().size_full().gap_1();
+        let mut body = v_flex().size_full().gap_1().bg(Rgba {
+            a: 0.85,
+            ..self.color.bg()
+        });
 
         if self.editing {
             window.set_rem_size(cx.theme().font_size);

@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
-    MouseButton, Render, Rgba, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
+    MouseButton, Render, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
 };
 use gpui_component::{
@@ -166,8 +166,10 @@ impl StickerWindow {
         let title_val = detail.title.clone();
         let title = cx.new(|cx| InputState::new(window, cx).default_value(title_val));
 
-        let view =
+        let mut view =
             Self::create_sticker_view(&detail, &store, window, cx, sticker_events_tx.clone());
+
+        view.set_color(cx, detail.color);
 
         cx.subscribe_in(&title, window, |this, input_state, event, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -208,18 +210,43 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     ) -> Box<dyn StickerView> {
         let id = detail.id;
+        let color = detail.color;
         let content = detail.content.as_str();
         let store = store.clone();
 
         match detail.sticker_type {
             StickerType::Timer => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                TimerSticker::new(id, store, content, window, cx, sticker_events_tx.clone())
+                TimerSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx.clone(),
+                )
             }))),
             StickerType::Markdown => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                MarkdownSticker::new(id, store, content, window, cx, sticker_events_tx.clone())
+                MarkdownSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx.clone(),
+                )
             }))),
             StickerType::Command => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                CommandSticker::new(id, store, content, window, cx, sticker_events_tx.clone())
+                CommandSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx.clone(),
+                )
             }))),
         }
     }
@@ -310,6 +337,7 @@ impl StickerWindow {
 
     fn change_color(&mut self, theme: StickerColor, cx: &mut Context<Self>) {
         self.detail.color = theme;
+        self.view.set_color(cx, theme);
         let id = self.detail.id;
         let store = self.store.clone();
         let events = self.sticker_events_tx.clone();
@@ -418,10 +446,6 @@ impl Render for StickerWindow {
             .font_family(cx.theme().font_family.clone())
             .relative()
             .size_full()
-            .bg(Rgba {
-                a: 0.85,
-                ..self.detail.color.bg()
-            })
             .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 if !window.is_window_active() {

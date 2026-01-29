@@ -26,12 +26,6 @@ use windows::main::MainWindow;
 use windows::sticker::StickerWindow;
 
 fn main() {
-    // Required this for Windows to render the WebView.
-    #[cfg(target_os = "windows")]
-    unsafe {
-        std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
-    }
-
     let app_paths = AppPaths::new().expect("App paths should initialize");
     let _ =
         crate::utils::logging::LoggingGuards::init(&app_paths).expect("Logging should initialize");
@@ -41,16 +35,6 @@ fn main() {
         debug_build = cfg!(debug_assertions),
         "Starting Rustickers"
     );
-
-    #[cfg(target_os = "windows")]
-    {
-        tracing::debug!(
-            gpui_disable_direct_composition = std::env::var("GPUI_DISABLE_DIRECT_COMPOSITION")
-                .as_deref()
-                .unwrap_or(""),
-            "Windows WebView environment configured"
-        );
-    }
 
     let mut single_instance = match crate::ipc::SingleInstance::acquire("rustickers") {
         Ok(instance) => Some(instance),
@@ -87,6 +71,8 @@ fn main() {
         gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
 
+        // This is needed to make window background fully transparent because gpui-component RootView is is use it as the default background.
+        // Next version can be removed
         let theme = cx.global_mut::<Theme>();
         theme.background = transparent_black().alpha(0.0);
 

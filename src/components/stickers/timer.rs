@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window, div,
-    prelude::*, px, transparent_white,
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Rgba, Size, Window,
+    div, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     IndexPath, Sizable, StyledExt,
@@ -15,8 +15,10 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::windows::StickerWindowEvent;
-use crate::{components::IconName, storage::ArcStickerStore};
+use crate::{
+    components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
+    windows::StickerWindowEvent,
+};
 
 use super::Sticker;
 
@@ -53,6 +55,7 @@ impl Default for TimerContent {
 
 pub struct TimerSticker {
     id: i64,
+    color: StickerColor,
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     timer: TimerContent,
@@ -72,6 +75,7 @@ pub struct TimerSticker {
 impl TimerSticker {
     pub fn new<T>(
         id: i64,
+        color: StickerColor,
         store: ArcStickerStore,
         content: &str,
         window: &mut Window,
@@ -114,6 +118,7 @@ impl TimerSticker {
 
         Self {
             id,
+            color,
             store,
             sticker_events_tx,
             timer,
@@ -472,11 +477,18 @@ impl Sticker for TimerSticker {
     fn default_window_size() -> gpui::Size<i32> {
         Size::new(300, 200)
     }
+
+    fn set_color(&mut self, color: StickerColor) {
+        self.color = color;
+    }
 }
 
 impl Render for TimerSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().size_full();
+        let mut body = v_flex().size_full().bg(Rgba {
+            a: 0.85,
+            ..self.color.bg()
+        });
 
         if let Some(start_info) = &mut self.timer.start_info {
             if let TimerState::Running = start_info.state {

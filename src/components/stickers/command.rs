@@ -1,6 +1,6 @@
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Image, ImageFormat,
-    ImageSource, Render, Window, div, img, prelude::*, px, transparent_white,
+    Animation, AnimationExt, AnyElement, AppContext, Context, Entity, Image, ImageFormat,
+    ImageSource, Render, Rgba, Window, div, img, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     Sizable,
@@ -27,8 +27,10 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::{components::IconName, storage::ArcStickerStore};
-use crate::{components::webview::SimpleWebView, windows::StickerWindowEvent};
+use crate::{
+    components::IconName, components::webview::SimpleWebView, model::sticker::StickerColor,
+    storage::ArcStickerStore, windows::StickerWindowEvent,
+};
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
 
@@ -68,6 +70,7 @@ impl Default for CommandContent {
 
 pub struct CommandSticker {
     id: i64,
+    color: StickerColor,
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
 
@@ -97,6 +100,7 @@ enum CmdEvent {
 impl CommandSticker {
     pub fn new(
         id: i64,
+        color: StickerColor,
         store: ArcStickerStore,
         content: &str,
         window: &mut Window,
@@ -154,6 +158,7 @@ impl CommandSticker {
 
         Self {
             id,
+            color,
             store,
             sticker_events_tx,
 
@@ -710,34 +715,42 @@ impl CommandSticker {
             .into_any_element()
     }
 
-    fn result_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn result_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        bg_color: Rgba,
+    ) -> AnyElement {
+        let empty_view = div().size_full().bg(bg_color).into_any_element();
         let view = match &self.result {
-            CommandResult::Text(Some(x)) => {
-                div().p_1().text_sm().child(x.clone()).into_any_element()
-            }
-            CommandResult::Text(None) => Empty.into_any_element(),
+            CommandResult::Text(Some(x)) => div()
+                .p_1()
+                .text_sm()
+                .bg(bg_color)
+                .child(x.clone())
+                .into_any_element(),
+            CommandResult::Text(None) => empty_view,
             CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone(), window, cx)
+                .bg(bg_color)
                 .p_1()
                 .selectable(true)
                 .scrollable(true)
                 .into_any_element(),
-            CommandResult::Markdown(None) => Empty.into_any_element(),
-            CommandResult::Html(Some(x)) => match self.result_html_entity.clone() {
+            CommandResult::Markdown(None) => empty_view,
+            CommandResult::Html(Some(_)) => match self.result_html_entity.clone() {
                 Some(entity) => entity.into_any_element(),
-                None => TextView::html("output", x.clone(), window, cx)
-                    .selectable(true)
-                    .scrollable(true)
-                    .into_any_element(),
+                None => empty_view,
             },
-            CommandResult::Html(None) => Empty.into_any_element(),
+            CommandResult::Html(None) => empty_view,
             CommandResult::Svg(Some(x)) => img(ImageSource::Image(Arc::new(Image::from_bytes(
                 ImageFormat::Svg,
                 x.clone().into_bytes(),
             ))))
+            .bg(bg_color)
             .size_full()
             .object_fit(gpui::ObjectFit::Fill)
             .into_any_element(),
-            CommandResult::Svg(None) => Empty.into_any_element(),
+            CommandResult::Svg(None) => empty_view,
         };
 
         div().relative().size_full().child(view).into_any_element()
@@ -756,10 +769,19 @@ impl super::Sticker for CommandSticker {
     fn default_window_size() -> gpui::Size<i32> {
         gpui::size(300, 400)
     }
+
+    fn set_color(&mut self, color: StickerColor) {
+        self.color = color;
+    }
 }
 
 impl Render for CommandSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let bg_color = Rgba {
+            a: 0.85,
+            ..self.color.bg()
+        };
+
         window.set_rem_size(px(14.0));
 
         let mut root = v_flex().relative().size_full();
@@ -777,6 +799,7 @@ impl Render for CommandSticker {
 
         if self.process.is_none() && !has_result && !self.is_schedule_active() {
             root = root
+                .bg(bg_color)
                 .child(
                     div()
                         .p_2()
@@ -799,30 +822,36 @@ impl Render for CommandSticker {
                 div().h_full().flex_shrink().overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
-                        .child(self.result_view(window, cx)),
+                        .child(self.result_view(window, cx, bg_color)),
                 ),
             );
 
             if self.process.is_some() || self.is_schedule_active() {
                 if window.is_window_hovered() && (!self.stopping || self.is_schedule_active()) {
                     root = root.child(
-                        h_flex().items_center().justify_between().gap_1().child(
-                            Button::new("stop")
-                                .icon(IconName::Stop)
-                                .when_some(self.next_scheduled_at.clone(), |view, x| {
-                                    view.tooltip(format!("Next run at {}", x))
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.stop_schedule();
-                                    this.stop(cx);
-                                })),
-                        ),
+                        h_flex()
+                            .bg(bg_color)
+                            .items_center()
+                            .justify_between()
+                            .gap_1()
+                            .child(
+                                Button::new("stop")
+                                    .icon(IconName::Stop)
+                                    .when_some(self.next_scheduled_at.clone(), |view, x| {
+                                        view.tooltip(format!("Next run at {}", x))
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.stop_schedule();
+                                        this.stop(cx);
+                                    })),
+                            ),
                     );
                 }
             } else {
                 root = root.when(window.is_window_hovered(), |view| {
                     view.child(
                         h_flex()
+                            .bg(bg_color)
                             .w_full()
                             .gap_1()
                             .child(
@@ -858,7 +887,7 @@ impl Render for CommandSticker {
         }
 
         root.when_some(self.error.as_ref(), |view, msg| {
-            view.child(Alert::error("error", msg.as_str()))
+            view.child(Alert::error("error", msg.as_str()).bg(bg_color))
         })
         .when(self.process.is_some(), |view| {
             view.child(
