@@ -198,9 +198,16 @@ impl MainWindow {
             StickerType::Paint => PaintSticker::default_window_size(),
         };
 
+        let title = match sticker_type {
+            StickerType::Markdown => "New Text Sticker",
+            StickerType::Command => "New Command Sticker",
+            StickerType::Timer => "New Timer Sticker",
+            StickerType::Paint => "New Paint Sticker",
+        };
+
         let detail = StickerDetail {
             id: 0,
-            title: "New Sticker".to_string(),
+            title: title.to_string(),
             content: "".to_string(),
             color: StickerColor::Yellow,
             sticker_type: *sticker_type,
