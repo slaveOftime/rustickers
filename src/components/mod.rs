@@ -50,6 +50,8 @@ pub enum IconName {
     ArrowUp,
     ArrowDown,
     Check,
+    Paint,
+    Eraser,
 }
 
 impl IconNamed for IconName {
@@ -73,6 +75,8 @@ impl IconNamed for IconName {
             IconName::ArrowUp => "icons/arrow-up.svg".into(),
             IconName::ArrowDown => "icons/arrow-down.svg".into(),
             IconName::Check => "icons/check.svg".into(),
+            IconName::Paint => "icons/paint.svg".into(),
+            IconName::Eraser => "icons/eraser.svg".into(),
         }
     }
 }

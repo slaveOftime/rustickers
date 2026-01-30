@@ -3,16 +3,13 @@ use gpui::{
     Pixels, Point, Render, Rgba, Window, WindowControlArea, canvas, div, point, prelude::*, px,
     rgb, rgba, size, transparent_black,
 };
-use gpui_component::{
-    button::{Button, DropdownButton},
-    h_flex,
-    menu::{ContextMenuExt, PopupMenuItem},
-    scroll::ScrollableElement,
-    v_flex, white,
-};
+use gpui_component::{Sizable, button::Button, h_flex, scroll::ScrollableElement, v_flex, white};
 use serde::{Deserialize, Serialize};
 
-use crate::{model::sticker::StickerColor, storage::ArcStickerStore, windows::StickerWindowEvent};
+use crate::{
+    components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
+    windows::StickerWindowEvent,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintPoint {
@@ -104,7 +101,21 @@ pub struct PaintSticker {
     current_width: f32,
     painting: bool,
 
+    tool: PaintTool,
+
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaintTool {
+    Pen,
+    Eraser,
+}
+
+impl Default for PaintTool {
+    fn default() -> Self {
+        Self::Pen
+    }
 }
 
 impl PaintSticker {
@@ -142,10 +153,10 @@ impl PaintSticker {
             current_color: content.current_color,
             current_width: content.current_width,
             painting: false,
+            tool: PaintTool::default(),
             error: None,
         }
     }
-
     fn build_content(&self) -> PaintContent {
         PaintContent {
             strokes: self.strokes.clone(),
@@ -183,6 +194,56 @@ impl PaintSticker {
         .detach();
 
         true
+    }
+
+    fn eraser_radius(&self) -> f32 {
+        // Reasonable default that still feels usable when stroke width is small.
+        (self.current_width * 3.0).max(8.0)
+    }
+
+    fn erase_at(&mut self, position: Point<Pixels>) {
+        let target = PaintPoint::from(position);
+        let radius = self.eraser_radius();
+        let radius_sq = radius * radius;
+
+        let mut new_strokes: Vec<PaintStroke> = Vec::with_capacity(self.strokes.len());
+
+        for stroke in self.strokes.drain(..) {
+            if stroke.points.len() < 2 {
+                continue;
+            }
+
+            let mut segment: Vec<PaintPoint> = Vec::new();
+            for point in stroke.points {
+                let dx = point.x - target.x;
+                let dy = point.y - target.y;
+                let is_erased = dx * dx + dy * dy <= radius_sq;
+
+                if is_erased {
+                    if segment.len() >= 2 {
+                        new_strokes.push(PaintStroke {
+                            points: std::mem::take(&mut segment),
+                            color: stroke.color,
+                            width: stroke.width,
+                        });
+                    } else {
+                        segment.clear();
+                    }
+                } else {
+                    segment.push(point);
+                }
+            }
+
+            if segment.len() >= 2 {
+                new_strokes.push(PaintStroke {
+                    points: segment,
+                    color: stroke.color,
+                    width: stroke.width,
+                });
+            }
+        }
+
+        self.strokes = new_strokes;
     }
 
     fn toolbar_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -231,6 +292,23 @@ impl PaintSticker {
             )
         }
 
+        let eraser = Button::new("eraser")
+            .icon(match self.tool {
+                PaintTool::Eraser => IconName::Eraser,
+                PaintTool::Pen => IconName::Paint,
+            })
+            .small()
+            .border_0()
+            .bg(transparent_black())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.tool = if this.tool == PaintTool::Eraser {
+                    PaintTool::Pen
+                } else {
+                    PaintTool::Eraser
+                };
+                cx.notify();
+            }));
+
         div()
             .w_full()
             .bg(transparent_black())
@@ -245,6 +323,8 @@ impl PaintSticker {
                     .gap_1()
                     .overflow_x_scrollbar()
                     .flex_wrap()
+                    .child(eraser)
+                    .child(div())
                     .child(stroke_width_picker)
                     .child(div())
                     .child(color_picker),
@@ -289,12 +369,20 @@ impl PaintSticker {
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, _| {
                     this.painting = true;
-                    let stroke = PaintStroke {
-                        points: vec![PaintPoint::from(ev.position)],
-                        color: this.current_color,
-                        width: this.current_width,
-                    };
-                    this.strokes.push(stroke);
+
+                    match this.tool {
+                        PaintTool::Pen => {
+                            let stroke = PaintStroke {
+                                points: vec![PaintPoint::from(ev.position)],
+                                color: this.current_color,
+                                width: this.current_width,
+                            };
+                            this.strokes.push(stroke);
+                        }
+                        PaintTool::Eraser => {
+                            this.erase_at(ev.position);
+                        }
+                    }
                 }),
             )
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
@@ -302,8 +390,15 @@ impl PaintSticker {
                     return;
                 }
 
-                if let Some(stroke) = this.strokes.last_mut() {
-                    stroke.points.push(PaintPoint::from(ev.position));
+                match this.tool {
+                    PaintTool::Pen => {
+                        if let Some(stroke) = this.strokes.last_mut() {
+                            stroke.points.push(PaintPoint::from(ev.position));
+                        }
+                    }
+                    PaintTool::Eraser => {
+                        this.erase_at(ev.position);
+                    }
                 }
 
                 cx.notify();
