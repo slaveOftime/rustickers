@@ -5,6 +5,7 @@ use gpui::{
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
@@ -96,7 +97,7 @@ pub struct PaintSticker {
     store: ArcStickerStore,
     _sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
 
-    strokes: Vec<PaintStroke>,
+    strokes: Arc<RwLock<Vec<PaintStroke>>>,
     current_color: u32,
     current_width: f32,
     painting: bool,
@@ -149,7 +150,7 @@ impl PaintSticker {
             color,
             store,
             _sticker_events_tx: sticker_events_tx,
-            strokes: content.strokes,
+            strokes: Arc::new(RwLock::new(content.strokes)),
             current_color: content.current_color,
             current_width: content.current_width,
             painting: false,
@@ -157,9 +158,24 @@ impl PaintSticker {
             error: None,
         }
     }
+
+    fn strokes_read(&self) -> RwLockReadGuard<'_, Vec<PaintStroke>> {
+        match self.strokes.read() {
+            Ok(guard) => guard,
+            Err(err) => err.into_inner(),
+        }
+    }
+
+    fn strokes_write(&self) -> RwLockWriteGuard<'_, Vec<PaintStroke>> {
+        match self.strokes.write() {
+            Ok(guard) => guard,
+            Err(err) => err.into_inner(),
+        }
+    }
+
     fn build_content(&self) -> PaintContent {
         PaintContent {
-            strokes: self.strokes.clone(),
+            strokes: self.strokes_read().clone(),
             current_color: self.current_color,
             current_width: self.current_width,
         }
@@ -206,9 +222,12 @@ impl PaintSticker {
         let radius = self.eraser_radius();
         let radius_sq = radius * radius;
 
-        let mut new_strokes: Vec<PaintStroke> = Vec::with_capacity(self.strokes.len());
+        let mut strokes = self.strokes_write();
+        let old_strokes = std::mem::take(&mut *strokes);
 
-        for stroke in self.strokes.drain(..) {
+        let mut new_strokes: Vec<PaintStroke> = Vec::with_capacity(old_strokes.len());
+
+        for stroke in old_strokes {
             if stroke.points.len() < 2 {
                 continue;
             }
@@ -243,7 +262,7 @@ impl PaintSticker {
             }
         }
 
-        self.strokes = new_strokes;
+        *strokes = new_strokes;
     }
 
     fn toolbar_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -334,6 +353,7 @@ impl PaintSticker {
             )
             .into_any_element()
     }
+
     fn canvas_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let strokes = self.strokes.clone();
 
@@ -343,7 +363,12 @@ impl PaintSticker {
                 canvas(
                     move |_, _, _| {},
                     move |_, _, window, _| {
-                        for stroke in strokes {
+                        let strokes = match strokes.read() {
+                            Ok(guard) => guard,
+                            Err(err) => err.into_inner(),
+                        };
+
+                        for stroke in strokes.iter() {
                             if stroke.points.len() < 2 {
                                 continue;
                             }
@@ -374,7 +399,7 @@ impl PaintSticker {
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, ev: &MouseDownEvent, _, _| {
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                     this.painting = true;
 
                     match this.tool {
@@ -384,10 +409,12 @@ impl PaintSticker {
                                 color: this.current_color,
                                 width: this.current_width,
                             };
-                            this.strokes.push(stroke);
+                            this.strokes_write().push(stroke);
+                            cx.notify();
                         }
                         PaintTool::Eraser => {
                             this.erase_at(ev.position);
+                            cx.notify();
                         }
                     }
                 }),
@@ -399,7 +426,9 @@ impl PaintSticker {
 
                 match this.tool {
                     PaintTool::Pen => {
-                        if let Some(stroke) = this.strokes.last_mut() {
+                        let mut strokes = this.strokes_write();
+
+                        if let Some(stroke) = strokes.last_mut() {
                             let p = PaintPoint::from(ev.position);
 
                             if let Some(last) = stroke.points.last() {
