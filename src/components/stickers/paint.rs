@@ -5,12 +5,30 @@ use gpui::{
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::{
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::Duration,
+};
 
 use crate::{
     components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
     windows::StickerWindowEvent,
 };
+
+const PAINT_COLORS: [u32; 8] = [
+    0x000000ff, // black
+    0xffffffff, // white
+    0xeb5757ff, // red
+    0xf2994aff, // orange
+    0xf2c94cff, // yellow
+    0x27ae60ff, // green
+    0x2d9cdbff, // blue
+    0x9b51e0ff, // purple
+];
+
+const PAINT_STROKE_WIDTHS: [f32; 5] = [1.0, 2.0, 3.0, 4.0, 6.0];
+
+const PAINT_SAVE_DEBOUNCE: Duration = Duration::from_millis(3000);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintPoint {
@@ -32,19 +50,6 @@ impl PaintPoint {
         point(px(self.x), px(self.y))
     }
 }
-
-const PAINT_COLORS: [u32; 8] = [
-    0x000000ff, // black
-    0xffffffff, // white
-    0xeb5757ff, // red
-    0xf2994aff, // orange
-    0xf2c94cff, // yellow
-    0x27ae60ff, // green
-    0x2d9cdbff, // blue
-    0x9b51e0ff, // purple
-];
-
-const PAINT_STROKE_WIDTHS: [f32; 5] = [1.0, 2.0, 3.0, 4.0, 6.0];
 
 fn default_stroke_width() -> f32 {
     2.0
@@ -104,6 +109,8 @@ pub struct PaintSticker {
 
     tool: PaintTool,
 
+    save_debounce_generation: u64,
+
     error: Option<String>,
 }
 
@@ -155,8 +162,37 @@ impl PaintSticker {
             current_width: content.current_width,
             painting: false,
             tool: PaintTool::default(),
+            save_debounce_generation: 0,
             error: None,
         }
+    }
+
+    fn cancel_debounced_save(&mut self) {
+        self.save_debounce_generation = self.save_debounce_generation.wrapping_add(1);
+    }
+
+    fn save_state_debounced(&mut self, cx: &mut Context<Self>) {
+        self.save_debounce_generation = self.save_debounce_generation.wrapping_add(1);
+        let generation = self.save_debounce_generation;
+
+        cx.spawn(async move |entity, cx| {
+            cx.background_executor().timer(PAINT_SAVE_DEBOUNCE).await;
+
+            let _ = entity.update(cx, |this, cx| {
+                if this.save_debounce_generation != generation {
+                    return;
+                }
+
+                // If we're still actively drawing, wait for a proper mouse-up.
+                if this.painting {
+                    return;
+                }
+
+                let _ = this.save_state(cx);
+                tracing::debug!("Paint sticker {} debounced save complete", this.id);
+            });
+        })
+        .detach();
     }
 
     fn strokes_read(&self) -> RwLockReadGuard<'_, Vec<PaintStroke>> {
@@ -400,6 +436,8 @@ impl PaintSticker {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    // Starting a new stroke should cancel any pending debounced save.
+                    this.cancel_debounced_save();
                     this.painting = true;
 
                     match this.tool {
@@ -455,7 +493,7 @@ impl PaintSticker {
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
                     this.painting = false;
                     cx.notify();
-                    this.save_state(cx);
+                    this.save_state_debounced(cx);
                 }),
             )
             .into_any_element()
