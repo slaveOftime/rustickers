@@ -1,9 +1,15 @@
 use gpui::{
     AnyElement, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
     Pixels, Point, Render, Rgba, Window, WindowControlArea, canvas, div, point, prelude::*, px,
-    rgb, rgba, size,
+    rgb, rgba, size, transparent_black,
 };
-use gpui_component::{h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    button::{Button, DropdownButton},
+    h_flex,
+    menu::{ContextMenuExt, PopupMenuItem},
+    scroll::ScrollableElement,
+    v_flex, white,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{model::sticker::StickerColor, storage::ArcStickerStore, windows::StickerWindowEvent};
@@ -40,10 +46,19 @@ const PAINT_COLORS: [u32; 8] = [
     0x9b51e0ff, // purple
 ];
 
+const PAINT_STROKE_WIDTHS: [f32; 5] = [1.0, 2.0, 3.0, 4.0, 6.0];
+
+fn default_stroke_width() -> f32 {
+    2.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintStroke {
     points: Vec<PaintPoint>,
     color: u32,
+
+    #[serde(default = "default_stroke_width")]
+    width: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +71,9 @@ struct PaintContentV1 {
 struct PaintContent {
     strokes: Vec<PaintStroke>,
     current_color: u32,
+
+    #[serde(default = "default_stroke_width")]
+    current_width: f32,
 }
 
 impl Default for PaintContent {
@@ -63,6 +81,7 @@ impl Default for PaintContent {
         Self {
             strokes: Vec::new(),
             current_color: PAINT_COLORS[0],
+            current_width: default_stroke_width(),
         }
     }
 }
@@ -82,6 +101,7 @@ pub struct PaintSticker {
 
     strokes: Vec<PaintStroke>,
     current_color: u32,
+    current_width: f32,
     painting: bool,
 
     error: Option<String>,
@@ -105,9 +125,11 @@ impl PaintSticker {
                         .map(|points| PaintStroke {
                             points,
                             color: PAINT_COLORS[0],
+                            width: default_stroke_width(),
                         })
                         .collect(),
                     current_color: PAINT_COLORS[0],
+                    current_width: default_stroke_width(),
                 },
             })
             .unwrap_or_default();
@@ -118,6 +140,7 @@ impl PaintSticker {
             _sticker_events_tx: sticker_events_tx,
             strokes: content.strokes,
             current_color: content.current_color,
+            current_width: content.current_width,
             painting: false,
             error: None,
         }
@@ -127,6 +150,7 @@ impl PaintSticker {
         PaintContent {
             strokes: self.strokes.clone(),
             current_color: self.current_color,
+            current_width: self.current_width,
         }
     }
 
@@ -163,13 +187,9 @@ impl PaintSticker {
 
     fn toolbar_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let current_color = self.current_color;
+        let current_width = self.current_width;
 
-        let mut color_picker = h_flex()
-            .gap_1()
-            .py_1()
-            .items_center()
-            .flex_shrink()
-            .overflow_x_scrollbar();
+        let mut color_picker = h_flex().gap_1().py_1().items_center();
         for &c in PAINT_COLORS.iter() {
             let is_selected = c == current_color;
             color_picker = color_picker.child(
@@ -194,15 +214,41 @@ impl PaintSticker {
             );
         }
 
-        h_flex()
-            .window_control_area(WindowControlArea::Drag)
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .p_1()
+        let mut stroke_width_picker = h_flex().gap_1().py_1().items_center();
+        for &w in PAINT_STROKE_WIDTHS.iter() {
+            let is_selected = (w - current_width).abs() < f32::EPSILON;
+            stroke_width_picker = stroke_width_picker.child(
+                div()
+                    .occlude()
+                    .child(make_dot(w, current_color, is_selected))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.current_width = w;
+                            cx.notify();
+                        }),
+                    ),
+            )
+        }
+
+        div()
             .w_full()
+            .bg(transparent_black())
             .overflow_hidden()
-            .child(color_picker)
+            .window_control_area(WindowControlArea::Drag)
+            .pl_1()
+            .pr_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .pb_2()
+                    .gap_1()
+                    .overflow_x_scrollbar()
+                    .flex_wrap()
+                    .child(stroke_width_picker)
+                    .child(div())
+                    .child(color_picker),
+            )
             .into_any_element()
     }
 
@@ -220,7 +266,7 @@ impl PaintSticker {
                                 continue;
                             }
 
-                            let mut builder = PathBuilder::stroke(px(2.));
+                            let mut builder = PathBuilder::stroke(px(stroke.width));
 
                             for (i, p) in stroke.points.iter().enumerate() {
                                 let p = p.to_gpui();
@@ -246,6 +292,7 @@ impl PaintSticker {
                     let stroke = PaintStroke {
                         points: vec![PaintPoint::from(ev.position)],
                         color: this.current_color,
+                        width: this.current_width,
                     };
                     this.strokes.push(stroke);
                 }),
@@ -305,4 +352,23 @@ impl Render for PaintSticker {
             })
             .child(self.canvas_view(cx))
     }
+}
+
+fn make_dot(w: f32, color: u32, is_selected: bool) -> AnyElement {
+    div()
+        .w(px(14.0))
+        .h(px(14.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .when(is_selected, |v| v.border_1().border_color(white()))
+        .child(
+            div()
+                .w(px((w + 3.0).max(4.0)))
+                .h(px((w + 3.0).max(4.0)))
+                .bg(rgba(color))
+                .rounded_full(),
+        )
+        .into_any_element()
 }
