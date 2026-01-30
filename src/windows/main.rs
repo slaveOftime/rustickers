@@ -596,7 +596,7 @@ fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
         StickerType::Markdown => IconName::DocumentText,
         StickerType::Command => IconName::Command,
         StickerType::Timer => IconName::Bell,
-        StickerType::Paint => IconName::Adjustments,
+        StickerType::Paint => IconName::Paint,
     }
 }
 

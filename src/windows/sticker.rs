@@ -254,9 +254,11 @@ impl StickerWindow {
                     sticker_events_tx.clone(),
                 )
             }))),
-            StickerType::Paint => Box::new(StickerViewEntity::new(cx.new(|_| {
-                PaintSticker::new(id, color, store, content, sticker_events_tx.clone())
-            }))),
+            StickerType::Paint => {
+                Box::new(StickerViewEntity::new(cx.new(|_| {
+                    PaintSticker::new(id, color, store, content, sticker_events_tx.clone())
+                })))
+            }
         }
     }
 
@@ -421,10 +423,11 @@ impl StickerWindow {
                     .bg(theme.swatch())
                     .rounded_full()
                     .cursor_pointer()
-                    .occlude() // Prevent clicks falling through to resize/drag
-                    .on_mouse_up(
+                    .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            window.prevent_default();
                             this.change_color(theme, cx);
                         }),
                     )

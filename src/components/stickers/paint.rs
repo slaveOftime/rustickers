@@ -1,9 +1,9 @@
 use gpui::{
     AnyElement, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    Pixels, Point, Render, Rgba, Window, WindowControlArea, canvas, div, point, prelude::*, px,
-    rgb, rgba, size, transparent_black,
+    Pixels, Point, Render, Rgba, Window, canvas, div, point, prelude::*, px, rgb, rgba, size,
+    transparent_black,
 };
-use gpui_component::{Sizable, button::Button, h_flex, scroll::ScrollableElement, v_flex, white};
+use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -250,6 +250,24 @@ impl PaintSticker {
         let current_color = self.current_color;
         let current_width = self.current_width;
 
+        let eraser = Button::new("eraser")
+            .icon(match self.tool {
+                PaintTool::Eraser => IconName::Eraser,
+                PaintTool::Pen => IconName::Paint,
+            })
+            .small()
+            .border_0()
+            .bg(transparent_black())
+            .text_color(rgba(current_color))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.tool = if this.tool == PaintTool::Eraser {
+                    PaintTool::Pen
+                } else {
+                    PaintTool::Eraser
+                };
+                cx.notify();
+            }));
+
         let mut color_picker = h_flex().gap_1().py_1().items_center();
         for &c in PAINT_COLORS.iter() {
             let is_selected = c == current_color;
@@ -260,73 +278,58 @@ impl PaintSticker {
                     .bg(rgba(c))
                     .rounded_full()
                     .cursor_pointer()
-                    .occlude()
                     .when(is_selected, |v| v.border_1().border_color(rgb(0xffffff)))
                     .when(!is_selected, |v| {
                         v.border_1().border_color(rgba(0x00000000))
                     })
-                    .on_mouse_up(
+                    .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             this.current_color = c;
+                            cx.stop_propagation();
                             cx.notify();
+                            window.prevent_default();
                         }),
                     ),
             );
         }
 
-        let mut stroke_width_picker = h_flex().gap_1().py_1().items_center();
+        let mut stroke_picker = h_flex().gap_1().py_1().items_center();
         for &w in PAINT_STROKE_WIDTHS.iter() {
             let is_selected = (w - current_width).abs() < f32::EPSILON;
-            stroke_width_picker = stroke_width_picker.child(
+            stroke_picker = stroke_picker.child(
                 div()
-                    .occlude()
+                    .cursor_pointer()
                     .child(make_dot(w, current_color, is_selected))
-                    .on_mouse_up(
+                    .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             this.current_width = w;
+                            cx.stop_propagation();
                             cx.notify();
+                            window.prevent_default();
                         }),
                     ),
             )
         }
 
-        let eraser = Button::new("eraser")
-            .icon(match self.tool {
-                PaintTool::Eraser => IconName::Eraser,
-                PaintTool::Pen => IconName::Paint,
-            })
-            .small()
-            .border_0()
-            .bg(transparent_black())
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.tool = if this.tool == PaintTool::Eraser {
-                    PaintTool::Pen
-                } else {
-                    PaintTool::Eraser
-                };
-                cx.notify();
-            }));
-
         div()
             .w_full()
-            .bg(transparent_black())
-            .overflow_hidden()
-            .window_control_area(WindowControlArea::Drag)
             .pl_1()
             .pr_3()
+            .absolute()
+            .left_0()
+            .top_0()
+            .right_0()
             .child(
                 h_flex()
                     .items_center()
-                    .pb_2()
                     .gap_1()
-                    .overflow_x_scrollbar()
                     .flex_wrap()
                     .child(eraser)
-                    .child(div())
-                    .child(stroke_width_picker)
-                    .child(div())
+                    .child(div().child("|").opacity(0.2))
+                    .child(stroke_picker)
+                    .child(div().child("|").opacity(0.2))
                     .child(color_picker),
             )
             .into_any_element()
@@ -442,10 +445,11 @@ impl Render for PaintSticker {
                 a: 0.85,
                 ..self.color.bg()
             })
+            .relative()
+            .child(self.canvas_view(cx))
             .when(window.is_window_hovered(), |v| {
                 v.child(self.toolbar_view(cx))
             })
-            .child(self.canvas_view(cx))
     }
 }
 
