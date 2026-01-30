@@ -6156,6 +6156,7 @@ dependencies = [
  "gpui-wry",
  "interprocess",
  "lb-wry",
+ "lyon",
  "mimalloc",
  "notify-rust",
  "rdev",

@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    Pixels, Point, Render, Rgba, Window, canvas, div, point, prelude::*, px, rgb, rgba, size,
-    transparent_black,
+    PathStyle, Pixels, Point, Render, Rgba, StrokeOptions, Window, canvas, div, point, prelude::*,
+    px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{Deserialize, Serialize};
@@ -334,7 +334,6 @@ impl PaintSticker {
             )
             .into_any_element()
     }
-
     fn canvas_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let strokes = self.strokes.clone();
 
@@ -344,25 +343,30 @@ impl PaintSticker {
                 canvas(
                     move |_, _, _| {},
                     move |_, _, window, _| {
-                        for stroke in strokes.clone() {
+                        for stroke in strokes {
                             if stroke.points.len() < 2 {
                                 continue;
                             }
 
-                            let mut builder = PathBuilder::stroke(px(stroke.width));
-
-                            for (i, p) in stroke.points.iter().enumerate() {
-                                let p = p.to_gpui();
-                                if i == 0 {
-                                    builder.move_to(p);
-                                } else {
-                                    builder.line_to(p);
-                                }
+                            let points = dedupe_close_points(
+                                &stroke.points,
+                                min_point_distance_for_width(stroke.width),
+                            );
+                            if points.len() < 2 {
+                                continue;
                             }
 
-                            if let Ok(path) = builder.build() {
-                                window.paint_path(path, rgba(stroke.color));
-                            }
+                            // Use round caps/joins and a tighter tolerance to reduce jagged edges.
+                            // Also paint a subtle wider pass first to visually anti-alias pixel edges.
+                            let base_color = rgba(stroke.color);
+                            let feather_color = Rgba {
+                                a: (base_color.a * 0.25).min(1.0),
+                                ..base_color
+                            };
+
+                            // Feather pass (slightly wider) + main pass.
+                            paint_spline(window, &points, stroke.width + 1.25, feather_color);
+                            paint_spline(window, &points, stroke.width, base_color);
                         }
                     },
                 )
@@ -396,7 +400,18 @@ impl PaintSticker {
                 match this.tool {
                     PaintTool::Pen => {
                         if let Some(stroke) = this.strokes.last_mut() {
-                            stroke.points.push(PaintPoint::from(ev.position));
+                            let p = PaintPoint::from(ev.position);
+
+                            if let Some(last) = stroke.points.last() {
+                                let min_distance = min_point_distance_for_width(stroke.width);
+                                let dx = p.x - last.x;
+                                let dy = p.y - last.y;
+                                if dx * dx + dy * dy < (min_distance * min_distance) {
+                                    return;
+                                }
+                            }
+
+                            stroke.points.push(p);
                         }
                     }
                     PaintTool::Eraser => {
@@ -470,4 +485,66 @@ fn make_dot(w: f32, color: u32, is_selected: bool) -> AnyElement {
                 .rounded_full(),
         )
         .into_any_element()
+}
+
+fn midpoint(a: Point<Pixels>, b: Point<Pixels>) -> Point<Pixels> {
+    let ax = a.x.to_f64() as f32;
+    let ay = a.y.to_f64() as f32;
+    let bx = b.x.to_f64() as f32;
+    let by = b.y.to_f64() as f32;
+    point(px((ax + bx) * 0.5), px((ay + by) * 0.5))
+}
+
+fn min_point_distance_for_width(width: f32) -> f32 {
+    // Skip ultra-close points to reduce jitter and make curves smoother.
+    // Tuned to keep thin strokes responsive while stabilizing wider ones.
+    (width * 0.25).max(0.75)
+}
+
+fn dedupe_close_points(points: &[PaintPoint], min_distance: f32) -> Vec<Point<Pixels>> {
+    let min_distance_sq = min_distance * min_distance;
+    let mut out: Vec<Point<Pixels>> = Vec::with_capacity(points.len());
+
+    for p in points {
+        let p = p.to_gpui();
+        if let Some(last) = out.last().copied() {
+            let dx = (p.x.to_f64() - last.x.to_f64()) as f32;
+            let dy = (p.y.to_f64() - last.y.to_f64()) as f32;
+            if dx * dx + dy * dy < min_distance_sq {
+                continue;
+            }
+        }
+        out.push(p);
+    }
+
+    out
+}
+
+fn paint_spline(window: &mut Window, points: &[Point<Pixels>], width: f32, color: Rgba) {
+    let options = StrokeOptions::default()
+        .with_line_width(width)
+        .with_line_cap(lyon::path::LineCap::Round)
+        .with_line_join(lyon::path::LineJoin::Round)
+        .with_tolerance(0.02);
+
+    let mut builder = PathBuilder::stroke(px(width)).with_style(PathStyle::Stroke(options));
+    builder.move_to(points[0]);
+
+    // Quadratic spline through midpoints.
+    if points.len() == 2 {
+        builder.line_to(points[1]);
+    } else {
+        for i in 1..points.len() - 1 {
+            let ctrl = points[i];
+            let to = midpoint(points[i], points[i + 1]);
+            builder.curve_to(to, ctrl);
+        }
+        if let Some(last) = points.last().copied() {
+            builder.line_to(last);
+        }
+    }
+
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
 }
