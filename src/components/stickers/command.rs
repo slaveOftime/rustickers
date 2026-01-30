@@ -10,6 +10,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
+    slider::{Slider, SliderState},
     switch::Switch,
     text::TextView,
     v_flex, yellow_500,
@@ -44,6 +45,7 @@ struct CommandContent {
     run_immediately: bool,
     result: CommandResult,
     stream_result: bool,
+    padding: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ impl Default for CommandContent {
             run_immediately: true,
             stream_result: false,
             result: CommandResult::Text(None),
+            padding: None,
         }
     }
 }
@@ -86,6 +89,7 @@ pub struct CommandSticker {
     scheduler_cron_input: Entity<InputState>,
     run_immediately: bool,
     stream_result: bool,
+    padding: Entity<SliderState>,
 
     result: CommandResult,
     result_html_entity: Option<Entity<SimpleWebView>>,
@@ -154,6 +158,14 @@ impl CommandSticker {
             _ => None,
         };
 
+        let padding = cx.new(|_cx| {
+            SliderState::new()
+                .default_value(cmd.padding.unwrap_or(0) as f32)
+                .min(0.0)
+                .max(64.0)
+                .step(1.0)
+        });
+
         cx.subscribe(&cron_entity, |this, v, evt, cx| match evt {
             InputEvent::Change => {
                 this.scheduler = Some(Scheduler::Cron(v.read(cx).value().trim().to_string()));
@@ -177,6 +189,7 @@ impl CommandSticker {
             result: cmd.result,
             result_html_entity,
             stream_result: cmd.stream_result,
+            padding,
 
             process: None,
             stopping: false,
@@ -196,6 +209,7 @@ impl CommandSticker {
             run_immediately: self.run_immediately,
             result: self.result.clone(),
             stream_result: self.stream_result,
+            padding: Some(self.padding.read(cx).value().start() as u8),
         }
     }
 
@@ -758,14 +772,19 @@ impl CommandSticker {
                     .label("Environments")
                     .child(Input::new(&self.environments)),
             )
+            .child(
+                field()
+                    .label(format!("Padding {}", self.padding.read(cx).value().start()))
+                    .child(Slider::new(&self.padding)),
+            )
             .into_any_element()
     }
 
-    fn result_view(&mut self, bg_color: Rgba) -> AnyElement {
+    fn result_view(&mut self, bg_color: Rgba, cx: &Context<Self>) -> AnyElement {
         let empty_view = div().size_full().bg(bg_color).into_any_element();
         let view = match &self.result {
             CommandResult::Text(Some(x)) => div()
-                .p_1()
+                .p(px(self.padding.read(cx).value().start()))
                 .text_sm()
                 .size_full()
                 .overflow_scrollbar()
@@ -775,14 +794,18 @@ impl CommandSticker {
             CommandResult::Text(None) => empty_view,
             CommandResult::Markdown(Some(x)) => TextView::markdown("output", x.clone())
                 .bg(bg_color)
-                .p_1()
+                .p(px(self.padding.read(cx).value().start()))
                 .size_full()
                 .selectable(true)
                 .scrollable(true)
                 .into_any_element(),
             CommandResult::Markdown(None) => empty_view,
             CommandResult::Html(Some(_)) => match self.result_html_entity.clone() {
-                Some(entity) => entity.into_any_element(),
+                Some(entity) => div()
+                    .size_full()
+                    .child(entity)
+                    .p(px(self.padding.read(cx).value().start()))
+                    .into_any_element(),
                 None => empty_view,
             },
             CommandResult::Html(None) => empty_view,
@@ -791,6 +814,7 @@ impl CommandSticker {
                 x.clone().into_bytes(),
             ))))
             .bg(bg_color)
+            .p(px(self.padding.read(cx).value().start()))
             .size_full()
             .object_fit(gpui::ObjectFit::Fill)
             .into_any_element(),
@@ -868,7 +892,7 @@ impl Render for CommandSticker {
                 div().h_full().flex_shrink().overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
-                        .child(self.result_view(bg_color)),
+                        .child(self.result_view(bg_color, cx)),
                 ),
             );
 
