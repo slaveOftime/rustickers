@@ -275,7 +275,7 @@ impl TimerSticker {
         }
     }
 
-    fn spawn_for_beep(&self, cx: &Context<Self>) {
+    fn spawn_for_beep(&self, cx: &mut Context<Self>) {
         cx.spawn(async |this, cx| {
             let start = crate::utils::time::now_unix_millis();
             loop {
@@ -290,6 +290,10 @@ impl TimerSticker {
                     break;
                 }
             }
+            let _ = this.update(cx, |this, cx| {
+                this.is_just_finished = false;
+                cx.notify();
+            });
         })
         .detach();
     }
