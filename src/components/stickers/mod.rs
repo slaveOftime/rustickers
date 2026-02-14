@@ -15,12 +15,17 @@ pub trait Sticker: Sized {
     fn default_window_size() -> Size<i32>;
 
     fn set_color(&mut self, color: StickerColor);
+
+    fn disable_color_picker(&self) -> bool {
+        false
+    }
 }
 
 pub trait StickerView {
     fn element(&self) -> AnyElement;
     fn save_on_close(&self, cx: &mut App) -> bool;
     fn set_color(&mut self, cx: &mut App, color: StickerColor);
+    fn disable_color_picker(&self, cx: &App) -> bool;
 }
 
 pub struct StickerViewEntity<T: Render + Sticker + 'static> {
@@ -50,5 +55,9 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
         let _ = self.entity.update(cx, |this, _cx| {
             this.set_color(color);
         });
+    }
+
+    fn disable_color_picker(&self, cx: &App) -> bool {
+        self.entity.read(cx).disable_color_picker()
     }
 }

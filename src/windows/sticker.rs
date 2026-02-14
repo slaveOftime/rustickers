@@ -442,7 +442,9 @@ impl StickerWindow {
             .p_2()
             .gap_2()
             .window_control_area(WindowControlArea::Drag)
-            .child(color_options)
+            .when(!self.view.disable_color_picker(cx), move |v| {
+                v.child(color_options)
+            })
             .into_any_element()
     }
 }

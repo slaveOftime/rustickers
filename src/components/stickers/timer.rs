@@ -510,6 +510,10 @@ impl Sticker for TimerSticker {
     fn set_color(&mut self, color: StickerColor) {
         self.color = color;
     }
+
+    fn disable_color_picker(&self) -> bool {
+        self.timer.start_info.is_some()
+    }
 }
 
 impl Render for TimerSticker {

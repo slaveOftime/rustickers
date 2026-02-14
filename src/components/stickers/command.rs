@@ -627,6 +627,21 @@ impl CommandSticker {
         self.next_scheduled_at = None;
     }
 
+    fn show_editing_view(&self) -> bool {
+        let has_result = match &self.result {
+            CommandResult::Text(Some(_))
+            | CommandResult::Markdown(Some(_))
+            | CommandResult::Html(Some(_))
+            | CommandResult::Svg(Some(_)) => true,
+            CommandResult::Text(None)
+            | CommandResult::Markdown(None)
+            | CommandResult::Html(None)
+            | CommandResult::Svg(None) => false,
+        };
+
+        return self.process.is_none() && !has_result && !self.is_schedule_active();
+    }
+
     fn form(&mut self, cx: &mut Context<Self>) -> AnyElement {
         v_form()
             .child(field().label("Command").child(Input::new(&self.command)))
@@ -841,6 +856,10 @@ impl super::Sticker for CommandSticker {
     fn set_color(&mut self, color: StickerColor) {
         self.color = color;
     }
+
+    fn disable_color_picker(&self) -> bool {
+        !self.show_editing_view()
+    }
 }
 
 impl Render for CommandSticker {
@@ -854,18 +873,7 @@ impl Render for CommandSticker {
 
         let mut root = v_flex().relative().size_full();
 
-        let has_result = match &self.result {
-            CommandResult::Text(Some(_))
-            | CommandResult::Markdown(Some(_))
-            | CommandResult::Html(Some(_))
-            | CommandResult::Svg(Some(_)) => true,
-            CommandResult::Text(None)
-            | CommandResult::Markdown(None)
-            | CommandResult::Html(None)
-            | CommandResult::Svg(None) => false,
-        };
-
-        if self.process.is_none() && !has_result && !self.is_schedule_active() {
+        if self.show_editing_view() {
             root = root
                 .bg(bg_color)
                 .child(
