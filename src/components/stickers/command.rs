@@ -540,9 +540,15 @@ impl CommandSticker {
                                         match this.result {
                                             CommandResult::Text(ref mut result)
                                             | CommandResult::Markdown(ref mut result) => {
-                                                let result = result.get_or_insert_with(String::new);
-                                                result.push_str(&line);
-                                                result.push('\n');
+                                                if this.stream_result {
+                                                    let result =
+                                                        result.get_or_insert_with(String::new);
+                                                    result.push_str(&line);
+                                                    result.push('\n');
+                                                } else {
+                                                    *result_temp.write().unwrap() += &line;
+                                                    *result_temp.write().unwrap() += "\n";
+                                                }
                                             }
                                             CommandResult::Html(_) | CommandResult::Svg(_) => {
                                                 *result_temp.write().unwrap() += &line;
@@ -556,11 +562,18 @@ impl CommandSticker {
                             CmdEvent::Done => {
                                 let _ = window.update_entity(
                                     &entity,
-                                    move |this: &mut CommandSticker, _| match this.result {
-                                        CommandResult::Text(_) | CommandResult::Markdown(_) => {}
+                                    move |this: &mut CommandSticker, cx| match this.result {
+                                        CommandResult::Text(ref mut result)
+                                        | CommandResult::Markdown(ref mut result) => {
+                                            if !this.stream_result {
+                                                *result = Some(result_temp.read().unwrap().clone());
+                                                cx.notify();
+                                            }
+                                        }
                                         CommandResult::Html(ref mut result)
                                         | CommandResult::Svg(ref mut result) => {
                                             *result = Some(result_temp.read().unwrap().clone());
+                                            cx.notify();
                                         }
                                     },
                                 );
