@@ -46,6 +46,7 @@ struct CommandContent {
     result: CommandResult,
     stream_result: bool,
     padding: Option<u8>,
+    started_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +73,7 @@ impl Default for CommandContent {
             stream_result: false,
             result: CommandResult::Text(None),
             padding: None,
+            started_at: None,
         }
     }
 }
@@ -90,6 +92,7 @@ pub struct CommandSticker {
     run_immediately: bool,
     stream_result: bool,
     padding: Entity<SliderState>,
+    started_at: Option<i64>,
 
     result: CommandResult,
     result_html_entity: Option<Entity<SimpleWebView>>,
@@ -174,6 +177,20 @@ impl CommandSticker {
         })
         .detach();
 
+        let root_entity = cx.entity();
+        window
+            .spawn(cx, async move |cx| {
+                let _ = cx.update_window_entity(&root_entity, |this, window, cx| {
+                    if this.started_at.is_some()
+                        && this.process.is_none()
+                        && !this.is_schedule_active()
+                    {
+                        this.start(window, cx);
+                    }
+                });
+            })
+            .detach();
+
         Self {
             id,
             color,
@@ -190,6 +207,7 @@ impl CommandSticker {
             result_html_entity,
             stream_result: cmd.stream_result,
             padding,
+            started_at: cmd.started_at,
 
             process: None,
             stopping: false,
@@ -210,6 +228,7 @@ impl CommandSticker {
             result: self.result.clone(),
             stream_result: self.stream_result,
             padding: Some(self.padding.read(cx).value().start() as u8),
+            started_at: self.started_at,
         }
     }
 
@@ -265,6 +284,8 @@ impl CommandSticker {
     }
 
     fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.started_at = Some(crate::utils::time::now_unix_millis());
+
         let _ = self.save_config(cx);
 
         if self.is_schedule_active() {
@@ -618,6 +639,7 @@ impl CommandSticker {
         };
 
         self.stopping = true;
+        self.started_at = None;
         self.save_config(cx);
         cx.notify();
 
