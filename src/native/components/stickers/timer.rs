@@ -15,10 +15,9 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
-    windows::StickerWindowEvent,
-};
+use crate::native::{components::IconName, windows::StickerWindowEvent};
+use crate::model::sticker::StickerColor;
+use crate::storage::ArcStickerStore;
 
 use super::Sticker;
 

@@ -10,10 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    components::IconName, model::sticker::StickerColor, storage::ArcStickerStore,
-    windows::StickerWindowEvent,
-};
+use crate::native::{components::IconName, windows::StickerWindowEvent};
+use crate::model::sticker::StickerColor;
+use crate::storage::ArcStickerStore;
 
 const PAINT_COLORS: [u32; 8] = [
     0x000000ff, // black

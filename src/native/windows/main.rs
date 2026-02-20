@@ -16,16 +16,16 @@ use gpui_component::*;
 use std::sync::mpsc::{self};
 use std::time::Duration;
 
-use crate::components::IconName;
-use crate::components::stickers::Sticker;
-use crate::components::stickers::command::CommandSticker;
-use crate::components::stickers::markdown::MarkdownSticker;
-use crate::components::stickers::paint::PaintSticker;
-use crate::components::stickers::timer::TimerSticker;
 use crate::model::sticker::*;
+use crate::native::components::IconName;
+use crate::native::components::stickers::Sticker;
+use crate::native::components::stickers::command::CommandSticker;
+use crate::native::components::stickers::markdown::MarkdownSticker;
+use crate::native::components::stickers::paint::PaintSticker;
+use crate::native::components::stickers::timer::TimerSticker;
+use crate::native::windows::StickerWindowEvent;
+use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
-use crate::windows::StickerWindowEvent;
-use crate::windows::sticker::StickerWindow;
 
 const STICKER_LOAD_LIMIT: i64 = 10000;
 const STICKER_EVENT_PUMP_INTERVAL: Duration = Duration::from_millis(120);

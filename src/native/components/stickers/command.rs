@@ -29,10 +29,12 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::{
-    components::IconName, components::webview::SimpleWebView, model::sticker::StickerColor,
-    storage::ArcStickerStore, windows::StickerWindowEvent,
+use crate::native::{
+    components::IconName, components::webview::SimpleWebView, windows::StickerWindowEvent,
 };
+
+use crate::model::sticker::StickerColor;
+use crate::storage::ArcStickerStore;
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
 

@@ -17,18 +17,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    components::{
-        IconName,
-        stickers::{
-            command::CommandSticker, markdown::MarkdownSticker, paint::PaintSticker,
-            timer::TimerSticker, *,
-        },
+use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
+use crate::native::components::{
+    IconName,
+    stickers::{
+        command::CommandSticker, markdown::MarkdownSticker, paint::PaintSticker,
+        timer::TimerSticker, *,
     },
-    model::sticker::{StickerColor, StickerDetail, StickerState, StickerType},
-    storage::ArcStickerStore,
-    windows::StickerWindowEvent,
 };
+use crate::native::windows::StickerWindowEvent;
+use crate::storage::ArcStickerStore;
 
 const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 

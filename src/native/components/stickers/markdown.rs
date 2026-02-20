@@ -11,8 +11,8 @@ use gpui_component::{
 };
 
 use crate::model::sticker::StickerColor;
+use crate::native::windows::StickerWindowEvent;
 use crate::storage::ArcStickerStore;
-use crate::windows::StickerWindowEvent;
 
 pub struct MarkdownSticker {
     id: i64,
