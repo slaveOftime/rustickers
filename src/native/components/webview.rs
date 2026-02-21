@@ -11,7 +11,13 @@ impl SimpleWebView {
         let webview = cx.new(|cx| {
             let mut builder = wry::WebViewBuilder::new()
                 .with_user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .with_transparent(true);
+                .with_transparent(true).with_new_window_req_handler(|url, _| {
+                    tracing::info!(%url, "Opening URL in external browser");
+                    if let Err(e) = webbrowser::open(&url) {
+                        tracing::error!(%e, "Failed to open URL in browser");
+                    }
+                    wry::NewWindowResponse::Deny
+                });
 
             builder = if crate::utils::url::is_url(source) {
                 tracing::debug!(url = %source, "Loading URL in webview");

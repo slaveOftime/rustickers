@@ -8,7 +8,7 @@ gpui = { git = "https://github.com/zed-industries/zed" }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4" }
 gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4"}
 wry = { version = "0.53.3", package = "lb-wry" }
-anyhow = "1.0.95"
+anyhow = "1.0.102"
 async-trait = "0.1.85"
 directories = "6.0.0"
 tracing = "0.1.41"
@@ -30,9 +30,10 @@ winsplit = "0.1.0"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 notify-rust = "4.11.7"
 async-compat = "0.2.5"
-futures = "0.3.31"
-reqwest = "0.13.1"
+futures = "0.3.32"
+reqwest = "0.13.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
+webbrowser = "1.1.0"
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.
