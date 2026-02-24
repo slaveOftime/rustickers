@@ -187,7 +187,7 @@ impl CommandSticker {
                         && this.process.is_none()
                         && !this.is_schedule_active()
                     {
-                        this.start(window, cx);
+                        this.start(window, cx, true);
                     }
                 });
             })
@@ -285,7 +285,7 @@ impl CommandSticker {
         self.schedule_cancel.is_some()
     }
 
-    fn start(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn start(&mut self, window: &Window, cx: &mut Context<Self>, is_restore: bool) {
         self.started_at = Some(crate::utils::time::now_unix_millis());
 
         let _ = self.save_config(cx);
@@ -315,7 +315,7 @@ impl CommandSticker {
                     }
                 };
 
-                if self.run_immediately {
+                if self.run_immediately && !is_restore {
                     self.run(window, cx);
                 }
 
@@ -928,7 +928,7 @@ impl Render for CommandSticker {
                             .bg(transparent_white())
                             .border_0()
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.start(window, cx);
+                                this.start(window, cx, false);
                             })),
                     ),
                 );
@@ -992,7 +992,7 @@ impl Render for CommandSticker {
                                 .bg(transparent_white())
                                 .border_0()
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.start(window, cx);
+                                    this.start(window, cx, false);
                                 })),
                         ),
                 );
