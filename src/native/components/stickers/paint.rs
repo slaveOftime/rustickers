@@ -1,17 +1,20 @@
 use gpui::{
-    AnyElement, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    PathStyle, Pixels, Point, Render, Rgba, StrokeOptions, Window, canvas, div, point, prelude::*,
-    px, rgb, rgba, size, transparent_black,
+    AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, PathStyle, Pixels, Point, Render, Rgba, StrokeOptions, Window, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Serialize,
+    ser::{SerializeSeq, SerializeStruct},
+};
 use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant},
 };
 
-use crate::native::{components::IconName, windows::StickerWindowEvent};
 use crate::model::sticker::StickerColor;
+use crate::native::{components::IconName, windows::StickerWindowEvent};
 use crate::storage::ArcStickerStore;
 
 const PAINT_COLORS: [u32; 8] = [
@@ -31,24 +34,49 @@ const PAINT_SAVE_DEBOUNCE: Duration = Duration::from_millis(3000);
 
 const PAINT_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct PaintPoint {
-    x: f32,
-    y: f32,
+    x: i16,
+    y: i16,
 }
 
 impl From<Point<Pixels>> for PaintPoint {
     fn from(value: Point<Pixels>) -> Self {
+        fn clamp_i16(v: f32) -> i16 {
+            let rounded = v.round();
+            let bounded = rounded.max(i16::MIN as f32).min(i16::MAX as f32);
+            bounded as i16
+        }
+
         Self {
-            x: value.x.to_f64() as f32,
-            y: value.y.to_f64() as f32,
+            x: clamp_i16(value.x.to_f64() as f32),
+            y: clamp_i16(value.y.to_f64() as f32),
         }
     }
 }
 
 impl PaintPoint {
+    fn from_f32(x: f32, y: f32) -> Self {
+        fn clamp_i16(v: f32) -> i16 {
+            let rounded = v.round();
+            let bounded = rounded.max(i16::MIN as f32).min(i16::MAX as f32);
+            bounded as i16
+        }
+
+        Self {
+            x: clamp_i16(x),
+            y: clamp_i16(y),
+        }
+    }
+
     fn to_gpui(&self) -> Point<Pixels> {
-        point(px(self.x), px(self.y))
+        point(px(self.x as f32), px(self.y as f32))
+    }
+
+    fn distance_sq_to(&self, other: &PaintPoint) -> f32 {
+        let dx = (self.x as f32) - (other.x as f32);
+        let dy = (self.y as f32) - (other.y as f32);
+        dx * dx + dy * dy
     }
 }
 
@@ -58,9 +86,13 @@ fn default_stroke_width() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintStroke {
+    #[serde(rename = "p")]
     points: Vec<PaintPoint>,
+
+    #[serde(rename = "c")]
     color: u32,
 
+    #[serde(rename = "w")]
     #[serde(default = "default_stroke_width")]
     width: f32,
 }
@@ -68,55 +100,131 @@ struct PaintStroke {
 #[derive(Debug, Clone)]
 struct PaintStrokeState {
     stroke: PaintStroke,
-    deduped_points: Vec<Point<Pixels>>,
+    bounds: Option<(i16, i16, i16, i16)>,
+    path: Option<gpui::Path<Pixels>>,
 }
+
+struct StrokesRef<'a>(&'a [PaintStrokeState]);
 
 impl PaintStrokeState {
     fn new(stroke: PaintStroke) -> Self {
         let mut this = Self {
             stroke,
-            deduped_points: Vec::new(),
+            bounds: None,
+            path: None,
         };
-        this.rebuild_cache();
+        this.recalculate_bounds();
+        this.rebuild_path();
         this
     }
 
-    fn rebuild_cache(&mut self) {
-        let min_distance = min_point_distance_for_width(self.stroke.width);
-        dedupe_close_points_into(&self.stroke.points, min_distance, &mut self.deduped_points);
+    fn rebuild_path(&mut self) {
+        self.path = build_spline_path(&self.stroke.points, self.stroke.width);
     }
-}
 
-#[derive(Debug, Clone, Deserialize)]
-struct PaintContentV1 {
-    #[serde(default)]
-    lines: Vec<Vec<PaintPoint>>,
+    fn append_point(&mut self, point: PaintPoint) -> bool {
+        let min_distance = min_point_distance_for_width(self.stroke.width);
+        let min_distance_sq = min_distance * min_distance;
+
+        if let Some(last) = self.stroke.points.last() {
+            if point.distance_sq_to(last) < min_distance_sq {
+                return false;
+            }
+        }
+
+        self.stroke.points.push(point);
+        self.expand_bounds_with(point);
+        self.rebuild_path();
+
+        true
+    }
+
+    fn recalculate_bounds(&mut self) {
+        if self.stroke.points.is_empty() {
+            self.bounds = None;
+            return;
+        }
+
+        let mut min_x = self.stroke.points[0].x;
+        let mut min_y = self.stroke.points[0].y;
+        let mut max_x = self.stroke.points[0].x;
+        let mut max_y = self.stroke.points[0].y;
+
+        for p in &self.stroke.points[1..] {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+            max_x = max_x.max(p.x);
+            max_y = max_y.max(p.y);
+        }
+
+        self.bounds = Some((min_x, min_y, max_x, max_y));
+    }
+
+    fn expand_bounds_with(&mut self, point: PaintPoint) {
+        match self.bounds {
+            Some((min_x, min_y, max_x, max_y)) => {
+                self.bounds = Some((
+                    min_x.min(point.x),
+                    min_y.min(point.y),
+                    max_x.max(point.x),
+                    max_y.max(point.y),
+                ));
+            }
+            None => {
+                self.bounds = Some((point.x, point.y, point.x, point.y));
+            }
+        }
+    }
+
+    fn intersects_canvas(&self, canvas_bounds: Bounds<Pixels>) -> bool {
+        let Some((min_x, min_y, max_x, max_y)) = self.bounds else {
+            return false;
+        };
+
+        let pad = self.stroke.width + 2.0;
+        let left = min_x as f32 - pad;
+        let top = min_y as f32 - pad;
+        let right = max_x as f32 + pad;
+        let bottom = max_y as f32 + pad;
+
+        let canvas_left = canvas_bounds.origin.x.to_f64() as f32;
+        let canvas_top = canvas_bounds.origin.y.to_f64() as f32;
+        let canvas_right = canvas_left + (canvas_bounds.size.width.to_f64() as f32);
+        let canvas_bottom = canvas_top + (canvas_bounds.size.height.to_f64() as f32);
+
+        !(right < canvas_left || left > canvas_right || bottom < canvas_top || top > canvas_bottom)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaintContent {
     strokes: Vec<PaintStroke>,
+
+    #[serde(default = "default_paint_color")]
     current_color: u32,
 
     #[serde(default = "default_stroke_width")]
     current_width: f32,
 }
 
+struct PaintContentBorrowed<'a> {
+    strokes: &'a [PaintStrokeState],
+    current_color: u32,
+    current_width: f32,
+}
+
+fn default_paint_color() -> u32 {
+    PAINT_COLORS[0]
+}
+
 impl Default for PaintContent {
     fn default() -> Self {
         Self {
             strokes: Vec::new(),
-            current_color: PAINT_COLORS[0],
+            current_color: default_paint_color(),
             current_width: default_stroke_width(),
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum PaintContentAny {
-    V2(PaintContent),
-    V1(PaintContentV1),
 }
 
 pub struct PaintSticker {
@@ -159,24 +267,7 @@ impl PaintSticker {
         content: &str,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
-        let content = serde_json::from_str::<PaintContentAny>(content)
-            .map(|x| match x {
-                PaintContentAny::V2(v2) => v2,
-                PaintContentAny::V1(v1) => PaintContent {
-                    strokes: v1
-                        .lines
-                        .into_iter()
-                        .map(|points| PaintStroke {
-                            points,
-                            color: PAINT_COLORS[0],
-                            width: default_stroke_width(),
-                        })
-                        .collect(),
-                    current_color: PAINT_COLORS[0],
-                    current_width: default_stroke_width(),
-                },
-            })
-            .unwrap_or_default();
+        let content = serde_json::from_str::<PaintContent>(content).unwrap_or_default();
         Self {
             id,
             color,
@@ -256,18 +347,12 @@ impl PaintSticker {
 
     fn save_state(&mut self, cx: &mut Context<Self>) -> bool {
         // Avoid cloning the entire strokes vector (and all point data) just to serialize.
-        #[derive(Serialize)]
-        struct PaintContentBorrowed<'a> {
-            strokes: Vec<&'a PaintStroke>,
-            current_color: u32,
-            current_width: f32,
-        }
 
         // Keep the read lock in a tight scope so we can update `self.error` on failure.
         let json = {
             let strokes_guard = self.strokes_read();
             let borrowed = PaintContentBorrowed {
-                strokes: strokes_guard.iter().map(|s| &s.stroke).collect(),
+                strokes: &strokes_guard,
                 current_color: self.current_color,
                 current_width: self.current_width,
             };
@@ -316,43 +401,59 @@ impl PaintSticker {
 
         let mut strokes = self.strokes_write();
         let old_strokes = std::mem::take(&mut *strokes);
-
         let mut new_strokes: Vec<PaintStrokeState> = Vec::with_capacity(old_strokes.len());
 
         for mut stroke_state in old_strokes {
-            let stroke = &mut stroke_state.stroke;
-            if stroke.points.len() < 2 {
+            if stroke_state.stroke.points.is_empty() {
                 continue;
             }
 
-            let mut segment: Vec<PaintPoint> = Vec::with_capacity(stroke.points.len());
-            let points = std::mem::take(&mut stroke.points);
+            let color = stroke_state.stroke.color;
+            let width = stroke_state.stroke.width;
+            let points = std::mem::take(&mut stroke_state.stroke.points);
 
-            for point in points {
-                let dx = point.x - target.x;
-                let dy = point.y - target.y;
-                let is_erased = dx * dx + dy * dy <= radius_sq;
+            let mut erased_any = false;
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            let mut run_start: Option<usize> = None;
+
+            for (idx, point) in points.iter().enumerate() {
+                let is_erased = point.distance_sq_to(&target) <= radius_sq;
 
                 if is_erased {
-                    if segment.len() >= 2 {
-                        new_strokes.push(PaintStrokeState::new(PaintStroke {
-                            points: std::mem::take(&mut segment),
-                            color: stroke.color,
-                            width: stroke.width,
-                        }));
-                    } else {
-                        segment.clear();
+                    erased_any = true;
+                    if let Some(start) = run_start.take() {
+                        ranges.push((start, idx));
                     }
-                } else {
-                    segment.push(point);
+                } else if run_start.is_none() {
+                    run_start = Some(idx);
                 }
             }
 
-            if segment.len() >= 2 {
+            if let Some(start) = run_start {
+                ranges.push((start, points.len()));
+            }
+
+            if !erased_any {
+                stroke_state.stroke.points = points;
+                new_strokes.push(stroke_state);
+                continue;
+            }
+
+            if ranges.is_empty() {
+                continue;
+            }
+
+            let (first_start, first_end) = ranges[0];
+            stroke_state.stroke.points = points[first_start..first_end].to_vec();
+            stroke_state.recalculate_bounds();
+            stroke_state.rebuild_path();
+            new_strokes.push(stroke_state);
+
+            for (start, end) in ranges.into_iter().skip(1) {
                 new_strokes.push(PaintStrokeState::new(PaintStroke {
-                    points: segment,
-                    color: stroke.color,
-                    width: stroke.width,
+                    points: points[start..end].to_vec(),
+                    color,
+                    width,
                 }));
             }
         }
@@ -457,31 +558,25 @@ impl PaintSticker {
             .child(
                 canvas(
                     move |_, _, _| {},
-                    move |_, _, window, _| {
-                        println!("PaintSticker: canvas redraw");
+                    move |canvas_bounds, _, window, _| {
                         let strokes = match strokes.read() {
                             Ok(guard) => guard,
                             Err(err) => err.into_inner(),
                         };
 
                         for stroke in strokes.iter() {
-                            if stroke.deduped_points.len() < 2 {
+                            if stroke.stroke.points.is_empty() {
                                 continue;
                             }
 
-                            let points = &stroke.deduped_points;
+                            if !stroke.intersects_canvas(canvas_bounds) {
+                                continue;
+                            }
 
-                            // Use round caps/joins and a tighter tolerance to reduce jagged edges.
-                            // Also paint a subtle wider pass first to visually anti-alias pixel edges.
                             let base_color = rgba(stroke.stroke.color);
-                            let feather_color = Rgba {
-                                a: (base_color.a * 0.25).min(1.0),
-                                ..base_color
-                            };
-
-                            // Feather pass (slightly wider) + main pass.
-                            paint_spline(window, points, stroke.stroke.width + 1.25, feather_color);
-                            paint_spline(window, points, stroke.stroke.width, base_color);
+                            if let Some(path) = &stroke.path {
+                                window.paint_path(path.clone(), base_color);
+                            }
                         }
                     },
                 )
@@ -523,21 +618,9 @@ impl PaintSticker {
                         let mut strokes = this.strokes_write();
 
                         if let Some(stroke) = strokes.last_mut() {
-                            let p = PaintPoint::from(ev.position);
-
-                            if let Some(last) = stroke.stroke.points.last() {
-                                let min_distance =
-                                    min_point_distance_for_width(stroke.stroke.width);
-                                let dx = p.x - last.x;
-                                let dy = p.y - last.y;
-                                if dx * dx + dy * dy < (min_distance * min_distance) {
-                                    return;
-                                }
+                            if !stroke.append_point(PaintPoint::from(ev.position)) {
+                                return;
                             }
-
-                            stroke.stroke.points.push(p);
-                            // Update the cached deduped points so rendering doesn't allocate.
-                            stroke.rebuild_cache();
                         }
                     }
                     PaintTool::Eraser => {
@@ -614,44 +697,20 @@ fn make_dot(w: f32, color: u32, is_selected: bool) -> AnyElement {
         .into_any_element()
 }
 
-fn midpoint(a: Point<Pixels>, b: Point<Pixels>) -> Point<Pixels> {
-    let ax = a.x.to_f64() as f32;
-    let ay = a.y.to_f64() as f32;
-    let bx = b.x.to_f64() as f32;
-    let by = b.y.to_f64() as f32;
-    point(px((ax + bx) * 0.5), px((ay + by) * 0.5))
-}
-
 fn min_point_distance_for_width(width: f32) -> f32 {
-    // Skip ultra-close points to reduce jitter and make curves smoother.
-    // Tuned to keep thin strokes responsive while stabilizing wider ones.
-    (width * 0.25).max(0.75)
+    // Keep long strokes compact to avoid memory spikes and render slowdown.
+    (width * 1.5).max(4.0)
 }
 
-fn dedupe_close_points_into(
-    points: &[PaintPoint],
-    min_distance: f32,
-    out: &mut Vec<Point<Pixels>>,
-) {
-    let min_distance_sq = min_distance * min_distance;
-    out.clear();
-    // Ensure we can push up to `points.len()` without reallocating.
-    out.reserve(points.len().saturating_sub(out.len()));
-
-    for p in points {
-        let p = p.to_gpui();
-        if let Some(last) = out.last().copied() {
-            let dx = (p.x.to_f64() - last.x.to_f64()) as f32;
-            let dy = (p.y.to_f64() - last.y.to_f64()) as f32;
-            if dx * dx + dy * dy < min_distance_sq {
-                continue;
-            }
-        }
-        out.push(p);
+fn build_spline_path(points: &[PaintPoint], width: f32) -> Option<gpui::Path<Pixels>> {
+    if points.is_empty() {
+        return None;
     }
-}
 
-fn paint_spline(window: &mut Window, points: &[Point<Pixels>], width: f32, color: Rgba) {
+    if points.len() == 1 {
+        return build_dot_path(&points[0], width);
+    }
+
     let options = StrokeOptions::default()
         .with_line_width(width)
         .with_line_cap(lyon::path::LineCap::Round)
@@ -659,23 +718,49 @@ fn paint_spline(window: &mut Window, points: &[Point<Pixels>], width: f32, color
         .with_tolerance(0.02);
 
     let mut builder = PathBuilder::stroke(px(width)).with_style(PathStyle::Stroke(options));
-    builder.move_to(points[0]);
+    builder.move_to(points[0].to_gpui());
 
-    // Quadratic spline through midpoints.
-    if points.len() == 2 {
-        builder.line_to(points[1]);
-    } else {
-        for i in 1..points.len() - 1 {
-            let ctrl = points[i];
-            let to = midpoint(points[i], points[i + 1]);
-            builder.curve_to(to, ctrl);
-        }
-        if let Some(last) = points.last().copied() {
-            builder.line_to(last);
-        }
+    for p in points.iter().skip(1) {
+        builder.line_to(p.to_gpui());
     }
 
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
+    builder.build().ok()
+}
+
+fn build_dot_path(center: &PaintPoint, width: f32) -> Option<gpui::Path<Pixels>> {
+    let x = center.x as f32;
+    let y = center.y as f32;
+    let half_segment = (width * 0.25).max(0.01);
+    let points = [
+        PaintPoint::from_f32(x - half_segment, y),
+        PaintPoint::from_f32(x + half_segment, y),
+    ];
+
+    build_spline_path(&points, width)
+}
+
+impl Serialize for StrokesRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for stroke_state in self.0 {
+            seq.serialize_element(&stroke_state.stroke)?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for PaintContentBorrowed<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("PaintContent", 3)?;
+        state.serialize_field("strokes", &StrokesRef(self.strokes))?;
+        state.serialize_field("current_color", &self.current_color)?;
+        state.serialize_field("current_width", &self.current_width)?;
+        state.end()
     }
 }
