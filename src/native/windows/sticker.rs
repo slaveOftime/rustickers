@@ -13,6 +13,7 @@ use gpui_component::{
     v_flex,
 };
 use std::{
+    path::PathBuf,
     sync::{RwLock, mpsc},
     time::{Duration, Instant},
 };
@@ -21,10 +22,15 @@ use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerTy
 use crate::native::components::{
     IconName,
     stickers::{
-        command::CommandSticker, markdown::MarkdownSticker, paint::PaintSticker,
-        timer::TimerSticker, *,
+        command::CommandSticker,
+        file::{FileSticker, FileStickerContent},
+        markdown::MarkdownSticker,
+        paint::PaintSticker,
+        timer::TimerSticker,
+        *,
     },
 };
+use crate::native::file_manager;
 use crate::native::windows::StickerWindowEvent;
 use crate::storage::ArcStickerStore;
 
@@ -80,6 +86,54 @@ impl StickerWindow {
         cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail))
     }
 
+    pub fn open_file_preview(
+        cx: &mut App,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+    ) -> anyhow::Result<()> {
+        let files = file_manager::selected_files_from_active_manager()?;
+        if files.is_empty() {
+            return Err(anyhow::anyhow!("No file to preview"));
+        }
+
+        let default_size = FileSticker::default_window_size();
+        let title = if files.len() == 1 {
+            files[0]
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("File Sticker")
+                .to_string()
+        } else {
+            format!("{} files", files.len())
+        };
+
+        let screen_size = cx
+            .primary_display()
+            .map(|d| d.bounds().size.map(|p| p.to_f64() as i32))
+            .unwrap_or(size(1920, 1080));
+        let left = (screen_size.width - default_size.width) / 2;
+        let top = (screen_size.height - default_size.height) / 2;
+
+        let content = FileStickerContent::from_paths(&files).to_json();
+        let detail = StickerDetail {
+            id: generate_consistence_minus_id(&files),
+            title,
+            state: StickerState::Open,
+            left,
+            top,
+            width: default_size.width,
+            height: default_size.height,
+            top_most: false,
+            color: StickerColor::Yellow,
+            sticker_type: StickerType::File,
+            content,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        Self::open_with_detail(cx, sticker_events_tx, store, detail)
+    }
+
     pub fn try_close(id: i64, cx: &mut App) -> bool {
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             if let Some(pos) = open_stickers.iter().position(|(open_id, _)| *open_id == id) {
@@ -116,6 +170,7 @@ impl StickerWindow {
             StickerType::Markdown => MarkdownSticker::min_window_size(),
             StickerType::Command => CommandSticker::min_window_size(),
             StickerType::Paint => PaintSticker::min_window_size(),
+            StickerType::File => FileSticker::min_window_size(),
         };
 
         let current_size = if detail.width > 0 && detail.height > 0 {
@@ -126,6 +181,7 @@ impl StickerWindow {
                 StickerType::Markdown => MarkdownSticker::default_window_size(),
                 StickerType::Command => CommandSticker::default_window_size(),
                 StickerType::Paint => PaintSticker::default_window_size(),
+                StickerType::File => FileSticker::default_window_size(),
             }
         };
 
@@ -147,9 +203,15 @@ impl StickerWindow {
                 ..Default::default()
             },
             |window, cx| {
-                let view =
+                let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
-                cx.new(|cx| Root::new(view, window, cx).bg(transparent_black().alpha(0.0)))
+                let entity_clone = entity.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let id = entity_clone.read(cx).view.id(cx);
+                    let _ = Self::try_close(id, cx);
+                    true
+                });
+                cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
             },
         )?;
 
@@ -177,7 +239,7 @@ impl StickerWindow {
 
         cx.subscribe_in(&title, window, |this, input_state, event, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
-                let id = this.detail.id;
+                let id = this.view.id(cx);
                 let text = input_state.read(cx).value().to_string();
                 let store = this.store.clone();
                 let events = this.sticker_events_tx.clone();
@@ -257,6 +319,17 @@ impl StickerWindow {
                     PaintSticker::new(id, color, store, content, sticker_events_tx.clone())
                 })))
             }
+            StickerType::File => Box::new(StickerViewEntity::new(cx.new(|cx| {
+                FileSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx.clone(),
+                )
+            }))),
         }
     }
 
@@ -321,7 +394,7 @@ impl StickerWindow {
             || width != self.detail.width
             || height != self.detail.height
         {
-            let id = self.detail.id;
+            let id = self.view.id(cx);
             let store = self.store.clone();
             cx.spawn(async move |this, cx| {
                 if let Err(err) = store
@@ -347,7 +420,7 @@ impl StickerWindow {
     fn change_color(&mut self, theme: StickerColor, cx: &mut Context<Self>) {
         self.detail.color = theme;
         self.view.set_color(cx, theme);
-        let id = self.detail.id;
+        let id = self.view.id(cx);
         let store = self.store.clone();
         let events = self.sticker_events_tx.clone();
         cx.spawn(async move |entity, cx| {
@@ -371,7 +444,7 @@ impl StickerWindow {
             return;
         }
 
-        let id = self.detail.id;
+        let id = self.view.id(cx);
         let store = self.store.clone();
         let events = self.sticker_events_tx.clone();
 
@@ -484,4 +557,14 @@ impl Render for StickerWindow {
                 view.child(self.footer_view(cx))
             })
     }
+}
+
+fn generate_consistence_minus_id(paths: &Vec<PathBuf>) -> i64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    paths.hash(&mut hasher);
+    let hash = hasher.finish() as i64;
+    -hash
 }

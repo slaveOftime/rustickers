@@ -878,6 +878,10 @@ impl CommandSticker {
 }
 
 impl super::Sticker for CommandSticker {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
     fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_config(cx)
     }

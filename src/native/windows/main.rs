@@ -20,6 +20,7 @@ use crate::model::sticker::*;
 use crate::native::components::IconName;
 use crate::native::components::stickers::Sticker;
 use crate::native::components::stickers::command::CommandSticker;
+use crate::native::components::stickers::file::FileSticker;
 use crate::native::components::stickers::markdown::MarkdownSticker;
 use crate::native::components::stickers::paint::PaintSticker;
 use crate::native::components::stickers::timer::TimerSticker;
@@ -138,7 +139,7 @@ impl MainWindow {
             let updated = this.update(cx, |this, cx| {
                 let mut changed = false;
                 for ev in events {
-                    changed |= this.apply_event(ev);
+                    changed |= this.apply_event(ev, cx);
                 }
                 if changed {
                     cx.notify();
@@ -151,8 +152,12 @@ impl MainWindow {
         }
     }
 
-    fn apply_event(&mut self, event: StickerWindowEvent) -> bool {
+    fn apply_event(&mut self, event: StickerWindowEvent, cx: &mut Context<Self>) -> bool {
         match event {
+            StickerWindowEvent::Created { .. } => {
+                self.spawn_load_stickers(cx);
+                false
+            }
             StickerWindowEvent::TitleChanged { id, title } => {
                 if let Some(sticker) = self.stickers.iter_mut().find(|s| s.id == id)
                     && sticker.title != title
@@ -196,6 +201,7 @@ impl MainWindow {
             StickerType::Command => CommandSticker::default_window_size(),
             StickerType::Timer => TimerSticker::default_window_size(),
             StickerType::Paint => PaintSticker::default_window_size(),
+            StickerType::File => FileSticker::default_window_size(),
         };
 
         let title = match sticker_type {
@@ -203,6 +209,7 @@ impl MainWindow {
             StickerType::Command => "New Command Sticker",
             StickerType::Timer => "New Timer Sticker",
             StickerType::Paint => "New Paint Sticker",
+            StickerType::File => "New File Sticker",
         };
 
         let detail = StickerDetail {
@@ -226,16 +233,15 @@ impl MainWindow {
         cx.spawn(
             async move |entity, cx| match store.insert_sticker(detail).await {
                 Ok(id) => {
+                    let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
+
                     if let Err(err) =
-                        StickerWindow::open_async(cx, sticker_events_tx, store.clone(), id).await
+                        StickerWindow::open_async(cx, sticker_events_tx.clone(), store.clone(), id)
+                            .await
                     {
                         let _ = entity.update(cx, |this, cx| {
                             this.error = Some(format!("Failed to open sticker window: {err:#}"));
                             cx.notify();
-                        });
-                    } else {
-                        let _ = entity.update(cx, |this, cx| {
-                            this.spawn_load_stickers(cx);
                         });
                     }
                 }
@@ -604,6 +610,7 @@ fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
         StickerType::Command => IconName::Command,
         StickerType::Timer => IconName::Bell,
         StickerType::Paint => IconName::Paint,
+        StickerType::File => IconName::DocumentText,
     }
 }
 

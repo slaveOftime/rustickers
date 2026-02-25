@@ -106,6 +106,10 @@ impl MarkdownSticker {
 }
 
 impl super::Sticker for MarkdownSticker {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
     fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_state(cx)
     }

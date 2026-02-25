@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub mod components;
+pub mod file_manager;
 pub mod hotkey;
 pub mod http;
 pub mod windows;
@@ -28,6 +29,7 @@ pub fn run_native(
         .with_http_client(http::ReqwestClient::new());
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
+    let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());
 
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -36,10 +38,12 @@ pub fn run_native(
         theme.background = rgb(0x151104).into();
 
         let main_window_handle_clone = main_window_handle.clone();
+        let store_handle_clone = store_handle.clone();
+        let sticker_events_tx_for_ipc = sticker_events_tx.clone();
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor()
-                    .timer(Duration::from_millis(120))
+                    .timer(Duration::from_millis(20))
                     .await;
                 while let Ok(event) = ipc_events_rx.try_recv() {
                     match event {
@@ -47,6 +51,20 @@ pub fn run_native(
                             if let Some(handle) = main_window_handle_clone.get() {
                                 let _ = handle.update(cx, |_, window, _| {
                                     window.activate_window();
+                                });
+                            }
+                        }
+                        crate::ipc::IpcEvent::ToggleFilePreview => {
+                            if let Some(store) = store_handle_clone.get() {
+                                cx.update(|cx| {
+                                    if let Err(err) = StickerWindow::open_file_preview(
+                                        cx,
+                                        sticker_events_tx_for_ipc.clone(),
+                                        store.clone(),
+                                    )
+                                    {
+                                        tracing::warn!(error = ?err, "Failed to toggle file sticker preview");
+                                    }
                                 });
                             }
                         }
@@ -66,6 +84,8 @@ pub fn run_native(
                     return;
                 }
             };
+
+            let _ = store_handle.set(store.clone());
 
             tracing::info!("Sticker store opened");
 

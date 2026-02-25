@@ -3,11 +3,14 @@ use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, Size};
 use crate::model::sticker::StickerColor;
 
 pub mod command;
+pub mod file;
 pub mod markdown;
 pub mod paint;
 pub mod timer;
 
 pub trait Sticker: Sized {
+    fn id(&self) -> i64;
+
     // If return false, it means we should not close the sticker window.
     fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool;
 
@@ -22,6 +25,7 @@ pub trait Sticker: Sized {
 }
 
 pub trait StickerView {
+    fn id(&self, cx: &App) -> i64;
     fn element(&self) -> AnyElement;
     fn save_on_close(&self, cx: &mut App) -> bool;
     fn set_color(&mut self, cx: &mut App, color: StickerColor);
@@ -39,6 +43,10 @@ impl<T: Render + Sticker + 'static> StickerViewEntity<T> {
 }
 
 impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
+    fn id(&self, cx: &App) -> i64 {
+        self.entity.read(cx).id()
+    }
+
     fn element(&self) -> AnyElement {
         self.entity.clone().into_any_element()
     }

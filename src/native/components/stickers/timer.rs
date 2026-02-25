@@ -15,8 +15,8 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::native::{components::IconName, windows::StickerWindowEvent};
 use crate::model::sticker::StickerColor;
+use crate::native::{components::IconName, windows::StickerWindowEvent};
 use crate::storage::ArcStickerStore;
 
 use super::Sticker;
@@ -494,6 +494,10 @@ impl TimerSticker {
 }
 
 impl Sticker for TimerSticker {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
     fn save_on_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_timer_state(cx)
     }
