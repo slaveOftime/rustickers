@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     MouseButton, Render, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
+    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, rgba, size,
     transparent_black,
 };
 use gpui_component::{
@@ -193,6 +193,7 @@ impl StickerWindow {
 
         let handle = cx.open_window(
             WindowOptions {
+                kind: WindowKind::PopUp,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
@@ -203,6 +204,15 @@ impl StickerWindow {
                 ..Default::default()
             },
             |window, cx| {
+                cx.spawn(async |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(300))
+                        .await;
+                    cx.update(|cx| {
+                        cx.activate(true);
+                    });
+                })
+                .detach();
                 let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
                 cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
@@ -389,6 +399,10 @@ impl StickerWindow {
             || height != self.detail.height
         {
             let id = self.view.id(cx);
+            if id <= 0 {
+                return;
+            }
+
             let store = self.store.clone();
             cx.spawn(async move |this, cx| {
                 if let Err(err) = store
@@ -414,7 +428,13 @@ impl StickerWindow {
     fn change_color(&mut self, theme: StickerColor, cx: &mut Context<Self>) {
         self.detail.color = theme;
         self.view.set_color(cx, theme);
+        cx.notify();
+
         let id = self.view.id(cx);
+        if id <= 0 {
+            return;
+        }
+
         let store = self.store.clone();
         let events = self.sticker_events_tx.clone();
         cx.spawn(async move |entity, cx| {
@@ -430,7 +450,6 @@ impl StickerWindow {
             }
         })
         .detach();
-        cx.notify();
     }
 
     fn close(&mut self, cx: &mut gpui::App) {
@@ -444,7 +463,9 @@ impl StickerWindow {
         let events = self.sticker_events_tx.clone();
 
         cx.spawn(async move |cx| {
-            if let Err(err) = store.update_sticker_state(id, StickerState::Close).await {
+            if id > 0
+                && let Err(err) = store.update_sticker_state(id, StickerState::Close).await
+            {
                 tracing::error!(id, error = %err, "Error saving state on close");
             }
 
@@ -561,5 +582,5 @@ fn generate_consistence_minus_id(paths: &Vec<PathBuf>) -> i64 {
     let mut hasher = DefaultHasher::new();
     paths.hash(&mut hasher);
     let hash = hasher.finish() as i64;
-    -hash
+    -hash.abs()
 }

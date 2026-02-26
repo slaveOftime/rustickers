@@ -1,6 +1,5 @@
 use gpui::{
-    Context, Entity, KeyDownEvent, ObjectFit, Rgba, Window, WindowControlArea, div, img,
-    prelude::*, px, rgba,
+    Context, Entity, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px, rgba,
 };
 use gpui_component::{
     Disableable, alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView,
@@ -224,7 +223,6 @@ impl FileSticker {
     fn summary_view(&self) -> gpui::AnyElement {
         v_flex()
             .gap_2()
-            .overflow_y_scrollbar()
             .window_control_area(WindowControlArea::Drag)
             .children(self.summaries.iter().map(|item| {
                 let size_text = item
@@ -277,7 +275,9 @@ impl FileSticker {
                 .size_full()
                 .child(img(path.as_path()).size_full().object_fit(ObjectFit::Cover))
                 .into_any_element(),
-            Some(FilePreview::WebView(webview)) => div().child(webview.clone()).into_any_element(),
+            Some(FilePreview::WebView(webview)) => {
+                div().size_full().child(webview.clone()).into_any_element()
+            }
             None => div().p_2().child(self.summary_view()).into_any_element(),
         }
     }
@@ -315,20 +315,34 @@ impl Render for FileSticker {
         };
 
         div()
+            .flex()
+            .flex_col()
             .size_full()
             .bg(bg_color)
             .relative()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, _| {
-                if !this.is_persisted() && event.keystroke.key.eq_ignore_ascii_case("esc") {
-                    window.remove_window();
-                }
-            }))
             .window_control_area(WindowControlArea::Drag)
+            .when(
+                matches!(self.preview, Some(FilePreview::WebView(_))),
+                |view| {
+                    view.bg(rgba(0x000000)).child(
+                        div()
+                            .bg(bg_color)
+                            .py_1()
+                            .pl_2()
+                            .pr_16()
+                            .text_sm()
+                            .opacity(0.75)
+                            .text_ellipsis_start()
+                            .child(self.summaries[0].path.clone()),
+                    )
+                },
+            )
             .child(
                 div()
-                    .size_full()
+                    .h_full()
+                    .flex_shrink()
                     .overflow_hidden()
-                    .child(self.preview_view()),
+                    .child(v_flex().overflow_y_scrollbar().child(self.preview_view())),
             )
             .when_some(self.error.as_ref(), |view, err| {
                 view.child(
@@ -347,11 +361,6 @@ impl Render for FileSticker {
                     view.child(
                         div()
                             .p_2()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom_0()
-                            .max_h(px(180.0))
                             .bg(Rgba {
                                 a: 0.95,
                                 ..self.color.bg()
@@ -360,7 +369,16 @@ impl Render for FileSticker {
                             .window_control_area(WindowControlArea::Drag)
                             .border_t_1()
                             .border_dashed()
-                            .child(self.summary_view()),
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .child(
+                                div()
+                                    .max_h(px(180.0))
+                                    .overflow_y_scrollbar()
+                                    .child(self.summary_view()),
+                            ),
                     )
                 },
             )
@@ -429,9 +447,10 @@ fn file_url(path: &Path) -> Result<String, String> {
         .canonicalize()
         .map_err(|err| format!("Failed to resolve file path: {err}"))?;
 
-    url::Url::from_file_path(canonical_path)
-        .map(|url| url.to_string())
-        .map_err(|_| "Failed to convert local file path to file URL".to_string())
+    Ok(format!(
+        "local://localhost/{}",
+        canonical_path.to_string_lossy()
+    ))
 }
 
 fn read_text(path: &Path) -> std::io::Result<String> {
