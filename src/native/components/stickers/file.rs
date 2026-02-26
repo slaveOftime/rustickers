@@ -275,7 +275,7 @@ impl FileSticker {
                             .gap_3()
                             .flex_wrap()
                             .child(format!("Size: {size_text}"))
-                                .when_some(items_text, |view, text| view.child(text))
+                            .when_some(items_text, |view, text| view.child(text))
                             .child(format!("Modified: {modified_text}")),
                     )
             }))
@@ -490,66 +490,39 @@ fn build_preview(
 
     let ext = ext.to_ascii_lowercase();
 
-    if is_image_ext(ext.as_str()) {
+    if crate::utils::file::is_image_ext(ext.as_str()) {
         return Ok(Some(FilePreview::Image(path.to_path_buf())));
     }
 
-    if is_markdown_ext(ext.as_str()) {
-        return read_text(path)
+    if crate::utils::file::is_markdown_ext(ext.as_str()) {
+        return crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
             .map(FilePreview::Markdown)
             .map(Some)
             .map_err(|err| format!("Failed to read markdown preview: {err}"));
     }
 
-    if is_code_ext(ext.as_str()) {
-        let language = markdown_language_for_ext(ext.as_str());
-        return read_text_full(path)
+    if crate::utils::file::is_code_ext(ext.as_str()) {
+        let language = crate::utils::file::markdown_language_for_ext(ext.as_str());
+        return crate::utils::file::read_text_full(path)
             .map(|content| FilePreview::Markdown(wrap_code_as_markdown(language, content)))
             .map(Some)
             .map_err(|err| format!("Failed to read code preview: {err}"));
     }
 
-    if is_web_doc_ext(ext.as_str()) {
-        return file_url(path)
+    if crate::utils::file::is_web_doc_ext(ext.as_str()) {
+        return crate::utils::url::create_local_file_url(path)
             .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
             .map(Some);
     }
 
-    if is_text_ext(ext.as_str()) {
-        return read_text(path)
+    if crate::utils::file::is_text_ext(ext.as_str()) {
+        return crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
             .map(FilePreview::Text)
             .map(Some)
             .map_err(|err| format!("Failed to read text preview: {err}"));
     }
 
     Ok(None)
-}
-
-fn file_url(path: &Path) -> Result<String, String> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|err| format!("Failed to resolve file path: {err}"))?;
-
-    Ok(format!(
-        "local://localhost/{}",
-        canonical_path.to_string_lossy()
-    ))
-}
-
-fn read_text(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let bytes = if bytes.len() > MAX_TEXT_PREVIEW_BYTES {
-        &bytes[..MAX_TEXT_PREVIEW_BYTES]
-    } else {
-        bytes.as_slice()
-    };
-
-    Ok(String::from_utf8_lossy(bytes).to_string())
-}
-
-fn read_text_full(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 fn wrap_code_as_markdown(language: &str, mut content: String) -> String {
@@ -566,126 +539,6 @@ fn file_name_for_display(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(|name| name.to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
-}
-
-fn is_image_ext(ext: &str) -> bool {
-    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg")
-}
-
-fn is_markdown_ext(ext: &str) -> bool {
-    matches!(ext, "md" | "markdown")
-}
-
-fn is_web_doc_ext(ext: &str) -> bool {
-    matches!(ext, "html" | "htm" | "pdf")
-}
-
-fn is_code_ext(ext: &str) -> bool {
-    matches!(
-        ext,
-        "rs" | "py"
-            | "js"
-            | "ts"
-            | "jsx"
-            | "tsx"
-            | "java"
-            | "c"
-            | "h"
-            | "cpp"
-            | "hpp"
-            | "cs"
-            | "go"
-            | "rb"
-            | "php"
-            | "swift"
-            | "kt"
-            | "kts"
-            | "scala"
-            | "r"
-            | "m"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "ps1"
-            | "lua"
-            | "dart"
-            | "ex"
-            | "exs"
-            | "erl"
-            | "hrl"
-            | "clj"
-            | "cljs"
-            | "fs"
-            | "fsx"
-            | "vb"
-            | "sql"
-            | "html"
-            | "css"
-            | "scss"
-            | "less"
-            | "xml"
-            | "yaml"
-            | "yml"
-            | "toml"
-            | "json"
-            | "pl"
-            | "pm"
-            | "groovy"
-            | "gradle"
-    )
-}
-
-fn is_text_ext(ext: &str) -> bool {
-    matches!(
-        ext,
-        "txt" | "log" | "json" | "toml" | "yaml" | "yml" | "rs" | "js" | "ts" | "css" | "csv"
-    )
-}
-
-fn markdown_language_for_ext(ext: &str) -> &'static str {
-    match ext {
-        "rs" => "rust",
-        "py" => "python",
-        "js" => "javascript",
-        "ts" => "typescript",
-        "jsx" => "jsx",
-        "tsx" => "tsx",
-        "java" => "java",
-        "c" => "c",
-        "h" => "c",
-        "cpp" => "cpp",
-        "hpp" => "cpp",
-        "cs" => "csharp",
-        "go" => "go",
-        "rb" => "ruby",
-        "php" => "php",
-        "swift" => "swift",
-        "kt" | "kts" => "kotlin",
-        "scala" => "scala",
-        "r" => "r",
-        "m" => "matlab",
-        "sh" | "bash" | "zsh" => "bash",
-        "ps1" => "powershell",
-        "lua" => "lua",
-        "dart" => "dart",
-        "ex" | "exs" => "elixir",
-        "erl" | "hrl" => "erlang",
-        "clj" | "cljs" => "clojure",
-        "fs" | "fsx" => "fsharp",
-        "vb" => "vbnet",
-        "sql" => "sql",
-        "html" => "html",
-        "css" => "css",
-        "scss" => "scss",
-        "less" => "less",
-        "xml" => "xml",
-        "json" => "json",
-        "toml" => "toml",
-        "yaml" | "yml" => "yaml",
-        "pl" | "pm" => "perl",
-        "groovy" | "gradle" => "groovy",
-        _ => "text",
-    }
 }
 
 fn format_size(bytes: u64) -> String {
