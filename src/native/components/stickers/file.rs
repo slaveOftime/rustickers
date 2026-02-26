@@ -69,8 +69,17 @@ pub struct FileSticker {
 struct FileSummary {
     name: String,
     path: String,
+    is_dir: bool,
     size_bytes: Option<u64>,
+    file_count: Option<u64>,
+    folder_count: Option<u64>,
     modified_at_ms: Option<i64>,
+}
+
+struct DirectoryStats {
+    size_bytes: u64,
+    file_count: u64,
+    folder_count: u64,
 }
 
 enum FilePreview {
@@ -102,7 +111,10 @@ impl FileSticker {
                 summaries.push(FileSummary {
                     name: file_name_for_display(Path::new(&raw_path)),
                     path: raw_path,
+                    is_dir: false,
                     size_bytes: None,
+                    file_count: None,
+                    folder_count: None,
                     modified_at_ms: None,
                 });
             }
@@ -236,6 +248,16 @@ impl FileSticker {
                     .modified_at_ms
                     .map(crate::utils::time::format_unix_millis)
                     .unwrap_or_else(|| "Unknown".to_string());
+                let items_text = if item.is_dir {
+                    match (item.file_count, item.folder_count) {
+                        (Some(file_count), Some(folder_count)) => {
+                            Some(format!("Items: {file_count} files, {folder_count} folders"))
+                        }
+                        _ => Some("Items: Unknown".to_string()),
+                    }
+                } else {
+                    None
+                };
 
                 v_flex()
                     .gap_1()
@@ -253,6 +275,7 @@ impl FileSticker {
                             .gap_3()
                             .flex_wrap()
                             .child(format!("Size: {size_text}"))
+                                .when_some(items_text, |view, text| view.child(text))
                             .child(format!("Modified: {modified_text}")),
                     )
             }))
@@ -392,7 +415,16 @@ impl Render for FileSticker {
 
 fn build_summary(path: PathBuf) -> FileSummary {
     let metadata = std::fs::metadata(&path).ok();
-    let size_bytes = metadata.as_ref().map(|m| m.len());
+    let is_dir = metadata.as_ref().is_some_and(|m| m.is_dir());
+    let dir_stats = if is_dir {
+        summarize_directory(path.as_path())
+    } else {
+        None
+    };
+    let size_bytes = dir_stats
+        .as_ref()
+        .map(|stats| stats.size_bytes)
+        .or_else(|| metadata.as_ref().map(|m| m.len()));
     let modified_at_ms = metadata
         .and_then(|m| m.modified().ok())
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
@@ -401,9 +433,50 @@ fn build_summary(path: PathBuf) -> FileSummary {
     FileSummary {
         name: file_name_for_display(path.as_path()),
         path: path.to_string_lossy().to_string(),
+        is_dir,
         size_bytes,
+        file_count: dir_stats.as_ref().map(|stats| stats.file_count),
+        folder_count: dir_stats.as_ref().map(|stats| stats.folder_count),
         modified_at_ms,
     }
+}
+
+fn summarize_directory(root: &Path) -> Option<DirectoryStats> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut size_bytes = 0_u64;
+    let mut file_count = 0_u64;
+    let mut folder_count = 0_u64;
+
+    while let Some(current_dir) = stack.pop() {
+        let entries = std::fs::read_dir(&current_dir).ok()?;
+
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+
+            if file_type.is_dir() {
+                folder_count += 1;
+                stack.push(entry.path());
+                continue;
+            }
+
+            file_count += 1;
+
+            if file_type.is_file() {
+                if let Ok(metadata) = entry.metadata() {
+                    size_bytes = size_bytes.saturating_add(metadata.len());
+                }
+            }
+        }
+    }
+
+    Some(DirectoryStats {
+        size_bytes,
+        file_count,
+        folder_count,
+    })
 }
 
 fn build_preview(

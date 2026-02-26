@@ -5,7 +5,7 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use windows::{
     Win32::{
-        Foundation::{HWND, SHANDLE_PTR},
+        Foundation::HWND,
         System::{
             Com::{
                 CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -15,7 +15,10 @@ use windows::{
         },
         UI::{
             Shell::{IShellFolderViewDual, IShellWindows, IWebBrowserApp, ShellWindows},
-            WindowsAndMessaging::GetForegroundWindow,
+            WindowsAndMessaging::{
+                GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
+                IsChild,
+            },
         },
     },
     core::Interface,
@@ -50,9 +53,23 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()? };
     let _com_guard = ComGuard;
 
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground.0.is_null() {
+    let foreground_window = unsafe { GetForegroundWindow() };
+    if foreground_window.0.is_null() {
         return Ok(Vec::new());
+    }
+
+    // 1. Get the actual focused element (e.g., the specific list view inside the active tab)
+    //    We need this because 'foreground_window' is just the outer Frame container.
+    let mut focused_hwnd = HWND(std::ptr::null_mut());
+    let id = unsafe { GetWindowThreadProcessId(foreground_window, None) };
+
+    let mut gui_info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+
+    if unsafe { GetGUIThreadInfo(id, &mut gui_info).is_ok() } {
+        focused_hwnd = gui_info.hwndFocus;
     }
 
     let shell_windows: IShellWindows =
@@ -64,31 +81,39 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
 
     for i in 0..count {
         let index = VARIANT::from(i);
-        let dispatch = unsafe { shell_windows.Item(&index)? };
-        let browser: IWebBrowserApp = match dispatch.cast() {
-            Ok(browser) => browser,
+        let dispatch = match unsafe { shell_windows.Item(&index) } {
+            Ok(d) => d,
             Err(_) => continue,
         };
 
-        let hwnd = HWND(unsafe { browser.HWND()? }.0 as *mut _);
+        let browser: IWebBrowserApp = match dispatch.cast() {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        // The HWND of the specific Tab/Browser View
+        let browser_hwnd = match unsafe { browser.HWND() } {
+            Ok(h) => HWND(h.0 as *mut _),
+            Err(_) => continue,
+        };
 
         let document = match unsafe { browser.Document() } {
-            Ok(document) => document,
+            Ok(d) => d,
             Err(_) => continue,
         };
 
         let folder_view: IShellFolderViewDual = match document.cast() {
-            Ok(view) => view,
+            Ok(v) => v,
             Err(_) => continue,
         };
 
         let selected_items = match unsafe { folder_view.SelectedItems() } {
-            Ok(items) => items,
+            Ok(i) => i,
             Err(_) => continue,
         };
 
         let selected_count = match unsafe { selected_items.Count() } {
-            Ok(count) => count,
+            Ok(c) => c,
             Err(_) => continue,
         };
 
@@ -109,14 +134,14 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
                 Err(_) => continue,
             };
 
-            let path = match unsafe { folder_item.Path() } {
+            let path_bs = match unsafe { folder_item.Path() } {
                 Ok(path) => path,
                 Err(_) => continue,
             };
 
-            let path = path.to_string();
-            if !path.trim().is_empty() {
-                current_paths.push(PathBuf::from(path));
+            let path_str = path_bs.to_string();
+            if !path_str.trim().is_empty() {
+                current_paths.push(PathBuf::from(path_str));
             }
         }
 
@@ -124,10 +149,24 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
             continue;
         }
 
-        if same_window(hwnd, foreground) {
+        // --- FIX LOGIC START ---
+        // We check if this specific browser instance is the one the user is interacting with.
+        let is_active_tab = if browser_hwnd == foreground_window {
+            // Case: Legacy Explorer or Single Window mode where Frame == View
+            true
+        } else if !focused_hwnd.0.is_null() {
+            // Case: Tabbed Explorer.
+            // The 'focused_hwnd' (e.g., file list) should be a child of the 'browser_hwnd' (the tab).
+            browser_hwnd == focused_hwnd || unsafe { IsChild(browser_hwnd, focused_hwnd) }.as_bool()
+        } else {
+            false
+        };
+
+        if is_active_tab {
             matched_paths = current_paths;
             break;
         }
+        // --- FIX LOGIC END ---
 
         if fallback_paths.is_empty() {
             fallback_paths = current_paths;
@@ -138,14 +177,9 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
         return Ok(matched_paths);
     }
 
+    // Fallback: If we couldn't determine the active tab (e.g. focus was on title bar),
+    // return the first one we found that had files selected.
     Ok(fallback_paths)
-}
-
-#[cfg(target_os = "windows")]
-fn same_window(lhs: HWND, rhs: HWND) -> bool {
-    let lhs = SHANDLE_PTR(lhs.0 as isize);
-    let rhs = SHANDLE_PTR(rhs.0 as isize);
-    lhs == rhs
 }
 
 #[cfg(target_os = "macos")]
