@@ -115,7 +115,6 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
         unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
     let count = unsafe { shell_windows.Count()? };
 
-    let mut fallback_paths: Vec<PathBuf> = Vec::new();
     let mut foreground_fallback_paths: Vec<PathBuf> = Vec::new();
 
     for i in 0..count {
@@ -205,17 +204,13 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
 
             continue;
         }
-
-        if fallback_paths.is_empty() {
-            fallback_paths = current_paths;
-        }
     }
 
     if !foreground_fallback_paths.is_empty() {
         return Ok(foreground_fallback_paths);
     }
 
-    Ok(fallback_paths)
+    Ok(Vec::new())
 }
 
 #[cfg(target_os = "macos")]
