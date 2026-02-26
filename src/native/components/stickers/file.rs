@@ -262,7 +262,6 @@ impl FileSticker {
     fn preview_view(&self) -> gpui::AnyElement {
         match &self.preview {
             Some(FilePreview::Markdown(markdown)) => TextView::markdown("file-markdown", markdown)
-                .p_2()
                 .size_full()
                 .selectable(false)
                 .scrollable(true)
@@ -429,6 +428,14 @@ fn build_preview(
             .map_err(|err| format!("Failed to read markdown preview: {err}"));
     }
 
+    if is_code_ext(ext.as_str()) {
+        let language = markdown_language_for_ext(ext.as_str());
+        return read_text_full(path)
+            .map(|content| FilePreview::Markdown(wrap_code_as_markdown(language, content)))
+            .map(Some)
+            .map_err(|err| format!("Failed to read code preview: {err}"));
+    }
+
     if is_web_doc_ext(ext.as_str()) {
         return file_url(path)
             .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
@@ -467,6 +474,20 @@ fn read_text(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(bytes).to_string())
 }
 
+fn read_text_full(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn wrap_code_as_markdown(language: &str, mut content: String) -> String {
+    let prefix = format!("```{language}\n");
+    content.reserve(prefix.len() + 4);
+    content.insert_str(0, &prefix);
+    content.push('\n');
+    content.push_str("```");
+    content
+}
+
 fn file_name_for_display(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -486,11 +507,112 @@ fn is_web_doc_ext(ext: &str) -> bool {
     matches!(ext, "html" | "htm" | "pdf")
 }
 
+fn is_code_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "rs" | "py"
+            | "js"
+            | "ts"
+            | "jsx"
+            | "tsx"
+            | "java"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "go"
+            | "rb"
+            | "php"
+            | "swift"
+            | "kt"
+            | "kts"
+            | "scala"
+            | "r"
+            | "m"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "ps1"
+            | "lua"
+            | "dart"
+            | "ex"
+            | "exs"
+            | "erl"
+            | "hrl"
+            | "clj"
+            | "cljs"
+            | "fs"
+            | "fsx"
+            | "vb"
+            | "sql"
+            | "html"
+            | "css"
+            | "scss"
+            | "less"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "json"
+            | "pl"
+            | "pm"
+            | "groovy"
+            | "gradle"
+    )
+}
+
 fn is_text_ext(ext: &str) -> bool {
     matches!(
         ext,
         "txt" | "log" | "json" | "toml" | "yaml" | "yml" | "rs" | "js" | "ts" | "css" | "csv"
     )
+}
+
+fn markdown_language_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "rs" => "rust",
+        "py" => "python",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "jsx" => "jsx",
+        "tsx" => "tsx",
+        "java" => "java",
+        "c" => "c",
+        "h" => "c",
+        "cpp" => "cpp",
+        "hpp" => "cpp",
+        "cs" => "csharp",
+        "go" => "go",
+        "rb" => "ruby",
+        "php" => "php",
+        "swift" => "swift",
+        "kt" | "kts" => "kotlin",
+        "scala" => "scala",
+        "r" => "r",
+        "m" => "matlab",
+        "sh" | "bash" | "zsh" => "bash",
+        "ps1" => "powershell",
+        "lua" => "lua",
+        "dart" => "dart",
+        "ex" | "exs" => "elixir",
+        "erl" | "hrl" => "erlang",
+        "clj" | "cljs" => "clojure",
+        "fs" | "fsx" => "fsharp",
+        "vb" => "vbnet",
+        "sql" => "sql",
+        "html" => "html",
+        "css" => "css",
+        "scss" => "scss",
+        "less" => "less",
+        "xml" => "xml",
+        "json" => "json",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "pl" | "pm" => "perl",
+        "groovy" | "gradle" => "groovy",
+        _ => "text",
+    }
 }
 
 fn format_size(bytes: u64) -> String {
