@@ -53,6 +53,7 @@ pub enum IconName {
     Paint,
     Eraser,
     Refresh,
+    Folder,
 }
 
 impl IconNamed for IconName {
@@ -79,6 +80,7 @@ impl IconNamed for IconName {
             IconName::Paint => "icons/paint.svg".into(),
             IconName::Eraser => "icons/eraser.svg".into(),
             IconName::Refresh => "icons/refresh.svg".into(),
+            IconName::Folder => "icons/folder.svg".into(),
         }
     }
 }

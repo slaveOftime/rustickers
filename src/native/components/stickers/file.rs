@@ -1,10 +1,12 @@
 use gpui::{
-    Context, Entity, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px, rgba,
+    Context, Entity, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
+    relative, rgba,
 };
 use gpui_component::{
     Disableable, alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView,
     v_flex,
 };
+use gpui_component::{Icon, green_500};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -120,6 +122,14 @@ impl FileSticker {
                 });
             }
         }
+
+        // sory by size
+        summaries.sort_by(|a, b| {
+            b.size_bytes
+                .unwrap_or(0)
+                .cmp(&a.size_bytes.unwrap_or(0))
+                .then_with(|| a.name.cmp(&b.name))
+        });
 
         let preview = if summaries.len() == 1 {
             let path = PathBuf::from(&summaries[0].path);
@@ -237,8 +247,17 @@ impl FileSticker {
     }
 
     fn summary_view(&self) -> gpui::AnyElement {
+        let show_size_share = self.summaries.len() > 1;
+        let total_known_size = if show_size_share {
+            self.summaries
+                .iter()
+                .filter_map(|item| item.size_bytes)
+                .sum::<u64>()
+        } else {
+            0
+        };
+
         v_flex()
-            .gap_2()
             .window_control_area(WindowControlArea::Drag)
             .children(self.summaries.iter().map(|item| {
                 let size_text = item
@@ -249,6 +268,14 @@ impl FileSticker {
                     .modified_at_ms
                     .map(crate::utils::time::format_unix_millis)
                     .unwrap_or_else(|| "Unknown".to_string());
+                let size_share_percent = if show_size_share && total_known_size > 0 {
+                    item.size_bytes
+                        .map(|size| size as f32 / total_known_size as f32)
+                } else {
+                    None
+                };
+                let size_share_text =
+                    size_share_percent.map(|percent| format!("{:.0}%", percent * 100.0));
                 let items_text = if item.is_dir {
                     match (item.file_count, item.folder_count) {
                         (Some(file_count), Some(folder_count)) => {
@@ -260,24 +287,48 @@ impl FileSticker {
                     None
                 };
 
-                v_flex()
-                    .gap_1()
-                    .text_sm()
+                div()
+                    .p_2()
+                    .rounded_md()
+                    .relative()
+                    .when_some(size_share_percent, |view, p| {
+                        view.child(
+                            div()
+                                .bg(green_500().alpha(0.2))
+                                .w(relative(p))
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0(),
+                        )
+                    })
                     .child(
-                        div()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child(item.name.clone()),
-                    )
-                    .child(div().text_xs().opacity(0.9).child(item.path.clone()))
-                    .child(
-                        h_flex()
-                            .text_xs()
-                            .opacity(0.8)
-                            .gap_3()
-                            .flex_wrap()
-                            .child(format!("Size: {size_text}"))
-                            .when_some(items_text, |view, text| view.child(text))
-                            .child(format!("Modified: {modified_text}")),
+                        v_flex()
+                            .gap_1()
+                            .text_sm()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .when(item.is_dir, |view| {
+                                        view.child(Icon::new(IconName::Folder))
+                                    })
+                                    .child(item.name.clone()),
+                            )
+                            .child(div().text_xs().opacity(0.9).child(item.path.clone()))
+                            .child(
+                                h_flex()
+                                    .text_xs()
+                                    .opacity(0.8)
+                                    .gap_3()
+                                    .flex_wrap()
+                                    .child(format!("Size: {size_text}"))
+                                    .when_some(size_share_text, |view, text| {
+                                        view.child(format!("{text} of total"))
+                                    })
+                                    .when_some(items_text, |view, text| view.child(text))
+                                    .child(format!("Modified: {modified_text}")),
+                            ),
                     )
             }))
             .into_any_element()
@@ -304,7 +355,7 @@ impl FileSticker {
             Some(FilePreview::WebView(webview)) => {
                 div().size_full().child(webview.clone()).into_any_element()
             }
-            None => div().p_2().child(self.summary_view()).into_any_element(),
+            None => div().child(self.summary_view()).into_any_element(),
         }
     }
 }
@@ -386,7 +437,6 @@ impl Render for FileSticker {
                 |view| {
                     view.child(
                         div()
-                            .p_2()
                             .bg(Rgba {
                                 a: 0.95,
                                 ..self.color.bg()
