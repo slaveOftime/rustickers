@@ -9,19 +9,20 @@ use windows::{
         System::{
             Com::{
                 CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                CoUninitialize,
+                CoUninitialize, IServiceProvider,
             },
             Variant::VARIANT,
         },
         UI::{
-            Shell::{IShellFolderViewDual, IShellWindows, IWebBrowserApp, ShellWindows},
-            WindowsAndMessaging::{
-                GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-                IsChild,
+            Shell::{
+                IShellBrowser, IShellFolderViewDual, IShellWindows, IWebBrowserApp,
+                SID_STopLevelBrowser, ShellWindows,
             },
+            WindowsAndMessaging::{FindWindowExW, GetForegroundWindow},
         },
     },
     core::Interface,
+    core::w,
 };
 
 pub fn selected_files_from_active_manager() -> anyhow::Result<Vec<PathBuf>> {
@@ -42,6 +43,47 @@ pub fn selected_files_from_active_manager() -> anyhow::Result<Vec<PathBuf>> {
 }
 
 #[cfg(target_os = "windows")]
+fn find_descendant_window_by_class(parent: HWND, class_name: windows::core::PCWSTR) -> HWND {
+    let direct = unsafe { FindWindowExW(Some(parent), None, class_name, None) }
+        .unwrap_or(HWND(std::ptr::null_mut()));
+    if !direct.0.is_null() {
+        return direct;
+    }
+
+    let mut child = unsafe { FindWindowExW(Some(parent), None, None, None) }
+        .unwrap_or(HWND(std::ptr::null_mut()));
+    while !child.0.is_null() {
+        let nested = find_descendant_window_by_class(child, class_name);
+        if !nested.0.is_null() {
+            return nested;
+        }
+
+        child = unsafe { FindWindowExW(Some(parent), Some(child), None, None) }
+            .unwrap_or(HWND(std::ptr::null_mut()));
+    }
+
+    HWND(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "windows")]
+fn get_active_explorer_tab(foreground_window: HWND) -> HWND {
+    let shell_tab = find_descendant_window_by_class(foreground_window, w!("ShellTabWindowClass"));
+    if !shell_tab.0.is_null() {
+        return shell_tab;
+    }
+
+    find_descendant_window_by_class(foreground_window, w!("TabWindowClass"))
+}
+
+#[cfg(target_os = "windows")]
+fn get_shell_browser_window(browser: &IWebBrowserApp) -> Option<HWND> {
+    let service_provider: IServiceProvider = browser.cast().ok()?;
+    let shell_browser: IShellBrowser =
+        unsafe { service_provider.QueryService(&SID_STopLevelBrowser) }.ok()?;
+    unsafe { shell_browser.GetWindow() }.ok()
+}
+
+#[cfg(target_os = "windows")]
 fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
     struct ComGuard;
     impl Drop for ComGuard {
@@ -58,26 +100,14 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
 
-    // 1. Get the actual focused element (e.g., the specific list view inside the active tab)
-    //    We need this because 'foreground_window' is just the outer Frame container.
-    let mut focused_hwnd = HWND(std::ptr::null_mut());
-    let id = unsafe { GetWindowThreadProcessId(foreground_window, None) };
-
-    let mut gui_info = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-
-    if unsafe { GetGUIThreadInfo(id, &mut gui_info).is_ok() } {
-        focused_hwnd = gui_info.hwndFocus;
-    }
+    let active_tab = get_active_explorer_tab(foreground_window);
 
     let shell_windows: IShellWindows =
         unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
     let count = unsafe { shell_windows.Count()? };
 
-    let mut matched_paths: Vec<PathBuf> = Vec::new();
     let mut fallback_paths: Vec<PathBuf> = Vec::new();
+    let mut foreground_fallback_paths: Vec<PathBuf> = Vec::new();
 
     for i in 0..count {
         let index = VARIANT::from(i);
@@ -149,36 +179,33 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
             continue;
         }
 
-        // --- FIX LOGIC START ---
-        // We check if this specific browser instance is the one the user is interacting with.
-        let is_active_tab = if browser_hwnd == foreground_window {
-            // Case: Legacy Explorer or Single Window mode where Frame == View
-            true
-        } else if !focused_hwnd.0.is_null() {
-            // Case: Tabbed Explorer.
-            // The 'focused_hwnd' (e.g., file list) should be a child of the 'browser_hwnd' (the tab).
-            browser_hwnd == focused_hwnd || unsafe { IsChild(browser_hwnd, focused_hwnd) }.as_bool()
-        } else {
-            false
-        };
+        if browser_hwnd == foreground_window {
+            if active_tab.0.is_null() {
+                return Ok(current_paths);
+            }
 
-        if is_active_tab {
-            matched_paths = current_paths;
-            break;
+            if let Some(shell_browser_window) = get_shell_browser_window(&browser) {
+                if shell_browser_window == active_tab {
+                    return Ok(current_paths);
+                }
+            }
+
+            if foreground_fallback_paths.is_empty() {
+                foreground_fallback_paths = current_paths;
+            }
+
+            continue;
         }
-        // --- FIX LOGIC END ---
 
         if fallback_paths.is_empty() {
             fallback_paths = current_paths;
         }
     }
 
-    if !matched_paths.is_empty() {
-        return Ok(matched_paths);
+    if !foreground_fallback_paths.is_empty() {
+        return Ok(foreground_fallback_paths);
     }
 
-    // Fallback: If we couldn't determine the active tab (e.g. focus was on title bar),
-    // return the first one we found that had files selected.
     Ok(fallback_paths)
 }
 
