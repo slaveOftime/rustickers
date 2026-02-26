@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::UNIX_EPOCH;
+use url::Url;
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::IconName;
@@ -28,12 +29,9 @@ pub struct FileStickerContent {
 }
 
 impl FileStickerContent {
-    pub fn from_paths(paths: &[PathBuf]) -> Self {
+    pub fn from_sources(sources: &[String]) -> Self {
         Self {
-            files: paths
-                .iter()
-                .map(|path| path.to_string_lossy().to_string())
-                .collect(),
+            files: sources.iter().map(|source| source.to_string()).collect(),
         }
     }
 
@@ -109,7 +107,7 @@ impl FileSticker {
         let mut summaries: Vec<FileSummary> = source_paths
             .iter()
             .map(|raw_path| FileSummary {
-                name: file_name_for_display(Path::new(raw_path)),
+                name: source_name_for_display(raw_path),
                 path: raw_path.clone(),
                 is_dir: false,
                 size_bytes: None,
@@ -198,8 +196,8 @@ impl FileSticker {
                 let summaries = build_summaries(source_paths);
                 let _ = entity.update_in(cx, move |this, window, cx| {
                     if summaries.len() == 1 {
-                        let path = PathBuf::from(&summaries[0].path);
-                        match build_preview(path.as_path(), window, cx) {
+                        let source = summaries[0].path.as_str();
+                        match build_preview(source, window, cx) {
                             Ok(preview) => {
                                 this.preview = preview;
                             }
@@ -512,12 +510,25 @@ impl Render for FileSticker {
 fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
     let mut summaries = Vec::with_capacity(source_paths.len());
     for raw_path in source_paths {
+        if crate::utils::url::is_url(raw_path.as_str()) {
+            summaries.push(FileSummary {
+                name: source_name_for_display(raw_path.as_str()),
+                path: raw_path,
+                is_dir: false,
+                size_bytes: None,
+                file_count: None,
+                folder_count: None,
+                modified_at_ms: None,
+            });
+            continue;
+        }
+
         let path = PathBuf::from(raw_path.clone());
         if path.exists() {
             summaries.push(build_summary(path));
         } else {
             summaries.push(FileSummary {
-                name: file_name_for_display(Path::new(&raw_path)),
+                name: source_name_for_display(raw_path.as_str()),
                 path: raw_path,
                 is_dir: false,
                 size_bytes: None,
@@ -632,10 +643,17 @@ fn summarize_directory(root: &Path) -> Option<DirectoryStats> {
 }
 
 fn build_preview(
-    path: &Path,
+    source: &str,
     window: &mut Window,
     cx: &mut Context<FileSticker>,
 ) -> Result<Option<FilePreview>, String> {
+    if crate::utils::url::is_url(source) {
+        return Ok(Some(FilePreview::WebView(
+            cx.new(|cx| SimpleWebView::new(source, window, cx)),
+        )));
+    }
+
+    let path = Path::new(source);
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return Ok(None);
     };
@@ -691,6 +709,28 @@ fn file_name_for_display(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(|name| name.to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn source_name_for_display(source: &str) -> String {
+    if crate::utils::url::is_url(source)
+        && let Ok(url) = Url::parse(source)
+    {
+        if let Some(last_segment) = url.path_segments().and_then(|segments| segments.last())
+            && !last_segment.is_empty()
+        {
+            return last_segment.to_string();
+        }
+
+        if let Some(host) = url.host_str()
+            && !host.is_empty()
+        {
+            return host.to_string();
+        }
+
+        return source.to_string();
+    }
+
+    file_name_for_display(Path::new(source))
 }
 
 fn format_size(bytes: u64) -> String {

@@ -17,6 +17,7 @@ use std::{
     sync::{RwLock, mpsc},
     time::{Duration, Instant},
 };
+use url::Url;
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
@@ -91,20 +92,29 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
     ) -> anyhow::Result<()> {
-        let files = file_manager::selected_files_from_active_manager()?;
-        if files.is_empty() {
-            return Err(anyhow::anyhow!("No file to preview"));
+        let selected_files = file_manager::selected_files_from_active_manager()?;
+        let sources = if selected_files.is_empty() {
+            clipboard_preview_source()
+                .map(|source| vec![source])
+                .unwrap_or_default()
+        } else {
+            selected_files
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect()
+        };
+
+        if sources.is_empty() {
+            return Err(anyhow::anyhow!(
+                "No file selected and clipboard does not contain a file path or URL"
+            ));
         }
 
         let default_size = FileSticker::default_window_size();
-        let title = if files.len() == 1 {
-            files[0]
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("File Sticker")
-                .to_string()
+        let title = if sources.len() == 1 {
+            source_title(&sources[0])
         } else {
-            format!("{} files", files.len())
+            format!("{} files", sources.len())
         };
 
         let screen_size = cx
@@ -114,9 +124,9 @@ impl StickerWindow {
         let left = (screen_size.width - default_size.width) / 2;
         let top = (screen_size.height - default_size.height) / 2;
 
-        let content = FileStickerContent::from_paths(&files).to_json();
+        let content = FileStickerContent::from_sources(&sources).to_json();
         let detail = StickerDetail {
-            id: generate_consistence_minus_id(&files),
+            id: generate_consistence_minus_id(&sources),
             title,
             state: StickerState::Open,
             left,
@@ -590,12 +600,63 @@ impl Render for StickerWindow {
     }
 }
 
-fn generate_consistence_minus_id(paths: &Vec<PathBuf>) -> i64 {
+fn source_title(source: &str) -> String {
+    if let Ok(url) = Url::parse(source) {
+        if let Some(last_segment) = url.path_segments().and_then(|segments| segments.last())
+            && !last_segment.is_empty()
+        {
+            return last_segment.to_string();
+        }
+
+        if let Some(host) = url.host_str()
+            && !host.is_empty()
+        {
+            return host.to_string();
+        }
+
+        return source.to_string();
+    }
+
+    PathBuf::from(source)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| source.to_string())
+}
+
+fn clipboard_preview_source() -> Option<String> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    let trimmed = text.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if crate::utils::url::is_url(trimmed) {
+        return Some(trimmed.to_string());
+    }
+
+    let normalized = trimmed
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(trimmed)
+        .to_string();
+
+    if PathBuf::from(&normalized).exists() {
+        return Some(normalized);
+    }
+
+    None
+}
+
+fn generate_consistence_minus_id(sources: &[String]) -> i64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    paths.hash(&mut hasher);
+    sources.hash(&mut hasher);
     let hash = hasher.finish() as i64;
     -hash.abs()
 }
