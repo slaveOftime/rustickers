@@ -63,8 +63,10 @@ pub struct FileSticker {
     color: StickerColor,
     store: ArcStickerStore,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+    source_paths: Vec<String>,
     summaries: Vec<FileSummary>,
     preview: Option<FilePreview>,
+    refreshing: bool,
     sticking: bool,
     error: Option<String>,
 }
@@ -103,57 +105,37 @@ impl FileSticker {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
         let parsed = FileStickerContent::from_json_or_raw(content);
-        let mut summaries = Vec::new();
-        let mut error = None;
+        let source_paths = parsed.files;
+        let mut summaries: Vec<FileSummary> = source_paths
+            .iter()
+            .map(|raw_path| FileSummary {
+                name: file_name_for_display(Path::new(raw_path)),
+                path: raw_path.clone(),
+                is_dir: false,
+                size_bytes: None,
+                file_count: None,
+                folder_count: None,
+                modified_at_ms: None,
+            })
+            .collect();
 
-        for raw_path in parsed.files {
-            let path = PathBuf::from(raw_path.clone());
-            if path.exists() {
-                summaries.push(build_summary(path));
-            } else {
-                summaries.push(FileSummary {
-                    name: file_name_for_display(Path::new(&raw_path)),
-                    path: raw_path,
-                    is_dir: false,
-                    size_bytes: None,
-                    file_count: None,
-                    folder_count: None,
-                    modified_at_ms: None,
-                });
-            }
-        }
+        summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
-        // sory by size
-        summaries.sort_by(|a, b| {
-            b.size_bytes
-                .unwrap_or(0)
-                .cmp(&a.size_bytes.unwrap_or(0))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-
-        let preview = if summaries.len() == 1 {
-            let path = PathBuf::from(&summaries[0].path);
-            match build_preview(path.as_path(), window, cx) {
-                Ok(preview) => preview,
-                Err(err) => {
-                    error = Some(err);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        Self {
+        let mut this = Self {
             id,
             color,
             store,
             sticker_events_tx,
+            source_paths,
             summaries,
-            preview,
+            preview: None,
+            refreshing: false,
             sticking: false,
-            error,
-        }
+            error: None,
+        };
+
+        this.spawn_refresh(window, cx);
+        this
     }
 
     fn is_persisted(&self) -> bool {
@@ -173,7 +155,7 @@ impl FileSticker {
             .icon(IconName::Check)
             .absolute()
             .top_0()
-            .right_9()
+            .right(px(68.0))
             .disabled(self.sticking)
             .bg(rgba(0x000000))
             .border_0()
@@ -182,6 +164,57 @@ impl FileSticker {
                 this.stick(window, cx);
             }))
             .into_any_element()
+    }
+
+    fn refresh_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        Button::new("refresh")
+            .icon(IconName::Refresh)
+            .absolute()
+            .top_0()
+            .right_9()
+            .disabled(self.refreshing)
+            .bg(rgba(0x000000))
+            .border_0()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.spawn_refresh(window, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn spawn_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.refreshing {
+            return;
+        }
+
+        self.refreshing = true;
+        self.error = None;
+        cx.notify();
+
+        let entity = cx.entity();
+        let source_paths = self.source_paths.clone();
+        window
+            .spawn(cx, async move |cx| {
+                let summaries = build_summaries(source_paths);
+                let _ = entity.update_in(cx, move |this, window, cx| {
+                    if summaries.len() == 1 {
+                        let path = PathBuf::from(&summaries[0].path);
+                        match build_preview(path.as_path(), window, cx) {
+                            Ok(preview) => {
+                                this.preview = preview;
+                            }
+                            Err(err) => {
+                                this.error = Some(err);
+                            }
+                        }
+                    }
+
+                    this.summaries = summaries;
+                    this.refreshing = false;
+                    cx.notify();
+                });
+            })
+            .detach();
     }
 
     fn stick(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -259,6 +292,15 @@ impl FileSticker {
 
         v_flex()
             .window_control_area(WindowControlArea::Drag)
+            .when(self.refreshing, |view| {
+                view.child(
+                    div()
+                        .p_2()
+                        .text_xs()
+                        .opacity(0.85)
+                        .child("Refreshing summaries..."),
+                )
+            })
             .children(self.summaries.iter().map(|item| {
                 let size_text = item
                     .size_bytes
@@ -461,7 +503,39 @@ impl Render for FileSticker {
             .when(!self.is_persisted() && window.is_window_hovered(), |view| {
                 view.child(self.stick_controls(cx))
             })
+            .when(window.is_window_hovered(), |view| {
+                view.child(self.refresh_controls(cx))
+            })
     }
+}
+
+fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
+    let mut summaries = Vec::with_capacity(source_paths.len());
+    for raw_path in source_paths {
+        let path = PathBuf::from(raw_path.clone());
+        if path.exists() {
+            summaries.push(build_summary(path));
+        } else {
+            summaries.push(FileSummary {
+                name: file_name_for_display(Path::new(&raw_path)),
+                path: raw_path,
+                is_dir: false,
+                size_bytes: None,
+                file_count: None,
+                folder_count: None,
+                modified_at_ms: None,
+            });
+        }
+    }
+
+    summaries.sort_by(|a, b| {
+        b.size_bytes
+            .unwrap_or(0)
+            .cmp(&a.size_bytes.unwrap_or(0))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    summaries
 }
 
 fn build_summary(path: PathBuf) -> FileSummary {
