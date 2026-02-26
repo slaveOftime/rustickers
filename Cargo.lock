@@ -6159,6 +6159,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui-wry",
+ "ignore",
  "interprocess",
  "lb-wry",
  "lyon",

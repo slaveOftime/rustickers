@@ -37,6 +37,7 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Co
 webbrowser = "1.1.0"
 url = "2.5.7"
 urlencoding = "2.1.3"
+ignore = "0.4.25"
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.

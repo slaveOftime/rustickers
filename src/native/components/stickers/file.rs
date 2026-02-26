@@ -7,7 +7,8 @@ use gpui_component::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::UNIX_EPOCH;
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
@@ -442,40 +443,67 @@ fn build_summary(path: PathBuf) -> FileSummary {
 }
 
 fn summarize_directory(root: &Path) -> Option<DirectoryStats> {
-    let mut stack = vec![root.to_path_buf()];
-    let mut size_bytes = 0_u64;
-    let mut file_count = 0_u64;
-    let mut folder_count = 0_u64;
+    use ignore::{WalkBuilder, WalkState};
 
-    while let Some(current_dir) = stack.pop() {
-        let entries = std::fs::read_dir(&current_dir).ok()?;
+    fn atomic_saturating_add(counter: &AtomicU64, value: u64) {
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_add(value))
+        });
+    }
 
-        for entry in entries.flatten() {
+    let root_path = Arc::new(root.to_path_buf());
+    let size_bytes = Arc::new(AtomicU64::new(0));
+    let file_count = Arc::new(AtomicU64::new(0));
+    let folder_count = Arc::new(AtomicU64::new(0));
+
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false);
+
+    builder.build_parallel().run(|| {
+        let root_path = Arc::clone(&root_path);
+        let size_bytes = Arc::clone(&size_bytes);
+        let file_count = Arc::clone(&file_count);
+        let folder_count = Arc::clone(&folder_count);
+
+        Box::new(move |result| {
+            let entry = match result {
+                Ok(entry) => entry,
+                Err(_) => return WalkState::Continue,
+            };
+
+            if entry.path() == root_path.as_path() {
+                return WalkState::Continue;
+            }
+
             let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
+                Some(file_type) => file_type,
+                None => return WalkState::Continue,
             };
 
             if file_type.is_dir() {
-                folder_count += 1;
-                stack.push(entry.path());
-                continue;
-            }
-
-            file_count += 1;
-
-            if file_type.is_file() {
+                atomic_saturating_add(&folder_count, 1);
+            } else if file_type.is_file() {
+                atomic_saturating_add(&file_count, 1);
                 if let Ok(metadata) = entry.metadata() {
-                    size_bytes = size_bytes.saturating_add(metadata.len());
+                    atomic_saturating_add(&size_bytes, metadata.len());
                 }
             }
-        }
-    }
+
+            WalkState::Continue
+        })
+    });
 
     Some(DirectoryStats {
-        size_bytes,
-        file_count,
-        folder_count,
+        size_bytes: size_bytes.load(Ordering::Relaxed),
+        file_count: file_count.load(Ordering::Relaxed),
+        folder_count: folder_count.load(Ordering::Relaxed),
     })
 }
 
