@@ -1,6 +1,6 @@
 use gpui::{
-    AppContext, Context, Entity, KeyDownEvent, Rgba, Window, WindowControlArea, div, prelude::*,
-    px, rgba,
+    Context, KeyDownEvent, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
+    rgba,
 };
 use gpui_component::{
     Disableable, alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView,
@@ -13,7 +13,6 @@ use std::time::UNIX_EPOCH;
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::IconName;
-use crate::native::components::webview::SimpleWebView;
 use crate::native::windows::StickerWindowEvent;
 use crate::storage::ArcStickerStore;
 
@@ -76,7 +75,7 @@ struct FileSummary {
 enum FilePreview {
     Markdown(String),
     Text(String),
-    Image(Entity<SimpleWebView>),
+    Image(PathBuf),
 }
 
 impl FileSticker {
@@ -85,8 +84,8 @@ impl FileSticker {
         color: StickerColor,
         store: ArcStickerStore,
         content: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
         let parsed = FileStickerContent::from_json_or_raw(content);
@@ -109,7 +108,7 @@ impl FileSticker {
 
         let preview = if summaries.len() == 1 {
             let path = PathBuf::from(&summaries[0].path);
-            match build_preview(path.as_path(), window, cx) {
+            match build_preview(path.as_path()) {
                 Ok(preview) => preview,
                 Err(err) => {
                     error = Some(err);
@@ -256,6 +255,29 @@ impl FileSticker {
             }))
             .into_any_element()
     }
+
+    fn preview_view(&self) -> gpui::AnyElement {
+        match &self.preview {
+            Some(FilePreview::Markdown(markdown)) => TextView::markdown("file-markdown", markdown)
+                .p_2()
+                .size_full()
+                .selectable(false)
+                .scrollable(true)
+                .into_any_element(),
+            Some(FilePreview::Text(text)) => div()
+                .p_2()
+                .size_full()
+                .overflow_scrollbar()
+                .text_sm()
+                .child(text.clone())
+                .into_any_element(),
+            Some(FilePreview::Image(path)) => div()
+                .size_full()
+                .child(img(path.as_path()).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            None => div().p_2().child(self.summary_view()).into_any_element(),
+        }
+    }
 }
 
 impl super::Sticker for FileSticker {
@@ -289,24 +311,6 @@ impl Render for FileSticker {
             ..self.color.bg()
         };
 
-        let preview_view = match &self.preview {
-            Some(FilePreview::Markdown(markdown)) => TextView::markdown("file-markdown", markdown)
-                .size_full()
-                .selectable(false)
-                .scrollable(true)
-                .into_any_element(),
-            Some(FilePreview::Text(text)) => div()
-                .size_full()
-                .overflow_scrollbar()
-                .text_sm()
-                .child(text.clone())
-                .into_any_element(),
-            Some(FilePreview::Image(webview)) => {
-                div().size_full().child(webview.clone()).into_any_element()
-            }
-            None => self.summary_view(),
-        };
-
         div()
             .size_full()
             .bg(bg_color)
@@ -319,10 +323,9 @@ impl Render for FileSticker {
             .window_control_area(WindowControlArea::Drag)
             .child(
                 div()
-                    .p_2()
                     .size_full()
                     .overflow_hidden()
-                    .child(preview_view),
+                    .child(self.preview_view()),
             )
             .when_some(self.error.as_ref(), |view, err| {
                 view.child(
@@ -380,11 +383,7 @@ fn build_summary(path: PathBuf) -> FileSummary {
     }
 }
 
-fn build_preview(
-    path: &Path,
-    window: &mut Window,
-    cx: &mut Context<FileSticker>,
-) -> Result<Option<FilePreview>, String> {
+fn build_preview(path: &Path) -> Result<Option<FilePreview>, String> {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return Ok(None);
     };
@@ -392,13 +391,7 @@ fn build_preview(
     let ext = ext.to_ascii_lowercase();
 
     if is_image_ext(ext.as_str()) {
-        let file_url = file_url(path);
-        let html = format!(
-            "<html><body style='margin:0;background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;'><img src='{file_url}' style='max-width:100%;max-height:100%;object-fit:contain;'/></body></html>"
-        );
-        return Ok(Some(FilePreview::Image(
-            cx.new(|cx| SimpleWebView::new(html.as_str(), window, cx)),
-        )));
+        return Ok(Some(FilePreview::Image(path.to_path_buf())));
     }
 
     if is_markdown_ext(ext.as_str()) {
@@ -447,7 +440,7 @@ fn is_markdown_ext(ext: &str) -> bool {
 fn is_text_ext(ext: &str) -> bool {
     matches!(
         ext,
-        "txt" | "log" | "json" | "toml" | "yaml" | "yml" | "rs" | "js" | "ts" | "css" | "html"
+        "txt" | "log" | "json" | "toml" | "yaml" | "yml" | "rs" | "js" | "ts" | "css" | "csv"
     )
 }
 
@@ -466,26 +459,4 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
-}
-
-fn file_url(path: &Path) -> String {
-    let mut path = path.to_string_lossy().replace('\\', "/");
-    if cfg!(target_os = "windows") && !path.starts_with('/') {
-        path = format!("/{path}");
-    }
-
-    format!("file://{}", percent_encode(path.as_str()))
-}
-
-fn percent_encode(input: &str) -> String {
-    let mut out = String::new();
-    for b in input.as_bytes() {
-        let c = *b as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '/' | ':') {
-            out.push(c);
-        } else {
-            out.push_str(format!("%{:02X}", b).as_str());
-        }
-    }
-    out
 }
