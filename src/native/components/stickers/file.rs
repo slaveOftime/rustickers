@@ -1,6 +1,6 @@
 use gpui::{
-    Context, KeyDownEvent, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
-    rgba,
+    Context, Entity, KeyDownEvent, ObjectFit, Rgba, Window, WindowControlArea, div, img,
+    prelude::*, px, rgba,
 };
 use gpui_component::{
     Disableable, alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView,
@@ -13,6 +13,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::IconName;
+use crate::native::components::webview::SimpleWebView;
 use crate::native::windows::StickerWindowEvent;
 use crate::storage::ArcStickerStore;
 
@@ -76,6 +77,7 @@ enum FilePreview {
     Markdown(String),
     Text(String),
     Image(PathBuf),
+    WebView(Entity<SimpleWebView>),
 }
 
 impl FileSticker {
@@ -84,8 +86,8 @@ impl FileSticker {
         color: StickerColor,
         store: ArcStickerStore,
         content: &str,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
         let parsed = FileStickerContent::from_json_or_raw(content);
@@ -108,7 +110,7 @@ impl FileSticker {
 
         let preview = if summaries.len() == 1 {
             let path = PathBuf::from(&summaries[0].path);
-            match build_preview(path.as_path()) {
+            match build_preview(path.as_path(), window, cx) {
                 Ok(preview) => preview,
                 Err(err) => {
                     error = Some(err);
@@ -275,6 +277,7 @@ impl FileSticker {
                 .size_full()
                 .child(img(path.as_path()).size_full().object_fit(ObjectFit::Cover))
                 .into_any_element(),
+            Some(FilePreview::WebView(webview)) => div().child(webview.clone()).into_any_element(),
             None => div().p_2().child(self.summary_view()).into_any_element(),
         }
     }
@@ -290,7 +293,7 @@ impl super::Sticker for FileSticker {
     }
 
     fn min_window_size() -> gpui::Size<i32> {
-        gpui::size(260, 180)
+        gpui::size(24, 24)
     }
 
     fn default_window_size() -> gpui::Size<i32> {
@@ -383,7 +386,11 @@ fn build_summary(path: PathBuf) -> FileSummary {
     }
 }
 
-fn build_preview(path: &Path) -> Result<Option<FilePreview>, String> {
+fn build_preview(
+    path: &Path,
+    window: &mut Window,
+    cx: &mut Context<FileSticker>,
+) -> Result<Option<FilePreview>, String> {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return Ok(None);
     };
@@ -401,6 +408,12 @@ fn build_preview(path: &Path) -> Result<Option<FilePreview>, String> {
             .map_err(|err| format!("Failed to read markdown preview: {err}"));
     }
 
+    if is_web_doc_ext(ext.as_str()) {
+        return file_url(path)
+            .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
+            .map(Some);
+    }
+
     if is_text_ext(ext.as_str()) {
         return read_text(path)
             .map(FilePreview::Text)
@@ -409,6 +422,16 @@ fn build_preview(path: &Path) -> Result<Option<FilePreview>, String> {
     }
 
     Ok(None)
+}
+
+fn file_url(path: &Path) -> Result<String, String> {
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|err| format!("Failed to resolve file path: {err}"))?;
+
+    url::Url::from_file_path(canonical_path)
+        .map(|url| url.to_string())
+        .map_err(|_| "Failed to convert local file path to file URL".to_string())
 }
 
 fn read_text(path: &Path) -> std::io::Result<String> {
@@ -435,6 +458,10 @@ fn is_image_ext(ext: &str) -> bool {
 
 fn is_markdown_ext(ext: &str) -> bool {
     matches!(ext, "md" | "markdown")
+}
+
+fn is_web_doc_ext(ext: &str) -> bool {
+    matches!(ext, "html" | "htm" | "pdf")
 }
 
 fn is_text_ext(ext: &str) -> bool {

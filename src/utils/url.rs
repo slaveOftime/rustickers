@@ -6,4 +6,7 @@ pub fn is_url(source: &str) -> bool {
         || source
             .get(..8)
             .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+        || source
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("file://"))
 }

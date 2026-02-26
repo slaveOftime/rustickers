@@ -6175,6 +6175,7 @@ dependencies = [
  "tracing-appender",
  "tracing-error",
  "tracing-subscriber",
+ "url",
  "webbrowser",
  "which 8.0.0",
  "windows 0.62.2",

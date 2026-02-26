@@ -205,12 +205,6 @@ impl StickerWindow {
             |window, cx| {
                 let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
-                let entity_clone = entity.clone();
-                window.on_window_should_close(cx, move |_, cx| {
-                    let id = entity_clone.read(cx).view.id(cx);
-                    let _ = Self::try_close(id, cx);
-                    true
-                });
                 cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
             },
         )?;
@@ -445,6 +439,7 @@ impl StickerWindow {
         }
 
         let id = self.view.id(cx);
+        let original_id = self.detail.id;
         let store = self.store.clone();
         let events = self.sticker_events_tx.clone();
 
@@ -457,7 +452,7 @@ impl StickerWindow {
 
             let _ = cx.update(|cx| {
                 if !Self::try_close(id, cx) {
-                    // Fallback in case not tracked.
+                    Self::try_close(original_id, cx);
                 }
             });
         })
