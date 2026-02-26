@@ -1,6 +1,15 @@
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
-use std::process::Command;
+use std::{ffi::CStr, os::raw::c_char, ptr};
+
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSAutoreleasePool, NSString};
+
+#[cfg(target_os = "macos")]
+use objc::{class, msg_send, sel, sel_impl};
+
+#[cfg(target_os = "macos")]
+use objc::runtime::Object;
 
 #[cfg(target_os = "windows")]
 use windows::{
@@ -211,37 +220,57 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
 
 #[cfg(target_os = "macos")]
 fn selected_files_macos() -> anyhow::Result<Vec<PathBuf>> {
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to set frontApp to name of first application process whose frontmost is true")
-        .arg("-e")
-        .arg("if frontApp is not \"Finder\" then return \"\"")
-        .arg("-e")
-        .arg("tell application \"Finder\"")
-        .arg("-e")
-        .arg("set selectedItems to selection")
-        .arg("-e")
-        .arg("if (count of selectedItems) is 0 then return \"\"")
-        .arg("-e")
-        .arg("set outputText to \"\"")
-        .arg("-e")
-        .arg("repeat with anItem in selectedItems")
-        .arg("-e")
-        .arg("set outputText to outputText & POSIX path of (anItem as alias) & linefeed")
-        .arg("-e")
-        .arg("end repeat")
-        .arg("-e")
-        .arg("return outputText")
-        .arg("-e")
-        .arg("end tell")
-        .output()?;
+    let script = r#"
+        tell application "System Events" to set frontApp to name of first application process whose frontmost is true
+        if frontApp is not "Finder" then return ""
+        tell application "Finder"
+            set selectedItems to selection
+            if (count of selectedItems) is 0 then return ""
+            set outputText to ""
+            repeat with anItem in selectedItems
+                set outputText to outputText & POSIX path of (anItem as alias) & linefeed
+            end repeat
+            return outputText
+        end tell
+    "#;
 
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
+    let output_text = unsafe {
+        let pool = NSAutoreleasePool::new(cocoa::base::nil);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let files = stdout
+        let source = NSString::alloc(cocoa::base::nil).init_str(script);
+        let apple_script: *mut Object = msg_send![class!(NSAppleScript), alloc];
+        let apple_script: *mut Object = msg_send![apple_script, initWithSource: source];
+
+        if apple_script.is_null() {
+            let _: () = msg_send![pool, drain];
+            return Ok(Vec::new());
+        }
+
+        let mut error: *mut Object = ptr::null_mut();
+        let descriptor: *mut Object = msg_send![apple_script, executeAndReturnError: &mut error];
+        if descriptor.is_null() {
+            let _: () = msg_send![pool, drain];
+            return Ok(Vec::new());
+        }
+
+        let ns_string: *mut Object = msg_send![descriptor, stringValue];
+        if ns_string.is_null() {
+            let _: () = msg_send![pool, drain];
+            return Ok(Vec::new());
+        }
+
+        let utf8_ptr: *const c_char = msg_send![ns_string, UTF8String];
+        if utf8_ptr.is_null() {
+            let _: () = msg_send![pool, drain];
+            return Ok(Vec::new());
+        }
+
+        let value = CStr::from_ptr(utf8_ptr).to_string_lossy().into_owned();
+        let _: () = msg_send![pool, drain];
+        value
+    };
+
+    let files = output_text
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
