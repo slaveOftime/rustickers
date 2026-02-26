@@ -14,6 +14,7 @@ use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerTy
 use crate::native::components::IconName;
 use crate::native::components::webview::SimpleWebView;
 use crate::native::windows::StickerWindowEvent;
+use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
 const MAX_TEXT_PREVIEW_BYTES: usize = 128 * 1024;
@@ -198,9 +199,11 @@ impl FileSticker {
 
         let store = self.store.clone();
         let sticker_events_tx = self.sticker_events_tx.clone();
+        let original_id = self.id;
         cx.spawn(
             async move |entity, cx| match store.insert_sticker(detail).await {
                 Ok(id) => {
+                    StickerWindow::swap_open_sticker_id(original_id, id);
                     let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
                     let _ = entity.update(cx, |this, cx| {
                         this.id = id;

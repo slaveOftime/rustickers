@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     MouseButton, Render, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, rgba, size,
+    WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
     transparent_black,
 };
 use gpui_component::{
@@ -149,6 +149,17 @@ impl StickerWindow {
         false
     }
 
+    pub fn swap_open_sticker_id(old_id: i64, new_id: i64) {
+        if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
+            if let Some((open_id, _)) = open_stickers
+                .iter_mut()
+                .find(|(open_id, _)| *open_id == old_id)
+            {
+                *open_id = new_id;
+            }
+        }
+    }
+
     fn open_with_detail(
         cx: &mut App,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -156,8 +167,22 @@ impl StickerWindow {
         detail: StickerDetail,
     ) -> anyhow::Result<()> {
         let id = detail.id;
-        if let Ok(open_stickers) = OPEN_STICKERS.read() {
-            if let Some((_, handle)) = open_stickers.iter().find(|(open_id, _)| *open_id == id) {
+        if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
+            if id <= 0 {
+                let mut closed_self = false;
+                if let Some(pos) = open_stickers.iter().position(|(open_id, _)| *open_id < 0) {
+                    let (id, handle) = open_stickers.remove(pos);
+                    closed_self = id == detail.id;
+                    let _ = handle.update(cx, |_, window, _| {
+                        window.remove_window();
+                    });
+                }
+                if closed_self {
+                    return Ok(());
+                }
+            } else if let Some((_, handle)) =
+                open_stickers.iter().find(|(open_id, _)| *open_id == id)
+            {
                 handle.update(cx, |_, window, _| {
                     window.activate_window();
                 })?;
@@ -193,7 +218,6 @@ impl StickerWindow {
 
         let handle = cx.open_window(
             WindowOptions {
-                kind: WindowKind::PopUp,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
@@ -204,15 +228,6 @@ impl StickerWindow {
                 ..Default::default()
             },
             |window, cx| {
-                cx.spawn(async |cx| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(300))
-                        .await;
-                    cx.update(|cx| {
-                        cx.activate(true);
-                    });
-                })
-                .detach();
                 let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
                 cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
