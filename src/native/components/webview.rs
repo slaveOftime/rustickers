@@ -1,4 +1,4 @@
-use gpui::{AppContext, IntoElement, Render};
+use gpui::{AppContext, IntoElement, Render, Rgba};
 use gpui::{Context, Entity, Window};
 use gpui_wry::WebView;
 use std::fs;
@@ -74,7 +74,9 @@ impl SimpleWebView {
                 builder.with_html(source)
             };
 
-            WebView::new(builder.build_as_child(window).unwrap(), window, cx)
+            let webview = WebView::new(builder.build_as_child(window).unwrap(), window, cx);
+            let _ =  webview.focus_parent();
+            webview
         });
 
         Self { webview }
@@ -82,6 +84,18 @@ impl SimpleWebView {
 
     pub fn reload(&self, cx: &mut Context<Self>) {
         let _ = self.webview.read(cx).reload();
+    }
+
+    pub fn set_bg(&mut self, color: Rgba, cx: &mut Context<Self>) {
+        let color = (
+            (color.r * 255.0) as u8,
+            (color.g * 255.0) as u8,
+            (color.b * 255.0) as u8,
+            (color.a * 255.0) as u8,
+        );
+        let _ = self
+            .webview
+            .update(cx, |this, _| this.set_background_color(color));
     }
 }
 

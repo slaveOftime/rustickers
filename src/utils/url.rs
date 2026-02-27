@@ -17,12 +17,6 @@ pub fn is_url(source: &str) -> bool {
 }
 
 pub fn create_local_file_url(path: &Path) -> Result<String, String> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|err| format!("Failed to resolve file path: {err}"))?;
-
-    Ok(format!(
-        "local://localhost/{}",
-        canonical_path.to_string_lossy()
-    ))
+    let path = path.to_string_lossy().trim().to_string();
+    Ok(format!("local://localhost/{}", path))
 }

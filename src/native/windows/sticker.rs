@@ -145,6 +145,7 @@ impl StickerWindow {
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {
+        tracing::info!("Trying to close sticker with id: {}", id);
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             if let Some(pos) = open_stickers.iter().position(|(open_id, _)| *open_id == id) {
                 let (_, handle) = open_stickers.remove(pos);

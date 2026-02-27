@@ -211,6 +211,18 @@ impl FileSticker {
         cx: &mut Context<Self>,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
+        if id <= 0 {
+            window.activate_window();
+            cx.observe_keystrokes(move |this, event, window, cx| {
+                if !this.is_persisted() && event.keystroke.key == "escape" {
+                    if !StickerWindow::try_close(id, cx) {
+                        window.remove_window();
+                    }
+                }
+            })
+            .detach();
+        }
+
         let parsed = FileStickerContent::from_json_or_raw(content);
         let source_paths = parsed.files;
         let mut summaries: Vec<FileSummary> = source_paths
@@ -225,12 +237,14 @@ impl FileSticker {
             color,
             store,
             sticker_events_tx,
+
             source_paths,
             summaries,
             preview: None,
             preview_editor: None,
             refreshing: false,
             sticking: false,
+
             error: None,
             watcher: None,
             watch_events_rx: None,
@@ -312,7 +326,11 @@ impl FileSticker {
         window
             .spawn(cx, async move |cx| {
                 let _ = entity.update_in(cx, move |this, window, cx| {
-                    match build_preview(source.as_str(), window, cx) {
+                    let bg = Rgba {
+                        a: 0.5,
+                        ..this.color.bg()
+                    };
+                    match build_preview(source.as_str(), bg, window, cx) {
                         Ok(preview) => {
                             this.preview = preview;
                             this.preview_editor = None;
@@ -667,9 +685,7 @@ impl FileSticker {
                                     .gap_3()
                                     .flex_wrap()
                                     .child(format!("Size: {size_text}"))
-                                    .when_some(size_share_text, |view, text| {
-                                        view.child(format!("{text} of total"))
-                                    })
+                                    .when_some(size_share_text, |view, text| view.child(text))
                                     .when_some(items_text, |view, text| view.child(text))
                                     .child(format!("Modified: {modified_text}")),
                             ),
@@ -1077,13 +1093,16 @@ fn summarize_directory(root: &Path) -> Option<DirectoryStats> {
 
 fn build_preview(
     source: &str,
+    color: Rgba,
     window: &mut Window,
     cx: &mut Context<FileSticker>,
 ) -> Result<Option<FilePreview>, String> {
     if crate::utils::url::is_url(source) {
-        return Ok(Some(FilePreview::WebView(
-            cx.new(|cx| SimpleWebView::new(source, window, cx)),
-        )));
+        return Ok(Some(FilePreview::WebView(cx.new(|cx| {
+            let mut view = SimpleWebView::new(source, window, cx);
+            view.set_bg(color, cx);
+            view
+        }))));
     }
 
     let path = Path::new(source);
@@ -1110,7 +1129,13 @@ fn build_preview(
 
     if crate::utils::file::is_web_doc_ext(ext) {
         return crate::utils::url::create_local_file_url(path)
-            .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
+            .map(|url| {
+                FilePreview::WebView(cx.new(|cx| {
+                    let mut view = SimpleWebView::new(&url, window, cx);
+                    view.set_bg(color, cx);
+                    view
+                }))
+            })
             .map(Some);
     }
 
