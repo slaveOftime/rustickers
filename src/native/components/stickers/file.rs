@@ -35,6 +35,9 @@ use crate::storage::ArcStickerStore;
 
 const MAX_TEXT_PREVIEW_BYTES: usize = 128 * 1024;
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
+const EMPTY_FILE_LIST_JSON: &str = "{\"files\":[]}";
+const EDIT_HINT_TEXT: &str = "double-click to edit";
+const UNKNOWN_TEXT: &str = "Unknown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStickerContent {
@@ -44,28 +47,28 @@ pub struct FileStickerContent {
 impl FileStickerContent {
     pub fn from_sources(sources: &[String]) -> Self {
         Self {
-            files: sources.iter().map(|source| source.to_string()).collect(),
+            files: sources.iter().map(|source| source.to_owned()).collect(),
         }
     }
 
     pub fn from_json_or_raw(content: &str) -> Self {
-        let parsed = serde_json::from_str::<Self>(content).ok();
-        match parsed {
-            Some(data) if !data.files.is_empty() => data,
-            _ => {
-                if content.trim().is_empty() {
-                    Self { files: Vec::new() }
-                } else {
-                    Self {
-                        files: vec![content.to_string()],
-                    }
-                }
+        if let Ok(data) = serde_json::from_str::<Self>(content)
+            && !data.files.is_empty()
+        {
+            return data;
+        }
+
+        if content.trim().is_empty() {
+            Self { files: Vec::new() }
+        } else {
+            Self {
+                files: vec![content.to_owned()],
             }
         }
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{\"files\":[]}".to_string())
+        serde_json::to_string(self).unwrap_or_else(|_| EMPTY_FILE_LIST_JSON.to_owned())
     }
 }
 
@@ -202,6 +205,10 @@ impl FilePreview {
 }
 
 impl FileSticker {
+    pub fn default_window_size_for_sources(sources: &[&str]) -> gpui::Size<i32> {
+        build_default_size(sources)
+    }
+
     pub fn new(
         id: i64,
         color: StickerColor,
@@ -273,7 +280,7 @@ impl FileSticker {
 
     fn stick_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         Button::new("stick")
-            .icon(IconName::Check)
+            .icon(IconName::Pin)
             .absolute()
             .top_0()
             .right(px(68.0))
@@ -298,22 +305,44 @@ impl FileSticker {
             .border_0()
             .cursor_pointer()
             .on_click(cx.listener(|this, _, window, cx| {
-                match &this.preview {
-                    Some(FilePreview::WebView(web)) => {
-                        let _ = web.update(cx, |web, cx| web.reload(cx));
-                        this.spawn_refresh_summaries(window, cx);
-                        return;
-                    }
-                    _ => {}
+                if let Some(FilePreview::WebView(web)) = &this.preview {
+                    let _ = web.update(cx, |web, cx| web.reload(cx));
+                    this.spawn_refresh_summaries(window, cx);
+                    return;
                 }
+
                 this.spawn_refresh_preview(window, cx);
                 this.spawn_refresh_summaries(window, cx);
             }))
             .into_any_element()
     }
 
+    fn handle_preview_double_click(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.click_count >= 2 {
+            self.start_preview_edit(window, cx);
+        }
+    }
+
+    fn maybe_edit_hint(&self, editable: bool) -> Option<gpui::AnyElement> {
+        editable.then(|| {
+            div()
+                .absolute()
+                .right_2()
+                .top_8()
+                .text_xs()
+                .opacity(0.7)
+                .child(EDIT_HINT_TEXT)
+                .into_any_element()
+        })
+    }
+
     fn spawn_refresh_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let source = (self.source_paths.len() == 1).then(|| self.source_paths[0].clone());
+        let source = (self.source_paths.len() == 1).then(|| self.source_paths[0].to_owned());
 
         let Some(source) = source else {
             self.preview = None;
@@ -513,18 +542,7 @@ impl FileSticker {
 
                         let should_break = entity
                             .update_in(cx, |this, window, cx| {
-                                if !this.watch_pending.load(Ordering::Acquire) {
-                                    return true;
-                                }
-
-                                if this.refreshing {
-                                    return false;
-                                }
-
-                                this.watch_pending.store(false, Ordering::Release);
-                                this.spawn_refresh_preview(window, cx);
-                                this.spawn_refresh_summaries(window, cx);
-                                true
+                                this.refresh_from_watch_if_ready(window, cx)
                             })
                             .unwrap_or(true);
 
@@ -535,6 +553,21 @@ impl FileSticker {
                 }
             })
             .detach();
+    }
+
+    fn refresh_from_watch_if_ready(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.watch_pending.load(Ordering::Acquire) {
+            return true;
+        }
+
+        if self.refreshing {
+            return false;
+        }
+
+        self.watch_pending.store(false, Ordering::Release);
+        self.spawn_refresh_preview(window, cx);
+        self.spawn_refresh_summaries(window, cx);
+        true
     }
 
     fn stick(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -625,11 +658,11 @@ impl FileSticker {
                 let size_text = item
                     .size_bytes
                     .map(format_size)
-                    .unwrap_or_else(|| "Unknown".to_string());
+                    .unwrap_or_else(|| UNKNOWN_TEXT.to_owned());
                 let modified_text = item
                     .modified_at_ms
                     .map(crate::utils::time::format_unix_millis)
-                    .unwrap_or_else(|| "Unknown".to_string());
+                    .unwrap_or_else(|| UNKNOWN_TEXT.to_owned());
                 let size_share_percent = if show_size_share && total_known_size > 0 {
                     item.size_bytes
                         .map(|size| size as f32 / total_known_size as f32)
@@ -643,7 +676,7 @@ impl FileSticker {
                         (Some(file_count), Some(folder_count)) => {
                             Some(format!("Items: {file_count} files, {folder_count} folders"))
                         }
-                        _ => Some("Items: Unknown".to_string()),
+                        _ => Some(format!("Items: {UNKNOWN_TEXT}")),
                     }
                 } else {
                     None
@@ -694,7 +727,7 @@ impl FileSticker {
             .into_any_element()
     }
 
-    fn preview_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn preview_view(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         if let Some(editor) = self.preview_editor.as_ref() {
             return v_flex()
                 .size_full()
@@ -735,9 +768,7 @@ impl FileSticker {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                        if event.click_count >= 2 {
-                            this.start_preview_edit(window, cx);
-                        }
+                        this.handle_preview_double_click(event, window, cx);
                     }),
                 )
                 .child(
@@ -746,17 +777,10 @@ impl FileSticker {
                         .selectable(false)
                         .scrollable(true),
                 )
-                .when(*editable, |view| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .right_2()
-                            .top_2()
-                            .text_xs()
-                            .opacity(0.7)
-                            .child("double-click to edit"),
-                    )
-                })
+                .when_some(
+                    self.maybe_edit_hint(*editable && window.is_window_hovered()),
+                    |view, hint| view.child(hint),
+                )
                 .into_any_element(),
             Some(FilePreview::Text {
                 content, editable, ..
@@ -768,23 +792,14 @@ impl FileSticker {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                        if event.click_count >= 2 {
-                            this.start_preview_edit(window, cx);
-                        }
+                        this.handle_preview_double_click(event, window, cx);
                     }),
                 )
                 .child(content.clone())
-                .when(*editable, |view| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .right_2()
-                            .top_2()
-                            .text_xs()
-                            .opacity(0.7)
-                            .child("double-click to edit"),
-                    )
-                })
+                .when_some(
+                    self.maybe_edit_hint(*editable && window.is_window_hovered()),
+                    |view, hint| view.child(hint),
+                )
                 .into_any_element(),
             Some(FilePreview::Code {
                 content,
@@ -796,9 +811,7 @@ impl FileSticker {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                        if event.click_count >= 2 {
-                            this.start_preview_edit(window, cx);
-                        }
+                        this.handle_preview_double_click(event, window, cx);
                     }),
                 )
                 .child(
@@ -807,17 +820,10 @@ impl FileSticker {
                         .selectable(false)
                         .scrollable(true),
                 )
-                .when(*editable, |view| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .right_2()
-                            .top_2()
-                            .text_xs()
-                            .opacity(0.7)
-                            .child("double-click to edit"),
-                    )
-                })
+                .when_some(
+                    self.maybe_edit_hint(*editable && window.is_window_hovered()),
+                    |view, hint| view.child(hint),
+                )
                 .into_any_element(),
             Some(FilePreview::Image(image)) => div()
                 .size_full()
@@ -893,11 +899,11 @@ impl Render for FileSticker {
                 },
             )
             .child(
-                div()
-                    .h_full()
-                    .flex_shrink()
-                    .overflow_hidden()
-                    .child(v_flex().overflow_y_scrollbar().child(self.preview_view(cx))),
+                div().h_full().flex_shrink().overflow_hidden().child(
+                    v_flex()
+                        .overflow_y_scrollbar()
+                        .child(self.preview_view(window, cx)),
+                ),
             )
             .when_some(self.error.as_ref(), |view, err| {
                 view.child(
@@ -980,7 +986,7 @@ fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
             continue;
         }
 
-        let path = PathBuf::from(raw_path.clone());
+        let path = PathBuf::from(raw_path.as_str());
         if path.exists() {
             summaries.push(build_summary(path));
         } else {
@@ -1177,6 +1183,62 @@ fn build_preview(
     }
 
     Ok(None)
+}
+
+fn build_default_size(sources: &[&str]) -> gpui::Size<i32> {
+    if sources.is_empty() {
+        return <FileSticker as super::Sticker>::default_window_size();
+    }
+
+    if sources.len() > 1 {
+        let row_bonus = (sources.len().saturating_sub(1) as i32).clamp(0, 14) * 12;
+        return gpui::size(300, (380 + row_bonus).clamp(380, 560));
+    }
+
+    let source = &sources[0];
+
+    let ext = if crate::utils::url::is_url(source) {
+        Url::parse(source).ok().and_then(|url| {
+            Path::new(url.path())
+                .extension()
+                .and_then(|raw_ext| raw_ext.to_str())
+                .map(|raw_ext| raw_ext.to_ascii_lowercase())
+        })
+    } else {
+        let path = Path::new(source);
+
+        if path.is_dir() {
+            return gpui::size(300, 200);
+        }
+
+        path.extension()
+            .and_then(|raw_ext| raw_ext.to_str())
+            .map(|raw_ext| raw_ext.to_ascii_lowercase())
+    };
+
+    if let Some(ext) = ext.as_deref() {
+        if crate::utils::file::is_image_ext(ext) {
+            return gpui::size(480, 480);
+        }
+
+        if crate::utils::file::is_web_doc_ext(ext) || crate::utils::file::is_video_ext(ext) {
+            return gpui::size(760, 640);
+        }
+
+        if crate::utils::file::is_markdown_ext(ext) {
+            return gpui::size(640, 760);
+        }
+
+        if crate::utils::file::is_code_ext(ext) {
+            return gpui::size(640, 760);
+        }
+
+        if crate::utils::file::is_text_ext(ext) {
+            return gpui::size(540, 640);
+        }
+    }
+
+    return gpui::size(400, 200);
 }
 
 fn wrap_code_as_markdown(language: &str, content: &str) -> String {

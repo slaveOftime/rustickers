@@ -110,7 +110,10 @@ impl StickerWindow {
             ));
         }
 
-        let default_size = FileSticker::default_window_size();
+        let default_size = FileSticker::default_window_size_for_sources(
+            &sources.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+        
         let title = if sources.len() == 1 {
             source_title(&sources[0])
         } else {
