@@ -79,6 +79,10 @@ impl SimpleWebView {
 
         Self { webview }
     }
+
+    pub fn reload(&self, cx: &mut Context<Self>) {
+        self.webview.read(cx).reload();
+    }
 }
 
 impl Render for SimpleWebView {

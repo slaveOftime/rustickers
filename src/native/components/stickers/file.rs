@@ -172,7 +172,8 @@ impl FileSticker {
         };
 
         this.init_file_watcher();
-        this.spawn_refresh(window, cx);
+        this.spawn_refresh_preview(window, cx);
+        this.spawn_refresh_summaries(window, cx);
         this
     }
 
@@ -215,12 +216,55 @@ impl FileSticker {
             .border_0()
             .cursor_pointer()
             .on_click(cx.listener(|this, _, window, cx| {
-                this.spawn_refresh(window, cx);
+                match &this.preview {
+                    Some(FilePreview::WebView(web)) => {
+                        let _ = web.update(cx, |web, cx| web.reload(cx));
+                        this.spawn_refresh_summaries(window, cx);
+                        return;
+                    }
+                    _ => {}
+                }
+                this.spawn_refresh_preview(window, cx);
+                this.spawn_refresh_summaries(window, cx);
             }))
             .into_any_element()
     }
 
-    fn spawn_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn spawn_refresh_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = if self.source_paths.len() == 1 {
+            Some(self.source_paths[0].clone())
+        } else {
+            None
+        };
+
+        let Some(source) = source else {
+            self.preview = None;
+            self.preview_editor = None;
+            cx.notify();
+            return;
+        };
+
+        let entity = cx.entity();
+        window
+            .spawn(cx, async move |cx| {
+                let _ = entity.update_in(cx, move |this, window, cx| {
+                    match build_preview(source.as_str(), window, cx) {
+                        Ok(preview) => {
+                            this.preview = preview;
+                            this.preview_editor = None;
+                        }
+                        Err(err) => {
+                            this.error = Some(err);
+                        }
+                    }
+
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn spawn_refresh_summaries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.refreshing {
             return;
         }
@@ -234,20 +278,7 @@ impl FileSticker {
         window
             .spawn(cx, async move |cx| {
                 let summaries = build_summaries(source_paths);
-                let _ = entity.update_in(cx, move |this, window, cx| {
-                    if summaries.len() == 1 {
-                        let source = summaries[0].path.as_str();
-                        match build_preview(source, window, cx) {
-                            Ok(preview) => {
-                                this.preview = preview;
-                                this.preview_editor = None;
-                            }
-                            Err(err) => {
-                                this.error = Some(err);
-                            }
-                        }
-                    }
-
+                let _ = entity.update_in(cx, move |this, _window, cx| {
                     this.summaries = summaries;
                     this.refreshing = false;
                     cx.notify();
@@ -343,7 +374,7 @@ impl FileSticker {
 
                 self.preview_editor = None;
                 self.error = None;
-                self.spawn_refresh(window, cx);
+                self.spawn_refresh_summaries(window, cx);
             }
             Err(err) => {
                 self.error = Some(format!("Failed to save preview file: {err}"));
@@ -440,7 +471,8 @@ impl FileSticker {
                                 }
 
                                 this.watch_pending.store(false, Ordering::Release);
-                                this.spawn_refresh(window, cx);
+                                this.spawn_refresh_preview(window, cx);
+                                this.spawn_refresh_summaries(window, cx);
                                 true
                             })
                             .unwrap_or(true);
@@ -829,6 +861,10 @@ impl Render for FileSticker {
                         .child(Alert::error("file-preview-error", err.as_str())),
                 )
             })
+            .when(
+                (self.preview.is_none() || self.summaries.is_empty()) && self.refreshing,
+                |view| view.child(div().p_2().text_sm().opacity(0.85).child("Loading ...")),
+            )
             .when(
                 self.preview.is_some() && window.is_window_hovered(),
                 |view| {
