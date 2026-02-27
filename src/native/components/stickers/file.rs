@@ -77,7 +77,6 @@ pub struct FileSticker {
     summaries: Vec<FileSummary>,
     preview: Option<FilePreview>,
     preview_editor: Option<Entity<InputState>>,
-    preview_editing: bool,
     refreshing: bool,
     sticking: bool,
     error: Option<String>,
@@ -161,7 +160,6 @@ impl FileSticker {
             summaries,
             preview: None,
             preview_editor: None,
-            preview_editing: false,
             refreshing: false,
             sticking: false,
             error: None,
@@ -242,7 +240,6 @@ impl FileSticker {
                             Ok(preview) => {
                                 this.preview = preview;
                                 this.preview_editor = None;
-                                this.preview_editing = false;
                             }
                             Err(err) => {
                                 this.error = Some(err);
@@ -292,7 +289,6 @@ impl FileSticker {
             }
             state
         }));
-        self.preview_editing = true;
         self.error = None;
         cx.notify();
     }
@@ -345,7 +341,6 @@ impl FileSticker {
                 }
 
                 self.preview_editor = None;
-                self.preview_editing = false;
                 self.error = None;
                 self.spawn_refresh(window, cx);
             }
@@ -618,9 +613,7 @@ impl FileSticker {
     }
 
     fn preview_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.preview_editing
-            && let Some(editor) = self.preview_editor.as_ref()
-        {
+        if let Some(editor) = self.preview_editor.as_ref() {
             return v_flex()
                 .size_full()
                 .gap_1()
@@ -1080,7 +1073,7 @@ fn build_preview(
                 source_path: path.to_path_buf(),
                 content: content,
                 language: language.to_string(),
-                editable: false,
+                editable: true,
             })
             .map(Some)
             .map_err(|err| format!("Failed to read code preview: {err}"));
