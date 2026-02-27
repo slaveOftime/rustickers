@@ -46,6 +46,7 @@ pub struct StickerWindow {
 
     last_bounds: Option<(i32, i32, i32, i32)>,
     last_bounds_change_at: Option<Instant>,
+    last_scale_factor: f32,
 }
 
 impl StickerWindow {
@@ -303,6 +304,7 @@ impl StickerWindow {
             view,
             last_bounds: None,
             last_bounds_change_at: None,
+            last_scale_factor: window.scale_factor(),
             error: None,
         }
     }
@@ -378,7 +380,18 @@ impl StickerWindow {
     }
 
     fn tick_bounds_state(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let current_scale = window.scale_factor();
         let current = self.current_bounds(window);
+
+        // If scale factor changed (DPI change due to monitor connect/disconnect),
+        // update tracking state without scheduling a save to avoid persisting
+        // DPI-adjusted logical bounds that would cause wrong size on next launch.
+        if (self.last_scale_factor - current_scale).abs() > 0.001 {
+            self.last_scale_factor = current_scale;
+            self.last_bounds = Some(current);
+            self.last_bounds_change_at = None;
+            return;
+        }
 
         let changed = self.last_bounds.map(|prev| prev != current).unwrap_or(true);
 
@@ -419,6 +432,16 @@ impl StickerWindow {
     }
 
     fn change_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let current_scale = window.scale_factor();
+
+        // If scale factor changed since last tracking update, this change is
+        // DPI-induced (monitor connect/disconnect) — skip saving.
+        if (self.last_scale_factor - current_scale).abs() > 0.001 {
+            self.last_scale_factor = current_scale;
+            self.last_bounds = Some(self.current_bounds(window));
+            return;
+        }
+
         let bounds = window.bounds();
 
         let (left, top, width, height) = (
