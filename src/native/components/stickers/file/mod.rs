@@ -5,7 +5,6 @@ mod summary;
 mod utils;
 mod watcher;
 
-use audio::AudioState;
 use futures::channel::mpsc as async_mpsc;
 use gpui::{Context, Entity, Rgba, Window, WindowControlArea, div, prelude::*, px, rgba};
 use gpui_component::{
@@ -41,8 +40,6 @@ pub struct FileSticker {
     watch_loop_started: bool,
     watch_pending: Arc<AtomicBool>,
     watch_stop: Arc<AtomicBool>,
-    // audio
-    audio: AudioState,
 }
 
 impl FileSticker {
@@ -66,8 +63,7 @@ impl FileSticker {
                     if !StickerWindow::try_close(id, cx) {
                         window.remove_window();
                     }
-                    this.audio.handle = None;
-                    this.audio.event_rx = None;
+                    this.stop_audio();
                 }
             })
             .detach();
@@ -98,7 +94,6 @@ impl FileSticker {
             watch_loop_started: false,
             watch_pending: Arc::new(AtomicBool::new(false)),
             watch_stop: Arc::new(AtomicBool::new(false)),
-            audio: AudioState::default(),
         };
 
         this.init_file_watcher();
@@ -226,9 +221,7 @@ impl super::Sticker for FileSticker {
     fn save_on_close(&mut self, _cx: &mut Context<Self>) -> bool {
         self.watch_stop.store(true, Ordering::Release);
         self.watcher = None;
-        self.audio.handle = None;
-        self.audio.event_rx = None;
-        self.audio.handle = None;
+        self.stop_audio();
         true
     }
 
@@ -302,7 +295,18 @@ impl Render for FileSticker {
                 |view| view.child(div().p_2().text_sm().opacity(0.85).child("Loading ...")),
             )
             .when(
-                self.preview.is_some() && self.audio.handle.is_none() && window.is_window_hovered(),
+                self.preview.is_some()
+                    && !matches!(
+                        self.preview,
+                        Some(FilePreview::Audio {
+                            state: audio::AudioState {
+                                handle: Some(_),
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                    && window.is_window_hovered(),
                 |view| {
                     view.child(
                         div()

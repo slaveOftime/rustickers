@@ -36,16 +36,19 @@ impl super::FileSticker {
                         ..this.color.bg()
                     };
                     match build_preview(source.as_str(), bg, window, cx) {
-                        Ok(preview) => {
-                            if let Some(FilePreview::Audio { source_path }) = &preview {
+                        Ok(mut preview) => {
+                            if let Some(FilePreview::Audio { source_path, state }) =
+                                preview.as_mut()
+                            {
                                 let path = source_path.clone();
-                                this.audio.handle = None;
-                                this.audio.event_rx = None;
-                                this.audio.is_playing = true;
-                                this.audio.anim_loop_started = false;
+                                state.handle = None;
+                                state.event_rx = None;
+                                state.is_playing = true;
+                                state.anim_loop_started = false;
+                                state.frame_metrics = super::audio::AudioFrameMetrics::default();
                                 let mut handle = super::audio::spawn_audio_thread(path.clone());
-                                this.audio.event_rx = handle.take_event_rx();
-                                this.audio.handle = Some(handle);
+                                state.event_rx = handle.take_event_rx();
+                                state.handle = Some(handle);
                                 this.spawn_load_audio_metadata(path, cx);
                             }
                             this.preview = preview;

@@ -337,105 +337,155 @@ pub(super) fn load_audio_metadata(path: &Path) -> AudioMetadata {
 // ── FileSticker audio methods ─────────────────────────────────────────────────
 
 impl super::FileSticker {
-    pub(super) fn audio_toggle_play(&mut self, cx: &mut Context<Self>) {
-        if let Some(handle) = &self.audio.handle {
-            if self.audio.is_playing {
-                let _ = handle.cmd_tx.send(AudioCmd::Pause);
-                self.audio.is_playing = false;
-            } else {
-                let _ = handle.cmd_tx.send(AudioCmd::Play);
-                self.audio.is_playing = true;
-            }
+    fn audio_state(&self) -> Option<&AudioState> {
+        match &self.preview {
+            Some(super::preview::FilePreview::Audio { state, .. }) => Some(state),
+            _ => None,
         }
-        cx.notify();
+    }
+
+    fn audio_state_mut(&mut self) -> Option<&mut AudioState> {
+        match &mut self.preview {
+            Some(super::preview::FilePreview::Audio { state, .. }) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub(super) fn stop_audio(&mut self) {
+        if let Some(state) = self.audio_state_mut() {
+            state.handle = None;
+            state.event_rx = None;
+            state.is_playing = false;
+            state.anim_loop_started = false;
+            state.frame_metrics = AudioFrameMetrics::default();
+        }
+    }
+
+    pub(super) fn audio_toggle_play(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.audio_state_mut() {
+            if let Some(handle) = &state.handle {
+                if state.is_playing {
+                    let _ = handle.cmd_tx.send(AudioCmd::Pause);
+                    state.is_playing = false;
+                } else {
+                    let _ = handle.cmd_tx.send(AudioCmd::Play);
+                    state.is_playing = true;
+                }
+            }
+            cx.notify();
+        }
     }
 
     fn audio_cycle_play_mode(&mut self) {
-        self.audio.play_mode = self.audio.play_mode.cycle();
+        if let Some(state) = self.audio_state_mut() {
+            state.play_mode = state.play_mode.cycle();
+        }
     }
 
     fn poll_audio_events(&mut self, cx: &mut Context<Self>) {
         let mut playback_ended = false;
         let mut disconnected = false;
         let mut latest_frame = None;
+        let mut should_autoplay = false;
 
-        loop {
-            let recv_result = match self.audio.event_rx.as_ref() {
-                Some(rx) => rx.try_recv(),
-                None => break,
+        {
+            let Some(state) = self.audio_state_mut() else {
+                return;
             };
 
-            match recv_result {
-                Ok(AudioEvent::Ended) => playback_ended = true,
-                Ok(AudioEvent::Frame(frame)) => latest_frame = Some(frame),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
+            loop {
+                let recv_result = match state.event_rx.as_ref() {
+                    Some(rx) => rx.try_recv(),
+                    None => break,
+                };
+
+                match recv_result {
+                    Ok(AudioEvent::Ended) => playback_ended = true,
+                    Ok(AudioEvent::Frame(frame)) => latest_frame = Some(frame),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if disconnected {
+                state.event_rx = None;
+            }
+
+            if let Some(frame) = latest_frame {
+                state.frame_metrics = frame;
+            }
+
+            if playback_ended {
+                if state.play_mode.is_autoplay() {
+                    should_autoplay = true;
+                } else {
+                    state.is_playing = false;
+                    state.frame_metrics = AudioFrameMetrics::default();
+                    cx.notify();
                 }
             }
         }
 
-        if disconnected {
-            self.audio.event_rx = None;
-        }
-
-        if let Some(frame) = latest_frame {
-            self.audio.frame_metrics = frame;
-        }
-
-        if playback_ended {
-            if self.audio.play_mode.is_autoplay() {
-                self.audio_navigate(1, cx);
-            } else {
-                self.audio.is_playing = false;
-                self.audio.frame_metrics = AudioFrameMetrics::default();
-                cx.notify();
-            }
+        if should_autoplay {
+            self.audio_navigate(1, cx);
         }
     }
 
     pub(super) fn audio_navigate(&mut self, delta: i64, cx: &mut Context<Self>) {
-        if !self.audio.siblings_loaded {
+        if !self
+            .audio_state()
+            .map(|state| state.siblings_loaded)
+            .unwrap_or(false)
+        {
             self.audio_discover_siblings();
         }
-        if self.audio.siblings.is_empty() {
+
+        let Some(state) = self.audio_state() else {
+            return;
+        };
+        if state.siblings.is_empty() {
             return;
         }
 
-        let next_idx = if self.audio.play_mode.is_random() {
+        let next_idx = if state.play_mode.is_random() {
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as usize)
                 .unwrap_or(0);
-            seed % self.audio.siblings.len()
+            seed % state.siblings.len()
         } else {
-            let len = self.audio.siblings.len() as i64;
-            ((self.audio.current_idx as i64 + delta).rem_euclid(len)) as usize
+            let len = state.siblings.len() as i64;
+            ((state.current_idx as i64 + delta).rem_euclid(len)) as usize
         };
 
-        self.audio.current_idx = next_idx;
-        let new_path = self.audio.siblings[next_idx].clone();
+        let new_path = state.siblings[next_idx].clone();
         let new_path_str = new_path.to_string_lossy().to_string();
 
         self.source_paths = vec![new_path_str.clone()];
         self.summaries = vec![super::summary::FileSummary::from_source(&new_path_str)];
-        self.preview = Some(super::preview::FilePreview::Audio {
-            source_path: new_path.clone(),
-        });
 
-        if let Some(handle) = &self.audio.handle {
-            let _ = handle.cmd_tx.send(AudioCmd::Load(new_path.clone()));
-            self.audio.is_playing = true;
-            self.audio.anim_loop_started = false;
-            self.audio.frame_metrics = AudioFrameMetrics::default();
-        } else {
-            let mut handle = spawn_audio_thread(new_path.clone());
-            self.audio.event_rx = handle.take_event_rx();
-            self.audio.handle = Some(handle);
-            self.audio.is_playing = true;
-            self.audio.anim_loop_started = false;
-            self.audio.frame_metrics = AudioFrameMetrics::default();
+        if let Some(super::preview::FilePreview::Audio { source_path, state }) =
+            self.preview.as_mut()
+        {
+            *source_path = new_path.clone();
+            state.current_idx = next_idx;
+
+            if let Some(handle) = &state.handle {
+                let _ = handle.cmd_tx.send(AudioCmd::Load(new_path.clone()));
+                state.is_playing = true;
+                state.anim_loop_started = false;
+                state.frame_metrics = AudioFrameMetrics::default();
+            } else {
+                let mut handle = spawn_audio_thread(new_path.clone());
+                state.event_rx = handle.take_event_rx();
+                state.handle = Some(handle);
+                state.is_playing = true;
+                state.anim_loop_started = false;
+                state.frame_metrics = AudioFrameMetrics::default();
+            }
         }
 
         if self.id > 0 {
@@ -463,12 +513,16 @@ impl super::FileSticker {
     }
 
     pub(super) fn spawn_load_audio_metadata(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.audio.metadata = None;
+        if let Some(state) = self.audio_state_mut() {
+            state.metadata = None;
+        }
         cx.spawn(async move |entity, cx| {
             let metadata = load_audio_metadata(&path);
             let _ = entity.update(cx, |this, cx| {
-                this.audio.metadata = Some(metadata);
-                cx.notify();
+                if let Some(state) = this.audio_state_mut() {
+                    state.metadata = Some(metadata);
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -476,7 +530,7 @@ impl super::FileSticker {
 
     fn audio_discover_siblings(&mut self) {
         let current_path = match &self.preview {
-            Some(super::preview::FilePreview::Audio { source_path }) => source_path.clone(),
+            Some(super::preview::FilePreview::Audio { source_path, .. }) => source_path.clone(),
             _ => return,
         };
         let parent = match current_path.parent() {
@@ -502,16 +556,22 @@ impl super::FileSticker {
             .iter()
             .position(|p| p == &current_path)
             .unwrap_or(0);
-        self.audio.siblings = siblings;
-        self.audio.current_idx = current_idx;
-        self.audio.siblings_loaded = true;
+
+        if let Some(state) = self.audio_state_mut() {
+            state.siblings = siblings;
+            state.current_idx = current_idx;
+            state.siblings_loaded = true;
+        }
     }
 
     pub(super) fn ensure_audio_anim_loop(&mut self, cx: &mut Context<Self>) {
-        if self.audio.anim_loop_started || !self.audio.is_playing {
+        let Some(state) = self.audio_state_mut() else {
+            return;
+        };
+        if state.anim_loop_started || !state.is_playing {
             return;
         }
-        self.audio.anim_loop_started = true;
+        state.anim_loop_started = true;
         self.spawn_audio_anim_tick(cx);
     }
 
@@ -522,12 +582,14 @@ impl super::FileSticker {
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 this.poll_audio_events(cx);
-                if this.audio.is_playing {
-                    this.audio.anim_tick = this.audio.anim_tick.wrapping_add(1);
-                    cx.notify();
-                    this.spawn_audio_anim_tick(cx);
-                } else {
-                    this.audio.anim_loop_started = false;
+                if let Some(state) = this.audio_state_mut() {
+                    if state.is_playing {
+                        state.anim_tick = state.anim_tick.wrapping_add(1);
+                        cx.notify();
+                        this.spawn_audio_anim_tick(cx);
+                    } else {
+                        state.anim_loop_started = false;
+                    }
                 }
             });
         })
@@ -535,9 +597,15 @@ impl super::FileSticker {
     }
 
     pub(super) fn audio_matrix_bg(&self, window: &Window) -> gpui::AnyElement {
-        let tick = self.audio.anim_tick;
-        let is_playing = self.audio.is_playing;
-        let frame = self.audio.frame_metrics;
+        let tick = self.audio_state().map(|state| state.anim_tick).unwrap_or(0);
+        let is_playing = self
+            .audio_state()
+            .map(|state| state.is_playing)
+            .unwrap_or(false);
+        let frame = self
+            .audio_state()
+            .map(|state| state.frame_metrics)
+            .unwrap_or_default();
         let base_opacity: f32 = if is_playing { 0.045 } else { 0.02 };
         let rows = (window.bounds().size.height.as_f32() / 8.0)
             .floor()
@@ -603,14 +671,15 @@ impl super::FileSticker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let file_name = match &self.preview {
-            Some(super::preview::FilePreview::Audio { source_path }) => {
-                super::utils::file_name_for_display(source_path.as_path())
-            }
-            _ => "Unknown".to_string(),
+        let (file_name, is_playing, play_mode, metadata) = match &self.preview {
+            Some(super::preview::FilePreview::Audio { source_path, state }) => (
+                super::utils::file_name_for_display(source_path.as_path()),
+                state.is_playing,
+                state.play_mode,
+                state.metadata.as_ref(),
+            ),
+            _ => ("Unknown".to_string(), false, AudioPlayMode::Manual, None),
         };
-        let is_playing = self.audio.is_playing;
-        let play_mode = self.audio.play_mode;
         let play_mode_icon = if !play_mode.is_autoplay() {
             IconName::Forward
         } else if play_mode.is_random() {
@@ -619,21 +688,20 @@ impl super::FileSticker {
             IconName::Loop
         };
 
-        let (display_title, display_artist, display_album, cover) =
-            if let Some(meta) = &self.audio.metadata {
-                (
-                    meta.title
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| file_name.clone()),
-                    meta.artist.clone(),
-                    meta.album.clone(),
-                    meta.cover.clone(),
-                )
-            } else {
-                (file_name, None, None, None)
-            };
+        let (display_title, display_artist, display_album, cover) = if let Some(meta) = metadata {
+            (
+                meta.title
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| file_name.clone()),
+                meta.artist.clone(),
+                meta.album.clone(),
+                meta.cover.clone(),
+            )
+        } else {
+            (file_name, None, None, None)
+        };
 
         let controls = h_flex()
             .gap_2()

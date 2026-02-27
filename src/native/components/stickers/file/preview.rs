@@ -6,6 +6,8 @@ use url::Url;
 use crate::native::components::stickers::Sticker;
 use crate::native::components::webview::SimpleWebView;
 
+use super::audio::AudioState;
+
 pub(super) enum FilePreview {
     Markdown {
         source_path: PathBuf,
@@ -27,6 +29,7 @@ pub(super) enum FilePreview {
     WebView(Entity<SimpleWebView>),
     Audio {
         source_path: PathBuf,
+        state: AudioState,
     },
 }
 
@@ -143,6 +146,7 @@ pub(super) fn build_preview(
     if crate::utils::file::is_audio_ext(ext) {
         return Ok(Some(FilePreview::Audio {
             source_path: path.to_path_buf(),
+            state: AudioState::default(),
         }));
     }
 
