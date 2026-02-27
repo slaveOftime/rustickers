@@ -1,7 +1,7 @@
 mod close;
 mod cmd;
 mod console;
-mod file;
+mod view;
 mod list;
 mod show;
 
@@ -34,7 +34,7 @@ pub enum Commands {
     },
 
     /// Create and open a file/URL sticker
-    File {
+    View {
         /// File path or URL to display
         source: String,
     },
@@ -69,7 +69,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         Commands::Close { id } => close::run(app_paths, id),
         Commands::List => list::run(app_paths),
         Commands::Show { id } => show::run(app_paths, id),
-        Commands::File { source } => file::run(source),
+        Commands::View { source } => view::run(source),
         Commands::Cmd {
             command,
             cron,
