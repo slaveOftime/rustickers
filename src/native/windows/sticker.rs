@@ -107,6 +107,15 @@ impl StickerWindow {
             ));
         }
 
+        Self::open_file_preview_with_sources(cx, sticker_events_tx, store, sources)
+    }
+
+    pub fn open_file_preview_with_sources(
+        cx: &mut App,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+        sources: Vec<String>,
+    ) -> anyhow::Result<()> {
         let default_size = FileSticker::default_window_size_for_sources(
             &sources.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );

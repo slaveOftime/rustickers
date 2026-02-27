@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 
 use crate::ipc;
-use crate::model::content::{CommandContent, CommandResult, FileStickerContent, Scheduler};
+use crate::model::content::{CommandContent, CommandResult, Scheduler};
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::storage::paths::AppPaths;
 
@@ -164,31 +164,23 @@ fn cmd_show(app_paths: &AppPaths, id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_file(app_paths: &AppPaths, source: String) -> anyhow::Result<()> {
-    let store = block_on(crate::storage::open_sqlite(&app_paths.db_path))?;
-
-    let content = FileStickerContent::from_sources(&[source.clone()]);
-    let title = derive_title_from_source(&source);
-
-    let id = block_on(store.insert_sticker(StickerDetail {
-        id: 0,
-        title,
-        state: StickerState::Open,
-        left: 100,
-        top: 100,
-        width: 400,
-        height: 300,
-        top_most: false,
-        color: StickerColor::Blue,
-        sticker_type: StickerType::File,
-        content: content.to_json(),
-        created_at: 0,
-        updated_at: 0,
-    }))?;
-
+fn cmd_file(_app_paths: &AppPaths, source: String) -> anyhow::Result<()> {
+    setup_console();
     let mut out = console_writer();
-    writeln!(out, "Created file sticker (id={id})")?;
-    signal_open(id, &mut *out);
+    match ipc::send_ipc_command("rustickers", &format!("PREVIEW_FILE {source}")) {
+        Ok(true) => {}
+        Ok(false) => {
+            writeln!(
+                out,
+                "Rustickers is not running. Please launch it first, then retry."
+            )?;
+            std::process::exit(1);
+        }
+        Err(err) => {
+            writeln!(out, "error: {err}")?;
+            std::process::exit(1);
+        }
+    }
     Ok(())
 }
 
@@ -256,22 +248,6 @@ fn signal_open(id: i64, out: &mut dyn std::io::Write) {
             let _ = writeln!(out, "Note: could not signal running instance: {err}");
         }
     }
-}
-
-fn derive_title_from_source(source: &str) -> String {
-    if let Ok(url) = url::Url::parse(source) {
-        return url
-            .path_segments()
-            .and_then(|s| s.last())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(source)
-            .to_owned();
-    }
-    std::path::Path::new(source)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(source)
-        .to_owned()
 }
 
 fn truncate(s: &str, max: usize) -> &str {

@@ -20,6 +20,7 @@ pub enum IpcEvent {
     Show,
     ToggleFilePreview,
     OpenSticker(i64),
+    PreviewFile(String),
 }
 
 pub struct SingleInstance {
@@ -109,6 +110,8 @@ impl SingleInstance {
                             if let Ok(id) = id_str.parse::<i64>() {
                                 let _ = ipc_events_tx.send(IpcEvent::OpenSticker(id));
                             }
+                        } else if let Some(source) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
+                            let _ = ipc_events_tx.send(IpcEvent::PreviewFile(source.to_owned()));
                         }
                     }
                 }

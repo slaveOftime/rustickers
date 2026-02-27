@@ -79,6 +79,20 @@ pub fn run_native(
                                 }
                             }
                         }
+                        crate::ipc::IpcEvent::PreviewFile(source) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                cx.update(|cx| {
+                                    if let Err(err) = StickerWindow::open_file_preview_with_sources(
+                                        cx,
+                                        sticker_events_tx_for_ipc.clone(),
+                                        store.clone(),
+                                        vec![source],
+                                    ) {
+                                        tracing::warn!(error = ?err, "Failed to open file preview from IPC");
+                                    }
+                                });
+                            }
+                        }
                     }
                 }
             }
