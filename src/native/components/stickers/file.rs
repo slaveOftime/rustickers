@@ -33,7 +33,7 @@ use crate::native::windows::StickerWindowEvent;
 use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
-const MAX_TEXT_PREVIEW_BYTES: usize = 128 * 1024;
+const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 5; // 5 MB
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 const EMPTY_FILE_LIST_JSON: &str = "{\"files\":[]}";
 const EDIT_HINT_TEXT: &str = "double-click to edit";
@@ -1112,12 +1112,16 @@ fn build_preview(
     }
 
     let path = Path::new(source);
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+    if path.is_dir() {
         return Ok(None);
-    };
+    }
 
-    let ext = ext.to_ascii_lowercase();
-    let ext = ext.as_str();
+    let ext = &path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .to_string();
 
     if crate::utils::file::is_image_ext(ext) {
         let Some(format) = image_format_for_ext(ext) else {
@@ -1170,19 +1174,20 @@ fn build_preview(
             .map_err(|err| format!("Failed to read code preview: {err}"));
     }
 
-    if crate::utils::file::is_text_ext(ext) {
-        let (content_result, editable) = read_text_preview(path);
-        return content_result
-            .map(|content| FilePreview::Text {
-                source_path: path.to_path_buf(),
-                content,
-                editable,
-            })
-            .map(Some)
-            .map_err(|err| format!("Failed to read text preview: {err}"));
-    }
-
-    Ok(None)
+    let (content_result, editable) = read_text_preview(path);
+    return content_result
+        .map(|content| {
+            if is_binary_text_content(content.as_str()) {
+                None
+            } else {
+                Some(FilePreview::Text {
+                    source_path: path.to_path_buf(),
+                    content,
+                    editable,
+                })
+            }
+        })
+        .map_err(|err| format!("Failed to read text preview: {err}"));
 }
 
 fn build_default_size(sources: &[&str]) -> gpui::Size<i32> {
@@ -1277,6 +1282,24 @@ fn read_text_preview(path: &Path) -> (std::io::Result<String>, bool) {
     };
 
     (content, is_small_text)
+}
+
+fn is_binary_text_content(content: &str) -> bool {
+    if content.is_empty() {
+        return false;
+    }
+
+    if content.as_bytes().contains(&0) {
+        return true;
+    }
+
+    let sample = content.as_bytes();
+    let control_count = sample
+        .iter()
+        .filter(|&&byte| matches!(byte, 0x01..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F | 0x7F))
+        .count();
+
+    control_count > sample.len() / 10
 }
 
 fn file_name_for_display(path: &Path) -> String {
