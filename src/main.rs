@@ -1,14 +1,14 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod cli;
 mod ipc;
 mod model;
 mod native;
 mod storage;
 mod utils;
 
+use clap::Parser as _;
 use ipc::IpcEvent;
 use native::windows::StickerWindowEvent;
 use std::sync::mpsc;
@@ -16,6 +16,28 @@ use storage::paths::AppPaths;
 
 fn main() {
     let app_paths = AppPaths::new().expect("App paths should initialize");
+
+    // ── CLI mode ──────────────────────────────────────────────────────────────
+    // If any arguments are passed the binary acts as a CLI tool; no GUI is
+    // started and the process exits after the command completes.
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.len() > 1 {
+        if let Ok(cli) = cli::Cli::try_parse() {
+            if let Err(err) = cli::run(cli, &app_paths) {
+                eprintln!("error: {err:#}");
+                std::process::exit(1);
+            }
+        } else {
+            // Let clap print its own help/error message
+            let _ = cli::Cli::parse();
+        }
+        return;
+    }
+
+    // ── GUI mode ──────────────────────────────────────────────────────────────
+    #[cfg(target_os = "windows")]
+    hide_console_window();
+
     let _ =
         crate::utils::logging::LoggingGuards::init(&app_paths).expect("Logging should initialize");
 
@@ -56,4 +78,18 @@ fn main() {
         sticker_events_tx,
         sticker_events_rx,
     );
+}
+
+/// Hide the console window that Windows creates for non-`windows_subsystem`
+/// builds.  This is a no-op in debug builds where the console is useful.
+#[cfg(target_os = "windows")]
+fn hide_console_window() {
+    use windows_sys::Win32::System::Console::GetConsoleWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if !hwnd.is_null() {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    }
 }

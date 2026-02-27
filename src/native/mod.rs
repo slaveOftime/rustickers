@@ -68,6 +68,17 @@ pub fn run_native(
                                 });
                             }
                         }
+                        crate::ipc::IpcEvent::OpenSticker(id) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                let store = store.clone();
+                                let tx = sticker_events_tx_for_ipc.clone();
+                                if let Err(err) =
+                                    StickerWindow::open_async(cx, tx, store, id).await
+                                {
+                                    tracing::warn!(id, error = ?err, "Failed to open sticker from IPC");
+                                }
+                            }
+                        }
                     }
                 }
             }

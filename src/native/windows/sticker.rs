@@ -19,16 +19,13 @@ use std::{
 };
 use url::Url;
 
+use crate::model::content::FileStickerContent;
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
     IconName,
     stickers::{
-        command::CommandSticker,
-        file::{FileSticker, FileStickerContent},
-        markdown::MarkdownSticker,
-        paint::PaintSticker,
-        timer::TimerSticker,
-        *,
+        command::CommandSticker, file::FileSticker, markdown::MarkdownSticker, paint::PaintSticker,
+        timer::TimerSticker, *,
     },
 };
 use crate::native::file_manager;
@@ -113,7 +110,7 @@ impl StickerWindow {
         let default_size = FileSticker::default_window_size_for_sources(
             &sources.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );
-        
+
         let title = if sources.len() == 1 {
             source_title(&sources[0])
         } else {
