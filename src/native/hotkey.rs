@@ -48,10 +48,46 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
         match event.event_type {
             EventType::KeyPress(key) => {
                 match key {
-                    Key::Alt => state.alt = true,
-                    Key::ControlLeft | Key::ControlRight => state.ctrl = true,
+                    Key::Alt => {
+                        // Debounce key-repeat while held.
+                        if !state.alt {
+                            state.alt = true;
+                            if primary_modifier_down(*state) {
+                                tracing::debug!(
+                                    alt = state.alt,
+                                    ctrl = state.ctrl,
+                                    meta = state.meta,
+                                    "Hotkey triggered: toggle file preview"
+                                );
+                                let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                            }
+                        }
+                    }
+                    Key::ControlLeft | Key::ControlRight => {
+                        state.ctrl = true;
+                        if state.alt && primary_modifier_down(*state) {
+                            tracing::debug!(
+                                alt = state.alt,
+                                ctrl = state.ctrl,
+                                meta = state.meta,
+                                "Hotkey triggered: toggle file preview"
+                            );
+                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                        }
+                    }
                     Key::ShiftLeft | Key::ShiftRight => state.shift = true,
-                    Key::MetaLeft | Key::MetaRight => state.meta = true,
+                    Key::MetaLeft | Key::MetaRight => {
+                        state.meta = true;
+                        if state.alt && primary_modifier_down(*state) {
+                            tracing::debug!(
+                                alt = state.alt,
+                                ctrl = state.ctrl,
+                                meta = state.meta,
+                                "Hotkey triggered: toggle file preview"
+                            );
+                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                        }
+                    }
                     Key::KeyR => {
                         // Debounce key-repeat while held.
                         if !state.r_down {

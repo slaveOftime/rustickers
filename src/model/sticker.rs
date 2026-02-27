@@ -10,6 +10,7 @@ pub enum StickerType {
     Timer,
     Command,
     Paint,
+    File,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

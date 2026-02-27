@@ -18,6 +18,7 @@ pub enum AcquireError {
 
 pub enum IpcEvent {
     Show,
+    ToggleFilePreview,
 }
 
 pub struct SingleInstance {

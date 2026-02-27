@@ -52,6 +52,10 @@ pub enum IconName {
     Check,
     Paint,
     Eraser,
+    Refresh,
+    Folder,
+    CircleX,
+    Pin,
 }
 
 impl IconNamed for IconName {
@@ -77,6 +81,10 @@ impl IconNamed for IconName {
             IconName::Check => "icons/check.svg".into(),
             IconName::Paint => "icons/paint.svg".into(),
             IconName::Eraser => "icons/eraser.svg".into(),
+            IconName::Refresh => "icons/refresh.svg".into(),
+            IconName::Folder => "icons/folder.svg".into(),
+            IconName::CircleX => "icons/circle-x.svg".into(),
+            IconName::Pin => "icons/pin.svg".into(),
         }
     }
 }
