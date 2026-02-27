@@ -98,6 +98,20 @@ struct FileSummary {
     modified_at_ms: Option<i64>,
 }
 
+impl FileSummary {
+    fn from_source(source: &str) -> Self {
+        Self {
+            name: source_name_for_display(source),
+            path: source.to_string(),
+            is_dir: false,
+            size_bytes: None,
+            file_count: None,
+            folder_count: None,
+            modified_at_ms: None,
+        }
+    }
+}
+
 struct DirectoryStats {
     size_bytes: u64,
     file_count: u64,
@@ -125,6 +139,68 @@ enum FilePreview {
     WebView(Entity<SimpleWebView>),
 }
 
+impl FilePreview {
+    fn editable_source(&self) -> Option<&Path> {
+        match self {
+            Self::Markdown {
+                source_path,
+                editable: true,
+                ..
+            }
+            | Self::Text {
+                source_path,
+                editable: true,
+                ..
+            }
+            | Self::Code {
+                source_path,
+                editable: true,
+                ..
+            } => Some(source_path.as_path()),
+            _ => None,
+        }
+    }
+
+    fn editable_content(&self) -> Option<&str> {
+        match self {
+            Self::Markdown {
+                content,
+                editable: true,
+                ..
+            }
+            | Self::Text {
+                content,
+                editable: true,
+                ..
+            }
+            | Self::Code {
+                content,
+                editable: true,
+                ..
+            } => Some(content.as_str()),
+            _ => None,
+        }
+    }
+
+    fn code_language(&self) -> Option<&str> {
+        match self {
+            Self::Code { language, .. } => Some(language.as_str()),
+            _ => None,
+        }
+    }
+
+    fn replace_content(&mut self, next_content: String) {
+        match self {
+            Self::Markdown { content, .. }
+            | Self::Text { content, .. }
+            | Self::Code { content, .. } => {
+                *content = next_content;
+            }
+            _ => {}
+        }
+    }
+}
+
 impl FileSticker {
     pub fn new(
         id: i64,
@@ -139,15 +215,7 @@ impl FileSticker {
         let source_paths = parsed.files;
         let mut summaries: Vec<FileSummary> = source_paths
             .iter()
-            .map(|raw_path| FileSummary {
-                name: source_name_for_display(raw_path),
-                path: raw_path.clone(),
-                is_dir: false,
-                size_bytes: None,
-                file_count: None,
-                folder_count: None,
-                modified_at_ms: None,
-            })
+            .map(|raw_path| FileSummary::from_source(raw_path))
             .collect();
 
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -231,11 +299,7 @@ impl FileSticker {
     }
 
     fn spawn_refresh_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let source = if self.source_paths.len() == 1 {
-            Some(self.source_paths[0].clone())
-        } else {
-            None
-        };
+        let source = (self.source_paths.len() == 1).then(|| self.source_paths[0].clone());
 
         let Some(source) = source else {
             self.preview = None;
@@ -254,6 +318,8 @@ impl FileSticker {
                             this.preview_editor = None;
                         }
                         Err(err) => {
+                            this.preview = None;
+                            this.preview_editor = None;
                             this.error = Some(err);
                         }
                     }
@@ -288,36 +354,28 @@ impl FileSticker {
     }
 
     fn start_preview_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let initial_content = match &self.preview {
-            Some(FilePreview::Markdown {
-                content,
-                editable: true,
-                ..
-            })
-            | Some(FilePreview::Text {
-                content,
-                editable: true,
-                ..
-            })
-            | Some(FilePreview::Code {
-                content,
-                editable: true,
-                ..
-            }) => content.clone(),
-            _ => return,
+        let initial_content = match self
+            .preview
+            .as_ref()
+            .and_then(FilePreview::editable_content)
+        {
+            Some(content) => content.to_string(),
+            None => return,
         };
+        let code_language = self
+            .preview
+            .as_ref()
+            .and_then(FilePreview::code_language)
+            .map(|language| language.to_string());
 
-        self.preview_editor = Some(cx.new(|cx| {
+        self.preview_editor = Some(cx.new(move |cx| {
             let mut state = InputState::new(window, cx)
                 .multi_line(true)
                 .searchable(true)
                 .placeholder("Edit file content, ctrl+s to save")
                 .default_value(initial_content);
-            match &self.preview {
-                Some(FilePreview::Code { language, .. }) => {
-                    state = state.code_editor(language);
-                }
-                _ => {}
+            if let Some(language) = code_language.as_ref() {
+                state = state.code_editor(language);
             }
             state
         }));
@@ -331,45 +389,20 @@ impl FileSticker {
         };
 
         let content = editor.read(cx).value().to_string();
-        let save_path = match &self.preview {
-            Some(FilePreview::Markdown {
-                source_path,
-                editable: true,
-                ..
-            })
-            | Some(FilePreview::Text {
-                source_path,
-                editable: true,
-                ..
-            })
-            | Some(FilePreview::Code {
-                source_path,
-                editable: true,
-                ..
-            }) => source_path.clone(),
-            _ => return,
+        let save_path = match self
+            .preview
+            .as_ref()
+            .and_then(FilePreview::editable_source)
+            .map(Path::to_path_buf)
+        {
+            Some(path) => path,
+            None => return,
         };
 
         match std::fs::write(&save_path, content.as_bytes()) {
             Ok(_) => {
-                match &mut self.preview {
-                    Some(FilePreview::Markdown {
-                        content: preview_content,
-                        ..
-                    })
-                    | Some(FilePreview::Text {
-                        content: preview_content,
-                        ..
-                    }) => {
-                        *preview_content = content;
-                    }
-                    Some(FilePreview::Code {
-                        content: preview_content,
-                        ..
-                    }) => {
-                        *preview_content = content;
-                    }
-                    _ => {}
+                if let Some(preview) = self.preview.as_mut() {
+                    preview.replace_content(content);
                 }
 
                 self.preview_editor = None;
@@ -667,7 +700,7 @@ impl FileSticker {
                 .child(
                     h_flex().child(
                         Button::new("save-preview-file")
-                            .label("save (ctrl+s)")
+                            .label("Save (ctrl+s)")
                             .small()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_preview_edit(window, cx);
@@ -927,15 +960,7 @@ fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
     let mut summaries = Vec::with_capacity(source_paths.len());
     for raw_path in source_paths {
         if crate::utils::url::is_url(raw_path.as_str()) {
-            summaries.push(FileSummary {
-                name: source_name_for_display(raw_path.as_str()),
-                path: raw_path,
-                is_dir: false,
-                size_bytes: None,
-                file_count: None,
-                folder_count: None,
-                modified_at_ms: None,
-            });
+            summaries.push(FileSummary::from_source(raw_path.as_str()));
             continue;
         }
 
@@ -943,15 +968,7 @@ fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
         if path.exists() {
             summaries.push(build_summary(path));
         } else {
-            summaries.push(FileSummary {
-                name: source_name_for_display(raw_path.as_str()),
-                path: raw_path,
-                is_dir: false,
-                size_bytes: None,
-                file_count: None,
-                folder_count: None,
-                modified_at_ms: None,
-            });
+            summaries.push(FileSummary::from_source(raw_path.as_str()));
         }
     }
 
@@ -1075,18 +1092,11 @@ fn build_preview(
     };
 
     let ext = ext.to_ascii_lowercase();
+    let ext = ext.as_str();
 
-    if crate::utils::file::is_image_ext(ext.as_str()) {
-        let format = match ext.as_str() {
-            "jpg" | "jpeg" => ImageFormat::Jpeg,
-            "png" => ImageFormat::Png,
-            "gif" => ImageFormat::Gif,
-            "bmp" => ImageFormat::Bmp,
-            "svg" => ImageFormat::Svg,
-            "webp" => ImageFormat::Webp,
-            "ico" => ImageFormat::Ico,
-            "tiff" | "tif" => ImageFormat::Tiff,
-            _ => return Ok(None),
+    if crate::utils::file::is_image_ext(ext) {
+        let Some(format) = image_format_for_ext(ext) else {
+            return Ok(None);
         };
         match fs::read(path) {
             Ok(bytes) => {
@@ -1098,39 +1108,30 @@ fn build_preview(
         }
     }
 
-    if crate::utils::file::is_web_doc_ext(ext.as_str()) {
+    if crate::utils::file::is_web_doc_ext(ext) {
         return crate::utils::url::create_local_file_url(path)
             .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
             .map(Some);
     }
 
-    if crate::utils::file::is_markdown_ext(ext.as_str()) {
-        let is_small_text = std::fs::metadata(path)
-            .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
-            .unwrap_or(false);
-
-        let content_result = if is_small_text {
-            crate::utils::file::read_text_full(path)
-        } else {
-            crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
-        };
-
+    if crate::utils::file::is_markdown_ext(ext) {
+        let (content_result, editable) = read_text_preview(path);
         return content_result
             .map(|content| FilePreview::Markdown {
                 source_path: path.to_path_buf(),
                 content,
-                editable: is_small_text,
+                editable,
             })
             .map(Some)
             .map_err(|err| format!("Failed to read markdown preview: {err}"));
     }
 
-    if crate::utils::file::is_code_ext(ext.as_str()) {
-        let language = crate::utils::file::markdown_language_for_ext(ext.as_str());
+    if crate::utils::file::is_code_ext(ext) {
+        let language = crate::utils::file::markdown_language_for_ext(ext);
         return crate::utils::file::read_text_full(path)
             .map(|content| FilePreview::Code {
                 source_path: path.to_path_buf(),
-                content: content,
+                content,
                 language: language.to_string(),
                 editable: true,
             })
@@ -1138,22 +1139,13 @@ fn build_preview(
             .map_err(|err| format!("Failed to read code preview: {err}"));
     }
 
-    if crate::utils::file::is_text_ext(ext.as_str()) {
-        let is_small_text = std::fs::metadata(path)
-            .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
-            .unwrap_or(false);
-
-        let content_result = if is_small_text {
-            crate::utils::file::read_text_full(path)
-        } else {
-            crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
-        };
-
+    if crate::utils::file::is_text_ext(ext) {
+        let (content_result, editable) = read_text_preview(path);
         return content_result
             .map(|content| FilePreview::Text {
                 source_path: path.to_path_buf(),
                 content,
-                editable: is_small_text,
+                editable,
             })
             .map(Some)
             .map_err(|err| format!("Failed to read text preview: {err}"));
@@ -1170,6 +1162,34 @@ fn wrap_code_as_markdown(language: &str, content: &str) -> String {
     result.push('\n');
     result.push_str("```");
     result
+}
+
+fn image_format_for_ext(ext: &str) -> Option<ImageFormat> {
+    match ext {
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "png" => Some(ImageFormat::Png),
+        "gif" => Some(ImageFormat::Gif),
+        "bmp" => Some(ImageFormat::Bmp),
+        "svg" => Some(ImageFormat::Svg),
+        "webp" => Some(ImageFormat::Webp),
+        "ico" => Some(ImageFormat::Ico),
+        "tiff" | "tif" => Some(ImageFormat::Tiff),
+        _ => None,
+    }
+}
+
+fn read_text_preview(path: &Path) -> (std::io::Result<String>, bool) {
+    let is_small_text = std::fs::metadata(path)
+        .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
+        .unwrap_or(false);
+
+    let content = if is_small_text {
+        crate::utils::file::read_text_full(path)
+    } else {
+        crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
+    };
+
+    (content, is_small_text)
 }
 
 fn file_name_for_display(path: &Path) -> String {
