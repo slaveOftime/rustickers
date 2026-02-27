@@ -621,9 +621,15 @@ impl CommandSticker {
                         this.process = None;
                         this.stopping = false;
                         this.result_html_entity = match &this.result {
-                            CommandResult::Html(Some(x)) => {
-                                Some(cx.new(|cx| SimpleWebView::new(x.as_str(), window, cx)))
-                            }
+                            CommandResult::Html(Some(x)) => Some(cx.new(|cx| {
+                                let mut view = SimpleWebView::new(x.as_str(), window, cx);
+                                let color = Rgba {
+                                    a: 0.85,
+                                    ..this.color.bg()
+                                };
+                                view.set_bg(color, cx);
+                                view
+                            })),
                             _ => None,
                         };
                         this.save_config(cx);
