@@ -17,7 +17,6 @@ use gpui_component::{
 };
 use gpui_component::{Icon, green_500};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -26,6 +25,7 @@ use std::time::Duration;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
+use crate::model::content::FileStickerContent;
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::IconName;
 use crate::native::components::webview::SimpleWebView;
@@ -35,42 +35,8 @@ use crate::storage::ArcStickerStore;
 
 const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 5; // 5 MB
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
-const EMPTY_FILE_LIST_JSON: &str = "{\"files\":[]}";
 const EDIT_HINT_TEXT: &str = "double-click to edit";
 const UNKNOWN_TEXT: &str = "Unknown";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileStickerContent {
-    pub files: Vec<String>,
-}
-
-impl FileStickerContent {
-    pub fn from_sources(sources: &[String]) -> Self {
-        Self {
-            files: sources.iter().map(|source| source.to_owned()).collect(),
-        }
-    }
-
-    pub fn from_json_or_raw(content: &str) -> Self {
-        if let Ok(data) = serde_json::from_str::<Self>(content)
-            && !data.files.is_empty()
-        {
-            return data;
-        }
-
-        if content.trim().is_empty() {
-            Self { files: Vec::new() }
-        } else {
-            Self {
-                files: vec![content.to_owned()],
-            }
-        }
-    }
-
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| EMPTY_FILE_LIST_JSON.to_owned())
-    }
-}
 
 pub struct FileSticker {
     id: i64,

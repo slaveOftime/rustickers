@@ -68,6 +68,44 @@ pub fn run_native(
                                 });
                             }
                         }
+                        crate::ipc::IpcEvent::OpenSticker(id) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                let store = store.clone();
+                                let tx = sticker_events_tx_for_ipc.clone();
+                                if let Err(err) =
+                                    StickerWindow::open_async(cx, tx, store, id).await
+                                {
+                                    tracing::warn!(id, error = ?err, "Failed to open sticker from IPC");
+                                }
+                            }
+                        }
+                        crate::ipc::IpcEvent::PreviewFile(source) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                cx.update(|cx| {
+                                    if let Err(err) = StickerWindow::open_file_preview_with_sources(
+                                        cx,
+                                        sticker_events_tx_for_ipc.clone(),
+                                        store.clone(),
+                                        vec![source],
+                                    ) {
+                                        tracing::warn!(error = ?err, "Failed to open file preview from IPC");
+                                    }
+                                });
+                            }
+                        }
+                        crate::ipc::IpcEvent::CloseSticker(id) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                let store = store.clone();
+                                if let Err(err) =
+                                    store.update_sticker_state(id, crate::model::sticker::StickerState::Close).await
+                                {
+                                    tracing::error!(id, error = %err, "Error closing sticker from IPC");
+                                }
+                                let _ = cx.update(|cx| {
+                                    StickerWindow::try_close(id, cx);
+                                });
+                            }
+                        }
                     }
                 }
             }

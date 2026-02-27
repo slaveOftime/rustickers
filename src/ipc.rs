@@ -19,6 +19,9 @@ pub enum AcquireError {
 pub enum IpcEvent {
     Show,
     ToggleFilePreview,
+    OpenSticker(i64),
+    PreviewFile(String),
+    CloseSticker(i64),
 }
 
 pub struct SingleInstance {
@@ -102,6 +105,18 @@ impl SingleInstance {
                         // Check protocol
                         if buffer.trim() == "SHOW" {
                             let _ = ipc_events_tx.send(IpcEvent::Show);
+                        } else if buffer.trim() == "TOGGLE_FILE_PREVIEW" {
+                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                        } else if let Some(id_str) = buffer.trim().strip_prefix("OPEN_STICKER ") {
+                            if let Ok(id) = id_str.parse::<i64>() {
+                                let _ = ipc_events_tx.send(IpcEvent::OpenSticker(id));
+                            }
+                        } else if let Some(source) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
+                            let _ = ipc_events_tx.send(IpcEvent::PreviewFile(source.to_owned()));
+                        } else if let Some(id_str) = buffer.trim().strip_prefix("CLOSE_STICKER ") {
+                            if let Ok(id) = id_str.parse::<i64>() {
+                                let _ = ipc_events_tx.send(IpcEvent::CloseSticker(id));
+                            }
                         }
                     }
                 }
@@ -113,6 +128,30 @@ impl SingleInstance {
 }
 
 // --- Helper Functions ---
+
+/// Sends an IPC command to a running instance.
+/// Returns `Ok(true)` if delivered, `Ok(false)` if no instance is running.
+pub fn send_ipc_command(app_id: &str, command: &str) -> io::Result<bool> {
+    let (_, name) = create_socket_name(app_id);
+    let name = name?;
+    match Stream::connect(name) {
+        Ok(mut stream) => {
+            stream.write_all(command.as_bytes())?;
+            stream.write_all(b"\n")?;
+            stream.flush()?;
+            Ok(true)
+        }
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
 
 /// Filter function from the official reference
 fn handle_incoming_error(conn: io::Result<Stream>) -> Option<Stream> {

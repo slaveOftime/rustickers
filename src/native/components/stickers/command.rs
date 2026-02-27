@@ -15,7 +15,6 @@ use gpui_component::{
     text::TextView,
     v_flex, yellow_500,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     process::{Command, Stdio},
     str::FromStr,
@@ -33,52 +32,11 @@ use crate::native::{
     components::IconName, components::webview::SimpleWebView, windows::StickerWindowEvent,
 };
 
+use crate::model::content::{CommandContent, CommandResult, Scheduler};
 use crate::model::sticker::StickerColor;
 use crate::storage::ArcStickerStore;
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommandContent {
-    command: String,
-    environments: String,
-    working_dir: String,
-    scheduler: Option<Scheduler>,
-    run_immediately: bool,
-    result: CommandResult,
-    stream_result: bool,
-    padding: Option<u8>,
-    started_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum CommandResult {
-    Text(Option<String>),
-    Html(Option<String>),
-    Svg(Option<String>),
-    Markdown(Option<String>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum Scheduler {
-    Cron(String),
-}
-
-impl Default for CommandContent {
-    fn default() -> Self {
-        Self {
-            command: String::new(),
-            environments: String::new(),
-            working_dir: String::new(),
-            scheduler: None,
-            run_immediately: true,
-            stream_result: false,
-            result: CommandResult::Text(None),
-            padding: None,
-            started_at: None,
-        }
-    }
-}
 
 pub struct CommandSticker {
     id: i64,
