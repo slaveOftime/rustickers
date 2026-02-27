@@ -115,6 +115,12 @@ enum FilePreview {
         content: String,
         editable: bool,
     },
+    Code {
+        source_path: PathBuf,
+        content: String,
+        language: String,
+        editable: bool,
+    },
     Image(PathBuf),
     WebView(Entity<SimpleWebView>),
 }
@@ -263,16 +269,28 @@ impl FileSticker {
                 content,
                 editable: true,
                 ..
+            })
+            | Some(FilePreview::Code {
+                content,
+                editable: true,
+                ..
             }) => content.clone(),
             _ => return,
         };
 
         self.preview_editor = Some(cx.new(|cx| {
-            InputState::new(window, cx)
+            let mut state = InputState::new(window, cx)
                 .multi_line(true)
                 .searchable(true)
                 .placeholder("Edit file content, ctrl+s to save")
-                .default_value(initial_content)
+                .default_value(initial_content);
+            match &self.preview {
+                Some(FilePreview::Code { language, .. }) => {
+                    state = state.code_editor(language);
+                }
+                _ => {}
+            }
+            state
         }));
         self.preview_editing = true;
         self.error = None;
@@ -295,6 +313,11 @@ impl FileSticker {
                 source_path,
                 editable: true,
                 ..
+            })
+            | Some(FilePreview::Code {
+                source_path,
+                editable: true,
+                ..
             }) => source_path.clone(),
             _ => return,
         };
@@ -307,6 +330,12 @@ impl FileSticker {
                         ..
                     })
                     | Some(FilePreview::Text {
+                        content: preview_content,
+                        ..
+                    }) => {
+                        *preview_content = content;
+                    }
+                    Some(FilePreview::Code {
                         content: preview_content,
                         ..
                     }) => {
@@ -626,6 +655,7 @@ impl FileSticker {
             Some(FilePreview::Markdown {
                 content, editable, ..
             }) => div()
+                .p_2()
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
@@ -669,6 +699,39 @@ impl FileSticker {
                     }),
                 )
                 .child(content.clone())
+                .when(*editable, |view| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .right_2()
+                            .top_2()
+                            .text_xs()
+                            .opacity(0.7)
+                            .child("double-click to edit"),
+                    )
+                })
+                .into_any_element(),
+            Some(FilePreview::Code {
+                content,
+                editable,
+                language,
+                ..
+            }) => div()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        if event.click_count >= 2 {
+                            this.start_preview_edit(window, cx);
+                        }
+                    }),
+                )
+                .child(
+                    TextView::markdown("file-code", wrap_code_as_markdown(language, content))
+                        .size_full()
+                        .selectable(false)
+                        .scrollable(true),
+                )
                 .when(*editable, |view| {
                     view.child(
                         div()
@@ -1013,9 +1076,10 @@ fn build_preview(
     if crate::utils::file::is_code_ext(ext.as_str()) {
         let language = crate::utils::file::markdown_language_for_ext(ext.as_str());
         return crate::utils::file::read_text_full(path)
-            .map(|content| FilePreview::Markdown {
+            .map(|content| FilePreview::Code {
                 source_path: path.to_path_buf(),
-                content: wrap_code_as_markdown(language, content),
+                content: content,
+                language: language.to_string(),
                 editable: false,
             })
             .map(Some)
@@ -1046,13 +1110,14 @@ fn build_preview(
     Ok(None)
 }
 
-fn wrap_code_as_markdown(language: &str, mut content: String) -> String {
+fn wrap_code_as_markdown(language: &str, content: &str) -> String {
     let prefix = format!("```{language}\n");
-    content.reserve(prefix.len() + 4);
-    content.insert_str(0, &prefix);
-    content.push('\n');
-    content.push_str("```");
-    content
+    let mut result = String::with_capacity(prefix.len() + content.len() + 4);
+    result.push_str(&prefix);
+    result.push_str(content);
+    result.push('\n');
+    result.push_str("```");
+    result
 }
 
 fn file_name_for_display(path: &Path) -> String {
