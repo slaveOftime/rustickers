@@ -32,6 +32,7 @@ rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 notify-rust = "4.11.7"
 async-compat = "0.2.5"
 futures = "0.3.32"
+rfd = "0.15"
 reqwest = "0.13.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

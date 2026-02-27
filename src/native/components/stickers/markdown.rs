@@ -3,15 +3,18 @@ use gpui::{
     div, prelude::*, px, rgba,
 };
 use gpui_component::text::TextView;
-use gpui_component::{ActiveTheme, Sizable, h_flex};
+use gpui_component::{ActiveTheme, Disableable, Sizable, h_flex};
 use gpui_component::{
     button::Button,
     input::{Input, InputState},
     v_flex,
 };
 
-use crate::model::sticker::StickerColor;
+use crate::model::content::FileStickerContent;
+use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
+use crate::native::components::IconName;
 use crate::native::windows::StickerWindowEvent;
+use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
 pub struct MarkdownSticker {
@@ -22,6 +25,8 @@ pub struct MarkdownSticker {
     editor: Entity<InputState>,
     editing: bool,
     error: Option<String>,
+    converting: bool,
+    convert_error: Option<String>,
 }
 
 impl MarkdownSticker {
@@ -50,6 +55,8 @@ impl MarkdownSticker {
             editor,
             editing: content.is_empty(),
             error: None,
+            converting: false,
+            convert_error: None,
         }
     }
 
@@ -102,6 +109,146 @@ impl MarkdownSticker {
         .detach();
 
         true
+    }
+
+    fn start_convert(&mut self, cx: &mut Context<Self>) {
+        if self.converting {
+            return;
+        }
+        self.converting = true;
+        self.convert_error = None;
+        cx.notify();
+
+        let content = self.editor.read(cx).value().to_string();
+        let initial_name = derive_md_filename(&content);
+        let id = self.id;
+        let store = self.store.clone();
+        let sticker_events_tx = self.sticker_events_tx.clone();
+
+        cx.spawn(async move |entity, cx| {
+            // Show the save file dialog asynchronously via rfd.
+            let chosen = rfd::AsyncFileDialog::new()
+                .set_file_name(format!("{initial_name}.md"))
+                .add_filter("Markdown", &["md"])
+                .save_file()
+                .await
+                .map(|h| h.path().to_path_buf());
+
+            let Some(path) = chosen else {
+                // User cancelled.
+                let _ = entity.update(cx, |this, cx| {
+                    this.converting = false;
+                    cx.notify();
+                });
+                return;
+            };
+
+            // Write the markdown content to the chosen file.
+            if let Err(err) = std::fs::write(&path, &content) {
+                let _ = entity.update(cx, |this, cx| {
+                    this.converting = false;
+                    this.convert_error = Some(format!("Failed to write file: {err}"));
+                    cx.notify();
+                });
+                return;
+            }
+
+            // Fetch the current sticker detail so we can copy position/size/color.
+            let md_detail = match store.get_sticker(id).await {
+                Ok(d) => d,
+                Err(err) => {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.converting = false;
+                        this.convert_error = Some(format!("Failed to read sticker: {err:#}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+
+            let path_str = path.to_string_lossy().to_string();
+
+            let new_detail = StickerDetail {
+                id: 0,
+                title: path_str.clone(),
+                state: StickerState::Open,
+                left: md_detail.left,
+                top: md_detail.top,
+                width: md_detail.width,
+                height: md_detail.height,
+                top_most: md_detail.top_most,
+                color: md_detail.color,
+                sticker_type: StickerType::File,
+                content: FileStickerContent::from_sources(&[path_str]).to_json(),
+                created_at: 0,
+                updated_at: 0,
+            };
+
+            // Insert the new file sticker.
+            let new_id = match store.insert_sticker(new_detail).await {
+                Ok(id) => id,
+                Err(err) => {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.converting = false;
+                        this.convert_error =
+                            Some(format!("Failed to create file sticker: {err:#}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+
+            // Open the new file sticker window.
+            if let Err(err) =
+                StickerWindow::open_async(cx, sticker_events_tx.clone(), store.clone(), new_id)
+                    .await
+            {
+                tracing::warn!(new_id, error = ?err, "Failed to open new file sticker window");
+            }
+
+            // Delete the original markdown sticker from the DB.
+            if let Err(err) = store.delete_sticker(id).await {
+                tracing::warn!(id, error = ?err, "Failed to delete markdown sticker after convert");
+            }
+
+            // Notify the main window to reload its list.
+            let _ = sticker_events_tx.send(StickerWindowEvent::Created { id: new_id });
+
+            // Close this markdown window.
+            let _ = cx.update(|cx| {
+                StickerWindow::try_close(id, cx);
+            });
+        })
+        .detach();
+    }
+}
+
+/// Derives a filename from the first non-empty line of the markdown content.
+fn derive_md_filename(content: &str) -> String {
+    let base = content
+        .lines()
+        .map(|l| l.trim_start_matches('#').trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("note");
+
+    // Sanitise: keep only safe filename characters.
+    let sanitised: String = base
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(60)
+        .collect();
+
+    let sanitised = sanitised.trim().replace(' ', "_");
+    if sanitised.is_empty() {
+        "note".to_owned()
+    } else {
+        sanitised
     }
 }
 
@@ -165,36 +312,73 @@ impl Render for MarkdownSticker {
                 );
         } else {
             window.set_rem_size(px(14.0));
-            body = body.child(
-                div()
-                    .size_full()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|s, e: &MouseDownEvent, _, _| {
-                            if e.click_count >= 2 {
-                                s.editing = true;
-                            }
-                        }),
-                    )
-                    .child(
-                        TextView::markdown("markdown-preview", self.editor.read(cx).value())
-                            .py_1()
-                            .px_2()
-                            .size_full()
-                            .selectable(true)
-                            .scrollable(true),
-                    )
-                    .child(
+
+            let convert_btn = Button::new("convert-to-file")
+                .icon(IconName::DocumentText)
+                .small()
+                .disabled(self.converting)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.start_convert(cx);
+                }));
+
+            let mut preview_overlay = div()
+                .relative()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, e: &MouseDownEvent, _, _| {
+                        if e.click_count >= 2 {
+                            this.editing = true;
+                        }
+                    }),
+                )
+                .child(
+                    TextView::markdown("markdown-preview", self.editor.read(cx).value())
+                        .py_1()
+                        .px_2()
+                        .size_full()
+                        .selectable(true)
+                        .scrollable(true),
+                )
+                .child(
+                    div()
+                        .occlude()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .right_0()
+                        .h_5()
+                        .window_control_area(WindowControlArea::Drag),
+                )
+                // Convert button — bottom-left corner, above the drag area.
+                .when(window.is_window_hovered(), |view| {
+                    view.child(
                         div()
                             .occlude()
                             .absolute()
                             .left_0()
-                            .top_0()
-                            .right_0()
-                            .h_5()
-                            .window_control_area(WindowControlArea::Drag),
-                    ),
-            );
+                            .bottom_0()
+                            .child(convert_btn),
+                    )
+                });
+
+            if let Some(err) = &self.convert_error {
+                preview_overlay = preview_overlay.child(
+                    div()
+                        .occlude()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(gpui::red())
+                        .child(err.clone()),
+                );
+            }
+
+            body = body.child(preview_overlay);
         }
 
         body
