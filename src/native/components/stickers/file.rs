@@ -1,8 +1,8 @@
 use futures::StreamExt;
 use futures::channel::mpsc as async_mpsc;
 use gpui::{
-    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, Rgba, Window,
-    WindowControlArea, div, img, prelude::*, px, relative, rgba,
+    Context, Entity, Image, ImageFormat, ImageSource, KeyDownEvent, MouseButton, MouseDownEvent,
+    ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px, relative, rgba,
 };
 use gpui_component::Sizable;
 use gpui_component::{
@@ -18,6 +18,7 @@ use gpui_component::{
 use gpui_component::{Icon, green_500};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -120,7 +121,7 @@ enum FilePreview {
         language: String,
         editable: bool,
     },
-    Image(PathBuf),
+    Image(Arc<Image>),
     WebView(Entity<SimpleWebView>),
 }
 
@@ -737,9 +738,13 @@ impl FileSticker {
                     )
                 })
                 .into_any_element(),
-            Some(FilePreview::Image(path)) => div()
+            Some(FilePreview::Image(image)) => div()
                 .size_full()
-                .child(img(path.as_path()).size_full().object_fit(ObjectFit::Cover))
+                .child(
+                    img(ImageSource::Image(image.clone()))
+                        .size_full()
+                        .object_fit(ObjectFit::Cover),
+                )
                 .into_any_element(),
             Some(FilePreview::WebView(webview)) => {
                 div().size_full().child(webview.clone()).into_any_element()
@@ -1036,7 +1041,25 @@ fn build_preview(
     let ext = ext.to_ascii_lowercase();
 
     if crate::utils::file::is_image_ext(ext.as_str()) {
-        return Ok(Some(FilePreview::Image(path.to_path_buf())));
+        let format = match ext.as_str() {
+            "jpg" | "jpeg" => ImageFormat::Jpeg,
+            "png" => ImageFormat::Png,
+            "gif" => ImageFormat::Gif,
+            "bmp" => ImageFormat::Bmp,
+            "svg" => ImageFormat::Svg,
+            "webp" => ImageFormat::Webp,
+            "ico" => ImageFormat::Ico,
+            "tiff" | "tif" => ImageFormat::Tiff,
+            _ => return Ok(None),
+        };
+        match fs::read(path) {
+            Ok(bytes) => {
+                return Ok(Some(FilePreview::Image(Arc::new(Image::from_bytes(
+                    format, bytes,
+                )))));
+            }
+            Err(err) => return Err(format!("Failed to load image preview: {err}")),
+        }
     }
 
     if crate::utils::file::is_web_doc_ext(ext.as_str()) {
