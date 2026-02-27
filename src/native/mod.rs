@@ -93,6 +93,19 @@ pub fn run_native(
                                 });
                             }
                         }
+                        crate::ipc::IpcEvent::CloseSticker(id) => {
+                            if let Some(store) = store_handle_clone.get() {
+                                let store = store.clone();
+                                if let Err(err) =
+                                    store.update_sticker_state(id, crate::model::sticker::StickerState::Close).await
+                                {
+                                    tracing::error!(id, error = %err, "Error closing sticker from IPC");
+                                }
+                                let _ = cx.update(|cx| {
+                                    StickerWindow::try_close(id, cx);
+                                });
+                            }
+                        }
                     }
                 }
             }

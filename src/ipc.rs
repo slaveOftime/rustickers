@@ -21,6 +21,7 @@ pub enum IpcEvent {
     ToggleFilePreview,
     OpenSticker(i64),
     PreviewFile(String),
+    CloseSticker(i64),
 }
 
 pub struct SingleInstance {
@@ -112,6 +113,10 @@ impl SingleInstance {
                             }
                         } else if let Some(source) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
                             let _ = ipc_events_tx.send(IpcEvent::PreviewFile(source.to_owned()));
+                        } else if let Some(id_str) = buffer.trim().strip_prefix("CLOSE_STICKER ") {
+                            if let Ok(id) = id_str.parse::<i64>() {
+                                let _ = ipc_events_tx.send(IpcEvent::CloseSticker(id));
+                            }
                         }
                     }
                 }
