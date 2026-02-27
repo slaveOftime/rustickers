@@ -1,3 +1,5 @@
+use futures::StreamExt;
+use futures::channel::mpsc as async_mpsc;
 use gpui::{
     Context, Entity, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
     relative, rgba,
@@ -7,10 +9,12 @@ use gpui_component::{
     v_flex,
 };
 use gpui_component::{Icon, green_500};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
@@ -22,6 +26,7 @@ use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
 const MAX_TEXT_PREVIEW_BYTES: usize = 128 * 1024;
+const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStickerContent {
@@ -67,6 +72,11 @@ pub struct FileSticker {
     refreshing: bool,
     sticking: bool,
     error: Option<String>,
+    watcher: Option<RecommendedWatcher>,
+    watch_events_rx: Option<async_mpsc::UnboundedReceiver<()>>,
+    watch_loop_started: bool,
+    watch_pending: Arc<AtomicBool>,
+    watch_stop: Arc<AtomicBool>,
 }
 
 struct FileSummary {
@@ -130,8 +140,14 @@ impl FileSticker {
             refreshing: false,
             sticking: false,
             error: None,
+            watcher: None,
+            watch_events_rx: None,
+            watch_loop_started: false,
+            watch_pending: Arc::new(AtomicBool::new(false)),
+            watch_stop: Arc::new(AtomicBool::new(false)),
         };
 
+        this.init_file_watcher();
         this.spawn_refresh(window, cx);
         this
     }
@@ -211,6 +227,107 @@ impl FileSticker {
                     this.refreshing = false;
                     cx.notify();
                 });
+            })
+            .detach();
+    }
+
+    fn init_file_watcher(&mut self) {
+        let (event_tx, event_rx) = async_mpsc::unbounded::<()>();
+        let watch_pending = Arc::clone(&self.watch_pending);
+        let watch_stop = Arc::clone(&self.watch_stop);
+
+        let mut watcher = match RecommendedWatcher::new(
+            move |result: notify::Result<notify::Event>| {
+                if watch_stop.load(Ordering::Acquire) {
+                    return;
+                }
+
+                let Ok(event) = result else {
+                    return;
+                };
+
+                if !is_relevant_watch_event(&event.kind) {
+                    return;
+                }
+
+                if !watch_pending.swap(true, Ordering::AcqRel) {
+                    let _ = event_tx.unbounded_send(());
+                }
+            },
+            Config::default(),
+        ) {
+            Ok(watcher) => watcher,
+            Err(err) => {
+                self.error = Some(format!("Failed to initialize file watcher: {err}"));
+                return;
+            }
+        };
+
+        for raw_path in &self.source_paths {
+            let Some((watch_path, mode)) = watch_target(raw_path) else {
+                continue;
+            };
+            if let Err(err) = watcher.watch(&watch_path, mode) {
+                tracing::warn!(
+                    path = %watch_path.to_string_lossy(),
+                    error = %err,
+                    "Failed to watch sticker source path"
+                );
+            }
+        }
+
+        self.watcher = Some(watcher);
+        self.watch_events_rx = Some(event_rx);
+    }
+
+    fn ensure_watch_loop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.watch_loop_started {
+            return;
+        }
+
+        let Some(mut event_rx) = self.watch_events_rx.take() else {
+            return;
+        };
+
+        self.watch_loop_started = true;
+        let entity = cx.entity();
+        let watch_stop = Arc::clone(&self.watch_stop);
+
+        window
+            .spawn(cx, async move |cx| {
+                while event_rx.next().await.is_some() {
+                    if watch_stop.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    loop {
+                        cx.background_executor().timer(FILE_WATCH_DEBOUNCE).await;
+
+                        if watch_stop.load(Ordering::Acquire) {
+                            break;
+                        }
+
+                        let should_break = entity
+                            .update_in(cx, |this, window, cx| {
+                                if !this.watch_pending.load(Ordering::Acquire) {
+                                    return true;
+                                }
+
+                                if this.refreshing {
+                                    return false;
+                                }
+
+                                this.watch_pending.store(false, Ordering::Release);
+                                this.spawn_refresh(window, cx);
+                                true
+                            })
+                            .unwrap_or(true);
+
+                        if should_break {
+                            break;
+                        }
+                    }
+                }
             })
             .detach();
     }
@@ -406,6 +523,8 @@ impl super::Sticker for FileSticker {
     }
 
     fn save_on_close(&mut self, _cx: &mut Context<Self>) -> bool {
+        self.watch_stop.store(true, Ordering::Release);
+        self.watcher = None;
         true
     }
 
@@ -425,6 +544,7 @@ impl super::Sticker for FileSticker {
 impl Render for FileSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(14.0));
+        self.ensure_watch_loop(window, cx);
 
         let bg_color = Rgba {
             a: 0.85,
@@ -505,6 +625,29 @@ impl Render for FileSticker {
                 view.child(self.refresh_controls(cx))
             })
     }
+}
+
+fn is_relevant_watch_event(kind: &EventKind) -> bool {
+    !matches!(kind, EventKind::Access(_))
+}
+
+fn watch_target(raw_path: &str) -> Option<(PathBuf, RecursiveMode)> {
+    if crate::utils::url::is_url(raw_path) {
+        return None;
+    }
+
+    let path = PathBuf::from(raw_path);
+    if path.is_dir() {
+        return Some((path, RecursiveMode::Recursive));
+    }
+
+    if path.is_file() {
+        return Some((path, RecursiveMode::NonRecursive));
+    }
+
+    path.parent()
+        .filter(|parent| parent.exists())
+        .map(|parent| (parent.to_path_buf(), RecursiveMode::NonRecursive))
 }
 
 fn build_summaries(source_paths: Vec<String>) -> Vec<FileSummary> {
@@ -664,6 +807,12 @@ fn build_preview(
         return Ok(Some(FilePreview::Image(path.to_path_buf())));
     }
 
+    if crate::utils::file::is_web_doc_ext(ext.as_str()) {
+        return crate::utils::url::create_local_file_url(path)
+            .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
+            .map(Some);
+    }
+
     if crate::utils::file::is_markdown_ext(ext.as_str()) {
         return crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
             .map(FilePreview::Markdown)
@@ -677,12 +826,6 @@ fn build_preview(
             .map(|content| FilePreview::Markdown(wrap_code_as_markdown(language, content)))
             .map(Some)
             .map_err(|err| format!("Failed to read code preview: {err}"));
-    }
-
-    if crate::utils::file::is_web_doc_ext(ext.as_str()) {
-        return crate::utils::url::create_local_file_url(path)
-            .map(|url| FilePreview::WebView(cx.new(|cx| SimpleWebView::new(&url, window, cx))))
-            .map(Some);
     }
 
     if crate::utils::file::is_text_ext(ext.as_str()) {
