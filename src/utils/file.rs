@@ -114,6 +114,13 @@ pub fn is_text_ext(ext: &str) -> bool {
     )
 }
 
+pub fn is_video_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "mpeg" | "mpg" | "3gp"
+    )
+}
+
 pub fn markdown_language_for_ext(ext: &str) -> &'static str {
     match ext {
         "rs" => "rust",

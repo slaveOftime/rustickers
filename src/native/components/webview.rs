@@ -57,6 +57,16 @@ impl SimpleWebView {
                     let mimetype = if file_path.ends_with(".html") || file_path.ends_with(".htm") { "text/html" } 
                         else if file_path.ends_with(".js") { "text/javascript" } 
                         else if file_path.ends_with(".pdf") { "application/pdf" } 
+                        else if file_path.ends_with(".mp4") { "video/mp4" }
+                        else if file_path.ends_with(".mkv") { "video/x-matroska" }
+                        else if file_path.ends_with(".avi") { "video/x-msvideo" }
+                        else if file_path.ends_with(".mov") { "video/quicktime" }
+                        else if file_path.ends_with(".wmv") { "video/x-ms-wmv" }
+                        else if file_path.ends_with(".flv") { "video/x-flv" }
+                        else if file_path.ends_with(".mpg") { "video/mpeg" }
+                        else if file_path.ends_with(".3gp") { "video/3gpp" }
+                        else if file_path.ends_with(".webm") { "video/webm" }
+                        else if file_path.ends_with(".mpeg") { "video/mpeg" }
                         else { "application/octet-stream" };
 
                     Response::builder()

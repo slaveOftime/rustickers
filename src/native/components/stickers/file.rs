@@ -1127,7 +1127,7 @@ fn build_preview(
         }
     }
 
-    if crate::utils::file::is_web_doc_ext(ext) {
+    if crate::utils::file::is_web_doc_ext(ext) || crate::utils::file::is_video_ext(ext) {
         return crate::utils::url::create_local_file_url(path)
             .map(|url| {
                 FilePreview::WebView(cx.new(|cx| {
