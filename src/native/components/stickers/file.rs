@@ -1,11 +1,18 @@
 use futures::StreamExt;
 use futures::channel::mpsc as async_mpsc;
 use gpui::{
-    Context, Entity, ObjectFit, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
-    relative, rgba,
+    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, Rgba, Window,
+    WindowControlArea, div, img, prelude::*, px, relative, rgba,
 };
+use gpui_component::Sizable;
 use gpui_component::{
-    Disableable, alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView,
+    Disableable,
+    alert::Alert,
+    button::Button,
+    h_flex,
+    input::{Input, InputState},
+    scroll::ScrollableElement,
+    text::TextView,
     v_flex,
 };
 use gpui_component::{Icon, green_500};
@@ -69,6 +76,8 @@ pub struct FileSticker {
     source_paths: Vec<String>,
     summaries: Vec<FileSummary>,
     preview: Option<FilePreview>,
+    preview_editor: Option<Entity<InputState>>,
+    preview_editing: bool,
     refreshing: bool,
     sticking: bool,
     error: Option<String>,
@@ -96,8 +105,16 @@ struct DirectoryStats {
 }
 
 enum FilePreview {
-    Markdown(String),
-    Text(String),
+    Markdown {
+        source_path: PathBuf,
+        content: String,
+        editable: bool,
+    },
+    Text {
+        source_path: PathBuf,
+        content: String,
+        editable: bool,
+    },
     Image(PathBuf),
     WebView(Entity<SimpleWebView>),
 }
@@ -137,6 +154,8 @@ impl FileSticker {
             source_paths,
             summaries,
             preview: None,
+            preview_editor: None,
+            preview_editing: false,
             refreshing: false,
             sticking: false,
             error: None,
@@ -216,6 +235,8 @@ impl FileSticker {
                         match build_preview(source, window, cx) {
                             Ok(preview) => {
                                 this.preview = preview;
+                                this.preview_editor = None;
+                                this.preview_editing = false;
                             }
                             Err(err) => {
                                 this.error = Some(err);
@@ -229,6 +250,82 @@ impl FileSticker {
                 });
             })
             .detach();
+    }
+
+    fn start_preview_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let initial_content = match &self.preview {
+            Some(FilePreview::Markdown {
+                content,
+                editable: true,
+                ..
+            })
+            | Some(FilePreview::Text {
+                content,
+                editable: true,
+                ..
+            }) => content.clone(),
+            _ => return,
+        };
+
+        self.preview_editor = Some(cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .searchable(true)
+                .placeholder("Edit file content, ctrl+s to save")
+                .default_value(initial_content)
+        }));
+        self.preview_editing = true;
+        self.error = None;
+        cx.notify();
+    }
+
+    fn save_preview_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.preview_editor.as_ref() else {
+            return;
+        };
+
+        let content = editor.read(cx).value().to_string();
+        let save_path = match &self.preview {
+            Some(FilePreview::Markdown {
+                source_path,
+                editable: true,
+                ..
+            })
+            | Some(FilePreview::Text {
+                source_path,
+                editable: true,
+                ..
+            }) => source_path.clone(),
+            _ => return,
+        };
+
+        match std::fs::write(&save_path, content.as_bytes()) {
+            Ok(_) => {
+                match &mut self.preview {
+                    Some(FilePreview::Markdown {
+                        content: preview_content,
+                        ..
+                    })
+                    | Some(FilePreview::Text {
+                        content: preview_content,
+                        ..
+                    }) => {
+                        *preview_content = content;
+                    }
+                    _ => {}
+                }
+
+                self.preview_editor = None;
+                self.preview_editing = false;
+                self.error = None;
+                self.spawn_refresh(window, cx);
+            }
+            Err(err) => {
+                self.error = Some(format!("Failed to save preview file: {err}"));
+            }
+        }
+
+        cx.notify();
     }
 
     fn init_file_watcher(&mut self) {
@@ -491,19 +588,98 @@ impl FileSticker {
             .into_any_element()
     }
 
-    fn preview_view(&self) -> gpui::AnyElement {
-        match &self.preview {
-            Some(FilePreview::Markdown(markdown)) => TextView::markdown("file-markdown", markdown)
+    fn preview_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.preview_editing
+            && let Some(editor) = self.preview_editor.as_ref()
+        {
+            return v_flex()
                 .size_full()
-                .selectable(false)
-                .scrollable(true)
+                .gap_1()
+                .p_1()
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.modifiers.control
+                        && event.keystroke.key.eq_ignore_ascii_case("s")
+                    {
+                        this.save_preview_edit(window, cx);
+                    }
+                }))
+                .child(
+                    Input::new(editor)
+                        .size_full()
+                        .bordered(false)
+                        .bg(rgba(0x000000)),
+                )
+                .child(
+                    h_flex().child(
+                        Button::new("save-preview-file")
+                            .label("save (ctrl+s)")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save_preview_edit(window, cx);
+                            })),
+                    ),
+                )
+                .into_any_element();
+        }
+
+        match &self.preview {
+            Some(FilePreview::Markdown {
+                content, editable, ..
+            }) => div()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        if event.click_count >= 2 {
+                            this.start_preview_edit(window, cx);
+                        }
+                    }),
+                )
+                .child(
+                    TextView::markdown("file-markdown", content)
+                        .size_full()
+                        .selectable(false)
+                        .scrollable(true),
+                )
+                .when(*editable, |view| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .right_2()
+                            .top_2()
+                            .text_xs()
+                            .opacity(0.7)
+                            .child("double-click to edit"),
+                    )
+                })
                 .into_any_element(),
-            Some(FilePreview::Text(text)) => div()
+            Some(FilePreview::Text {
+                content, editable, ..
+            }) => div()
                 .p_2()
                 .size_full()
                 .overflow_scrollbar()
                 .text_sm()
-                .child(text.clone())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        if event.click_count >= 2 {
+                            this.start_preview_edit(window, cx);
+                        }
+                    }),
+                )
+                .child(content.clone())
+                .when(*editable, |view| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .right_2()
+                            .top_2()
+                            .text_xs()
+                            .opacity(0.7)
+                            .child("double-click to edit"),
+                    )
+                })
                 .into_any_element(),
             Some(FilePreview::Image(path)) => div()
                 .size_full()
@@ -579,7 +755,7 @@ impl Render for FileSticker {
                     .h_full()
                     .flex_shrink()
                     .overflow_hidden()
-                    .child(v_flex().overflow_y_scrollbar().child(self.preview_view())),
+                    .child(v_flex().overflow_y_scrollbar().child(self.preview_view(cx))),
             )
             .when_some(self.error.as_ref(), |view, err| {
                 view.child(
@@ -814,8 +990,22 @@ fn build_preview(
     }
 
     if crate::utils::file::is_markdown_ext(ext.as_str()) {
-        return crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
-            .map(FilePreview::Markdown)
+        let is_small_text = std::fs::metadata(path)
+            .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
+            .unwrap_or(false);
+
+        let content_result = if is_small_text {
+            crate::utils::file::read_text_full(path)
+        } else {
+            crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
+        };
+
+        return content_result
+            .map(|content| FilePreview::Markdown {
+                source_path: path.to_path_buf(),
+                content,
+                editable: is_small_text,
+            })
             .map(Some)
             .map_err(|err| format!("Failed to read markdown preview: {err}"));
     }
@@ -823,14 +1013,32 @@ fn build_preview(
     if crate::utils::file::is_code_ext(ext.as_str()) {
         let language = crate::utils::file::markdown_language_for_ext(ext.as_str());
         return crate::utils::file::read_text_full(path)
-            .map(|content| FilePreview::Markdown(wrap_code_as_markdown(language, content)))
+            .map(|content| FilePreview::Markdown {
+                source_path: path.to_path_buf(),
+                content: wrap_code_as_markdown(language, content),
+                editable: false,
+            })
             .map(Some)
             .map_err(|err| format!("Failed to read code preview: {err}"));
     }
 
     if crate::utils::file::is_text_ext(ext.as_str()) {
-        return crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
-            .map(FilePreview::Text)
+        let is_small_text = std::fs::metadata(path)
+            .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
+            .unwrap_or(false);
+
+        let content_result = if is_small_text {
+            crate::utils::file::read_text_full(path)
+        } else {
+            crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
+        };
+
+        return content_result
+            .map(|content| FilePreview::Text {
+                source_path: path.to_path_buf(),
+                content,
+                editable: is_small_text,
+            })
             .map(Some)
             .map_err(|err| format!("Failed to read text preview: {err}"));
     }

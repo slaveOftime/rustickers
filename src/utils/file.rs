@@ -17,7 +17,31 @@ pub fn read_text_truncate(path: &Path, max_bytes: usize) -> std::io::Result<Stri
 }
 
 pub fn is_image_ext(ext: &str) -> bool {
-    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg")
+    matches!(
+        ext,
+        "avif"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "tif"
+            | "tiff"
+            | "tga"
+            | "dds"
+            | "bmp"
+            | "ico"
+            | "hdr"
+            | "exr"
+            | "pbm"
+            | "pam"
+            | "ppm"
+            | "pgm"
+            | "ff"
+            | "farbfeld"
+            | "qoi"
+            | "svg"
+    )
 }
 
 pub fn is_markdown_ext(ext: &str) -> bool {
