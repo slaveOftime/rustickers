@@ -47,8 +47,12 @@ pub enum IconName {
     SortAscending,
     SortDescending,
     Forward,
+    Backward,
+    Shuffle,
     ArrowUp,
     ArrowDown,
+    ArrowLeft,
+    ArrowRight,
     Check,
     Paint,
     Eraser,
@@ -56,6 +60,7 @@ pub enum IconName {
     Folder,
     CircleX,
     Pin,
+    Loop,
 }
 
 impl IconNamed for IconName {
@@ -76,8 +81,12 @@ impl IconNamed for IconName {
             IconName::SortAscending => "icons/sort-ascending.svg".into(),
             IconName::SortDescending => "icons/sort-descending.svg".into(),
             IconName::Forward => "icons/forward.svg".into(),
+            IconName::Backward => "icons/backward.svg".into(),
+            IconName::Shuffle => "icons/shuffle.svg".into(),
             IconName::ArrowUp => "icons/arrow-up.svg".into(),
             IconName::ArrowDown => "icons/arrow-down.svg".into(),
+            IconName::ArrowLeft => "icons/arrow-left.svg".into(),
+            IconName::ArrowRight => "icons/arrow-right.svg".into(),
             IconName::Check => "icons/check.svg".into(),
             IconName::Paint => "icons/paint.svg".into(),
             IconName::Eraser => "icons/eraser.svg".into(),
@@ -85,6 +94,7 @@ impl IconNamed for IconName {
             IconName::Folder => "icons/folder.svg".into(),
             IconName::CircleX => "icons/circle-x.svg".into(),
             IconName::Pin => "icons/pin.svg".into(),
+            IconName::Loop => "icons/loop.svg".into(),
         }
     }
 }

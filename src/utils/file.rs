@@ -121,6 +121,13 @@ pub fn is_video_ext(ext: &str) -> bool {
     )
 }
 
+pub fn is_audio_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "mp3" | "wav" | "flac" | "ogg" | "aac" | "m4a" | "wma" | "opus" | "aiff" | "aif"
+    )
+}
+
 pub fn markdown_language_for_ext(ext: &str) -> &'static str {
     match ext {
         "rs" => "rust",
