@@ -55,15 +55,19 @@ impl super::FileSticker {
     }
 
     pub(super) fn ensure_watch_loop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.watch_loop_started {
+        if !self.is_persisted() || self.watch_loop_started {
             return;
         }
+
         let Some(mut event_rx) = self.watch_events_rx.take() else {
             return;
         };
+
         self.watch_loop_started = true;
+
         let entity = cx.entity();
         let watch_stop = Arc::clone(&self.watch_stop);
+
         window
             .spawn(cx, async move |cx| {
                 while event_rx.next().await.is_some() {

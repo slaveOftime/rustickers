@@ -145,7 +145,9 @@ impl FileSticker {
             watch_stop: Arc::new(AtomicBool::new(false)),
         };
 
-        this.init_file_watcher();
+        if this.is_persisted() {
+            this.init_file_watcher();
+        }
         this.spawn_refresh_preview(window, cx);
         this.spawn_refresh_summaries(window, cx);
         this
@@ -209,6 +211,7 @@ impl FileSticker {
                     let _ = entity.update(cx, |this, cx| {
                         this.id = id;
                         this.pining = false;
+                        this.init_file_watcher();
                         cx.notify();
                     });
                 }
