@@ -13,11 +13,11 @@ use crate::storage::paths::AppPaths;
 #[command(name = "rustickers", about = "Rustickers sticker manager")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
+enum Commands {
     /// Close an open sticker by ID
     Close {
         /// Sticker ID
@@ -63,8 +63,6 @@ pub enum Commands {
 }
 
 pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
-    console::setup_console();
-
     match cli.command {
         Commands::Close { id } => close::run(app_paths, id),
         Commands::List => list::run(app_paths),
@@ -78,4 +76,8 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
             dir,
         } => cmd::run(app_paths, command, cron, run_immediately, env, dir),
     }
+}
+
+pub fn setup_console() {
+    console::setup();
 }

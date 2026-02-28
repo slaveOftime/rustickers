@@ -1,11 +1,11 @@
 /// On Windows, attach to the parent process console so that output is visible
 /// when the binary is invoked from a terminal.
-pub fn setup_console() {
+pub fn setup() {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
         unsafe {
-            AttachConsole(ATTACH_PARENT_PROCESS);
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
 }
