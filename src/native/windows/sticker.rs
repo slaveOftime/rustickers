@@ -36,6 +36,16 @@ const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 
 static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new());
 
+#[derive(PartialEq, Clone, Debug)]
+struct WindowState {
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+    display_id: Option<u32>,
+    scale_factor: f32,
+}
+
 pub struct StickerWindow {
     store: ArcStickerStore,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -44,9 +54,8 @@ pub struct StickerWindow {
     view: Box<dyn StickerView>,
     error: Option<String>,
 
-    last_bounds: Option<(i32, i32, i32, i32)>,
+    last_bounds: Option<WindowState>,
     last_bounds_change_at: Option<Instant>,
-    last_scale_factor: f32,
 }
 
 impl StickerWindow {
@@ -82,7 +91,7 @@ impl StickerWindow {
             ));
         }
 
-        cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail))
+        cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail, false))
     }
 
     pub fn open_file_preview(
@@ -149,9 +158,10 @@ impl StickerWindow {
             content,
             created_at: 0,
             updated_at: 0,
+            display_id: cx.primary_display().map(|x| u32::from(x.id())),
         };
 
-        Self::open_with_detail(cx, sticker_events_tx, store, detail)
+        Self::open_with_detail(cx, sticker_events_tx, store, detail, true)
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {
@@ -186,6 +196,7 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
         detail: StickerDetail,
+        focus: bool,
     ) -> anyhow::Result<()> {
         let id = detail.id;
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
@@ -237,8 +248,18 @@ impl StickerWindow {
             current_size.map(|x| px(x as f32)),
         );
 
+        let display_id = detail.display_id.and_then(|saved_id| {
+            cx.displays()
+                .iter()
+                .find(|d| u32::from(d.id()) == saved_id)
+                .map(|d| d.id())
+        });
+
+        // There is issue which gpui does not restore exactly with the given bounds especially on other displays
         let handle = cx.open_window(
             WindowOptions {
+                focus,
+                display_id,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
@@ -304,7 +325,6 @@ impl StickerWindow {
             view,
             last_bounds: None,
             last_bounds_change_at: None,
-            last_scale_factor: window.scale_factor(),
             error: None,
         }
     }
@@ -380,20 +400,16 @@ impl StickerWindow {
     }
 
     fn tick_bounds_state(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let current_scale = window.scale_factor();
-        let current = self.current_bounds(window);
-
-        // If scale factor changed (DPI change due to monitor connect/disconnect),
-        // update tracking state without scheduling a save to avoid persisting
-        // DPI-adjusted logical bounds that would cause wrong size on next launch.
-        if (self.last_scale_factor - current_scale).abs() > 0.001 {
-            self.last_scale_factor = current_scale;
-            self.last_bounds = Some(current);
-            self.last_bounds_change_at = None;
+        if self.view.id(cx) <= 0 {
             return;
         }
 
-        let changed = self.last_bounds.map(|prev| prev != current).unwrap_or(true);
+        let current = self.current_bounds(window, cx);
+        let changed = self
+            .last_bounds
+            .as_ref()
+            .map(|x| x != &current)
+            .unwrap_or(true);
 
         if changed {
             self.last_bounds = Some(current);
@@ -413,58 +429,52 @@ impl StickerWindow {
     }
 
     fn try_tick(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if window.is_window_hovered() {
-            if self.last_bounds.is_none() {
-                self.last_bounds = Some(self.current_bounds(window));
-            }
-            self.tick_bounds_state(window, cx);
+        if self.last_bounds.is_none() {
+            self.last_bounds = Some(self.current_bounds(window, cx));
         }
+        self.tick_bounds_state(window, cx);
     }
 
-    fn current_bounds(&self, window: &Window) -> (i32, i32, i32, i32) {
+    fn current_bounds(&self, window: &Window, cx: &Context<Self>) -> WindowState {
         let bounds = window.bounds();
-        (
-            bounds.left().to_f64() as i32,
-            bounds.top().to_f64() as i32,
-            bounds.size.width.to_f64() as i32,
-            bounds.size.height.to_f64() as i32,
-        )
+        let display_id = window.display(cx).map(|x| u32::from(x.id()));
+        let scale_factor = window.scale_factor() as f32;
+
+        WindowState {
+            left: bounds.left().to_f64() as i32,
+            top: bounds.top().to_f64() as i32,
+            width: bounds.size.width.to_f64() as i32,
+            height: bounds.size.height.to_f64() as i32,
+            display_id,
+            scale_factor,
+        }
     }
 
     fn change_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let current_scale = window.scale_factor();
-
-        // If scale factor changed since last tracking update, this change is
-        // DPI-induced (monitor connect/disconnect) — skip saving.
-        if (self.last_scale_factor - current_scale).abs() > 0.001 {
-            self.last_scale_factor = current_scale;
-            self.last_bounds = Some(self.current_bounds(window));
-            return;
-        }
-
-        let bounds = window.bounds();
-
-        let (left, top, width, height) = (
-            bounds.left().to_f64() as i32,
-            bounds.top().to_f64() as i32,
-            bounds.size.width.to_f64() as i32,
-            bounds.size.height.to_f64() as i32,
-        );
-
-        if left != self.detail.left
-            || top != self.detail.top
-            || width != self.detail.width
-            || height != self.detail.height
+        let bounds = self.current_bounds(window, cx);
+        if bounds.left != self.detail.left
+            || bounds.top != self.detail.top
+            || bounds.width != self.detail.width
+            || bounds.height != self.detail.height
+            || bounds.display_id != self.detail.display_id
         {
-            let id = self.view.id(cx);
-            if id <= 0 {
-                return;
-            }
+            self.last_bounds = Some(bounds.clone());
 
+            let id = self.view.id(cx);
             let store = self.store.clone();
+
+            tracing::debug!("Save bounds state: {:?}", &bounds);
+
             cx.spawn(async move |this, cx| {
                 if let Err(err) = store
-                    .update_sticker_bounds(id, left, top, width, height)
+                    .update_sticker_bounds(
+                        id,
+                        bounds.left,
+                        bounds.top,
+                        bounds.width,
+                        bounds.height,
+                        bounds.display_id,
+                    )
                     .await
                 {
                     let _ = this.update(cx, |this, cx| {
@@ -472,10 +482,11 @@ impl StickerWindow {
                     });
                 } else {
                     let _ = this.update(cx, |this, _| {
-                        this.detail.left = left;
-                        this.detail.top = top;
-                        this.detail.width = width;
-                        this.detail.height = height;
+                        this.detail.left = bounds.left;
+                        this.detail.top = bounds.top;
+                        this.detail.width = bounds.width;
+                        this.detail.height = bounds.height;
+                        this.detail.display_id = bounds.display_id;
                     });
                 }
             })
