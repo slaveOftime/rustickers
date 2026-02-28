@@ -338,7 +338,7 @@ impl Render for MarkdownSticker {
                         .py_1()
                         .px_2()
                         .size_full()
-                        .selectable(true)
+                        .selectable(false)
                         .scrollable(true),
                 )
                 .child(
