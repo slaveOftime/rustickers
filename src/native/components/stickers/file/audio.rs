@@ -18,7 +18,7 @@ use crate::model::content::FileStickerContent;
 use crate::native::components::IconName;
 use crate::native::windows::StickerWindowEvent;
 
-pub(super) const AUDIO_ANIM_INTERVAL_MS: u64 = 80;
+pub(super) const ANIM_INTERVAL_MS: u64 = 80;
 
 pub(super) enum AudioCmd {
     Load(PathBuf),
@@ -200,7 +200,7 @@ fn decode_audio_frames(path: &Path) -> Vec<AudioFrameMetrics> {
 
     let channels = decoder.channels().get().max(1) as usize;
     let sample_rate = decoder.sample_rate().get().max(1) as usize;
-    let chunk_len = ((sample_rate * AUDIO_ANIM_INTERVAL_MS as usize) / 1000).max(128) * channels;
+    let chunk_len = ((sample_rate * ANIM_INTERVAL_MS as usize) / 1000).max(128) * channels;
 
     let samples: Vec<f32> = decoder.collect();
     samples
@@ -209,7 +209,7 @@ fn decode_audio_frames(path: &Path) -> Vec<AudioFrameMetrics> {
         .collect::<Vec<_>>()
 }
 
-pub(super) fn spawn_audio_thread(initial_path: PathBuf) -> AudioHandle {
+pub(super) fn spawn_thread(initial_path: PathBuf) -> AudioHandle {
     let (tx, rx) = mpsc::channel::<AudioCmd>();
     let (event_tx, event_rx) = mpsc::channel::<AudioEvent>();
     std::thread::spawn(move || {
@@ -221,15 +221,15 @@ pub(super) fn spawn_audio_thread(initial_path: PathBuf) -> AudioHandle {
             }
         };
         let player = rodio::Player::connect_new(&device_sink.mixer());
-        audio_load_file(&player, &initial_path);
+        load_file(&player, &initial_path);
         let mut analyzer = AudioAnalyzer::from_path(&initial_path);
         let mut last_frame_sent = Instant::now();
         let mut was_empty = player.empty();
         loop {
-            match rx.recv_timeout(Duration::from_millis(AUDIO_ANIM_INTERVAL_MS)) {
+            match rx.recv_timeout(Duration::from_millis(ANIM_INTERVAL_MS)) {
                 Ok(cmd) => match cmd {
                     AudioCmd::Load(path) => {
-                        audio_load_file(&player, &path);
+                        load_file(&player, &path);
                         analyzer = AudioAnalyzer::from_path(&path);
                         let _ = event_tx.send(AudioEvent::Frame(AudioFrameMetrics::default()));
                         was_empty = player.empty();
@@ -250,7 +250,7 @@ pub(super) fn spawn_audio_thread(initial_path: PathBuf) -> AudioHandle {
 
             if !is_empty
                 && !player.is_paused()
-                && last_frame_sent.elapsed() >= Duration::from_millis(AUDIO_ANIM_INTERVAL_MS)
+                && last_frame_sent.elapsed() >= Duration::from_millis(ANIM_INTERVAL_MS)
             {
                 let _ = event_tx.send(AudioEvent::Frame(analyzer.next()));
                 last_frame_sent = Instant::now();
@@ -264,7 +264,7 @@ pub(super) fn spawn_audio_thread(initial_path: PathBuf) -> AudioHandle {
     }
 }
 
-fn audio_load_file(player: &rodio::Player, path: &Path) {
+fn load_file(player: &rodio::Player, path: &Path) {
     player.stop();
     match fs::File::open(path) {
         Ok(file) => match Decoder::new(BufReader::new(file)) {
@@ -278,7 +278,7 @@ fn audio_load_file(player: &rodio::Player, path: &Path) {
     }
 }
 
-pub(super) fn load_audio_metadata(path: &Path) -> AudioMetadata {
+pub(super) fn load_metadata(path: &Path) -> AudioMetadata {
     let probe = match Probe::open(path) {
         Ok(p) => p,
         Err(_) => {
@@ -337,14 +337,14 @@ pub(super) fn load_audio_metadata(path: &Path) -> AudioMetadata {
 // ── FileSticker audio methods ─────────────────────────────────────────────────
 
 impl super::FileSticker {
-    fn audio_state(&self) -> Option<&AudioState> {
+    fn state(&self) -> Option<&AudioState> {
         match &self.preview {
             Some(super::preview::FilePreview::Audio { state, .. }) => Some(state),
             _ => None,
         }
     }
 
-    fn audio_state_mut(&mut self) -> Option<&mut AudioState> {
+    fn state_mut(&mut self) -> Option<&mut AudioState> {
         match &mut self.preview {
             Some(super::preview::FilePreview::Audio { state, .. }) => Some(state),
             _ => None,
@@ -352,7 +352,7 @@ impl super::FileSticker {
     }
 
     pub(super) fn stop_audio(&mut self) {
-        if let Some(state) = self.audio_state_mut() {
+        if let Some(state) = self.state_mut() {
             state.handle = None;
             state.event_rx = None;
             state.is_playing = false;
@@ -361,8 +361,8 @@ impl super::FileSticker {
         }
     }
 
-    pub(super) fn audio_toggle_play(&mut self, cx: &mut Context<Self>) {
-        if let Some(state) = self.audio_state_mut() {
+    pub(super) fn toggle_play(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.state_mut() {
             if let Some(handle) = &state.handle {
                 if state.is_playing {
                     let _ = handle.cmd_tx.send(AudioCmd::Pause);
@@ -376,25 +376,25 @@ impl super::FileSticker {
         }
     }
 
-    fn audio_cycle_play_mode(&mut self, cx: &mut Context<Self>) {
-        if let Some(state) = self.audio_state_mut() {
+    fn cycle_play_mode(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.state_mut() {
             state.play_mode = state.play_mode.cycle();
             cx.notify();
 
             if state.play_mode.is_autoplay() && !state.is_playing {
-                self.audio_navigate(1, cx);
+                self.navigate(1, cx);
             }
         }
     }
 
-    fn poll_audio_events(&mut self, cx: &mut Context<Self>) {
+    fn poll_events(&mut self, cx: &mut Context<Self>) {
         let mut playback_ended = false;
         let mut disconnected = false;
         let mut latest_frame = None;
         let mut should_autoplay = false;
 
         {
-            let Some(state) = self.audio_state_mut() else {
+            let Some(state) = self.state_mut() else {
                 return;
             };
 
@@ -435,20 +435,20 @@ impl super::FileSticker {
         }
 
         if should_autoplay {
-            self.audio_navigate(1, cx);
+            self.navigate(1, cx);
         }
     }
 
-    pub(super) fn audio_navigate(&mut self, delta: i64, cx: &mut Context<Self>) {
+    pub(super) fn navigate(&mut self, delta: i64, cx: &mut Context<Self>) {
         if !self
-            .audio_state()
+            .state()
             .map(|state| state.siblings_loaded)
             .unwrap_or(false)
         {
-            self.audio_discover_siblings();
+            self.discover_siblings();
         }
 
-        let Some(state) = self.audio_state() else {
+        let Some(state) = self.state() else {
             return;
         };
         if state.siblings.is_empty() {
@@ -484,7 +484,7 @@ impl super::FileSticker {
                 state.anim_loop_started = false;
                 state.frame_metrics = AudioFrameMetrics::default();
             } else {
-                let mut handle = spawn_audio_thread(new_path.clone());
+                let mut handle = spawn_thread(new_path.clone());
                 state.event_rx = handle.take_event_rx();
                 state.handle = Some(handle);
                 state.is_playing = true;
@@ -514,17 +514,17 @@ impl super::FileSticker {
             .detach();
         }
 
-        self.spawn_load_audio_metadata(new_path, cx);
+        self.spawn_load_metadata(new_path, cx);
     }
 
-    pub(super) fn spawn_load_audio_metadata(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if let Some(state) = self.audio_state_mut() {
+    pub(super) fn spawn_load_metadata(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(state) = self.state_mut() {
             state.metadata = None;
         }
         cx.spawn(async move |entity, cx| {
-            let metadata = load_audio_metadata(&path);
+            let metadata = load_metadata(&path);
             let _ = entity.update(cx, |this, cx| {
-                if let Some(state) = this.audio_state_mut() {
+                if let Some(state) = this.state_mut() {
                     state.metadata = Some(metadata);
                     cx.notify();
                 }
@@ -533,7 +533,7 @@ impl super::FileSticker {
         .detach();
     }
 
-    fn audio_discover_siblings(&mut self) {
+    fn discover_siblings(&mut self) {
         let current_path = match &self.preview {
             Some(super::preview::FilePreview::Audio { source_path, .. }) => source_path.clone(),
             _ => return,
@@ -562,36 +562,36 @@ impl super::FileSticker {
             .position(|p| p == &current_path)
             .unwrap_or(0);
 
-        if let Some(state) = self.audio_state_mut() {
+        if let Some(state) = self.state_mut() {
             state.siblings = siblings;
             state.current_idx = current_idx;
             state.siblings_loaded = true;
         }
     }
 
-    pub(super) fn ensure_audio_anim_loop(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.audio_state_mut() else {
+    pub(super) fn ensure_anim_loop(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state_mut() else {
             return;
         };
         if state.anim_loop_started || !state.is_playing {
             return;
         }
         state.anim_loop_started = true;
-        self.spawn_audio_anim_tick(cx);
+        self.spawn_anim_tick(cx);
     }
 
-    fn spawn_audio_anim_tick(&mut self, cx: &mut Context<Self>) {
+    fn spawn_anim_tick(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |entity, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(AUDIO_ANIM_INTERVAL_MS))
+                .timer(Duration::from_millis(ANIM_INTERVAL_MS))
                 .await;
             let _ = entity.update(cx, |this, cx| {
-                this.poll_audio_events(cx);
-                if let Some(state) = this.audio_state_mut() {
+                this.poll_events(cx);
+                if let Some(state) = this.state_mut() {
                     if state.is_playing {
                         state.anim_tick = state.anim_tick.wrapping_add(1);
                         cx.notify();
-                        this.spawn_audio_anim_tick(cx);
+                        this.spawn_anim_tick(cx);
                     } else {
                         state.anim_loop_started = false;
                     }
@@ -601,14 +601,11 @@ impl super::FileSticker {
         .detach();
     }
 
-    pub(super) fn audio_matrix_bg(&self, window: &Window) -> gpui::AnyElement {
-        let tick = self.audio_state().map(|state| state.anim_tick).unwrap_or(0);
-        let is_playing = self
-            .audio_state()
-            .map(|state| state.is_playing)
-            .unwrap_or(false);
+    pub(super) fn matrix_bg(&self, window: &Window) -> gpui::AnyElement {
+        let tick = self.state().map(|state| state.anim_tick).unwrap_or(0);
+        let is_playing = self.state().map(|state| state.is_playing).unwrap_or(false);
         let frame = self
-            .audio_state()
+            .state()
             .map(|state| state.frame_metrics)
             .unwrap_or_default();
         let base_opacity: f32 = if is_playing { 0.045 } else { 0.02 };
@@ -671,7 +668,7 @@ impl super::FileSticker {
             .into_any_element()
     }
 
-    pub(super) fn audio_player_view(
+    pub(super) fn player_view(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -717,7 +714,7 @@ impl super::FileSticker {
                     .border_0()
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.audio_navigate(-1, cx);
+                        this.navigate(-1, cx);
                     })),
             )
             .child(
@@ -731,7 +728,7 @@ impl super::FileSticker {
                     .border_0()
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.audio_toggle_play(cx);
+                        this.toggle_play(cx);
                     })),
             )
             .child(
@@ -741,7 +738,7 @@ impl super::FileSticker {
                     .border_0()
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.audio_navigate(1, cx);
+                        this.navigate(1, cx);
                     })),
             )
             .child(
@@ -755,7 +752,7 @@ impl super::FileSticker {
                     .border_0()
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.audio_cycle_play_mode(cx);
+                        this.cycle_play_mode(cx);
                     })),
             );
 
@@ -810,7 +807,7 @@ impl super::FileSticker {
         div()
             .size_full()
             .relative()
-            .child(self.audio_matrix_bg(window))
+            .child(self.matrix_bg(window))
             .child(
                 div()
                     .absolute()

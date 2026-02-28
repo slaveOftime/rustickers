@@ -226,7 +226,7 @@ pub(super) fn build_default_size(sources: &[&str]) -> gpui::Size<i32> {
             return gpui::size(760, 640);
         }
         if crate::utils::file::is_audio_ext(ext) {
-            return gpui::size(360, 160);
+            return gpui::size(340, 160);
         }
         if crate::utils::file::is_markdown_ext(ext) {
             return gpui::size(640, 760);

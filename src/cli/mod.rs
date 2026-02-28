@@ -1,9 +1,9 @@
 mod close;
 mod cmd;
 mod console;
-mod view;
 mod list;
 mod show;
+mod view;
 
 use clap::{Parser, Subcommand};
 

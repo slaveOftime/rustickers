@@ -242,7 +242,7 @@ impl Render for FileSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(14.0));
         self.ensure_watch_loop(window, cx);
-        self.ensure_audio_anim_loop(cx);
+        self.ensure_anim_loop(cx);
 
         let bg_color = Rgba {
             a: 0.85,

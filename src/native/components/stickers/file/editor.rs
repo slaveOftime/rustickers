@@ -46,10 +46,10 @@ impl super::FileSticker {
                                 state.is_playing = true;
                                 state.anim_loop_started = false;
                                 state.frame_metrics = super::audio::AudioFrameMetrics::default();
-                                let mut handle = super::audio::spawn_audio_thread(path.clone());
+                                let mut handle = super::audio::spawn_thread(path.clone());
                                 state.event_rx = handle.take_event_rx();
                                 state.handle = Some(handle);
-                                this.spawn_load_audio_metadata(path, cx);
+                                this.spawn_load_metadata(path, cx);
                             }
                             this.preview = preview;
                             this.preview_editor = None;
@@ -267,7 +267,7 @@ impl super::FileSticker {
             Some(FilePreview::WebView(webview)) => {
                 div().size_full().child(webview.clone()).into_any_element()
             }
-            Some(FilePreview::Audio { .. }) => self.audio_player_view(window, cx),
+            Some(FilePreview::Audio { .. }) => self.player_view(window, cx),
             None => div().child(self.summary_view()).into_any_element(),
         }
     }
