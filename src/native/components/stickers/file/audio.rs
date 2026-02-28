@@ -376,9 +376,14 @@ impl super::FileSticker {
         }
     }
 
-    fn audio_cycle_play_mode(&mut self) {
+    fn audio_cycle_play_mode(&mut self, cx: &mut Context<Self>) {
         if let Some(state) = self.audio_state_mut() {
             state.play_mode = state.play_mode.cycle();
+            cx.notify();
+
+            if state.play_mode.is_autoplay() && !state.is_playing {
+                self.audio_navigate(1, cx);
+            }
         }
     }
 
@@ -750,8 +755,7 @@ impl super::FileSticker {
                     .border_0()
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.audio_cycle_play_mode();
-                        cx.notify();
+                        this.audio_cycle_play_mode(cx);
                     })),
             );
 
