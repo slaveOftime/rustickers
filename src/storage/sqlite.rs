@@ -103,7 +103,7 @@ impl super::StickerStore for SqliteStore {
     async fn get_sticker(&self, id: i64) -> anyhow::Result<StickerDetail> {
         tracing::debug!(id, "Get sticker detail");
         let row = sqlx::query_as::<_, StickerDetail>(
-            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at FROM stickers WHERE id = ?1",
+            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at, display_id FROM stickers WHERE id = ?1",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -165,8 +165,17 @@ impl super::StickerStore for SqliteStore {
         top: i32,
         width: i32,
         height: i32,
+        display_id: Option<u32>,
     ) -> anyhow::Result<()> {
-        tracing::debug!(id, left, top, width, height, "Update sticker bounds");
+        tracing::debug!(
+            id,
+            left,
+            top,
+            width,
+            height,
+            display_id,
+            "Update sticker bounds"
+        );
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -177,14 +186,16 @@ impl super::StickerStore for SqliteStore {
                 top = ?2,
                 width = ?3,
                 height = ?4,
-                updated_at = ?5
-            WHERE id = ?6
+                display_id = ?5,
+                updated_at = ?6
+            WHERE id = ?7
             "#,
         )
         .bind(left)
         .bind(top)
         .bind(width)
         .bind(height)
+        .bind(display_id)
         .bind(now)
         .bind(id)
         .execute(&self.pool)

@@ -182,6 +182,7 @@ impl MarkdownSticker {
                 content: FileStickerContent::from_sources(&[path_str]).to_json(),
                 created_at: 0,
                 updated_at: 0,
+                display_id: md_detail.display_id,
             };
 
             // Insert the new file sticker.

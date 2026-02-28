@@ -22,6 +22,7 @@ pub trait StickerStore: Send + Sync {
         top: i32,
         width: i32,
         height: i32,
+        display_id: Option<u32>,
     ) -> anyhow::Result<()>;
     async fn update_sticker_content(&self, id: i64, content: String) -> anyhow::Result<()>;
     async fn update_sticker_state(&self, id: i64, state: StickerState) -> anyhow::Result<()>;

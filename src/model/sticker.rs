@@ -70,6 +70,8 @@ pub struct StickerDetail {
     pub content: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// The display this sticker was last on (as the raw u32 platform display ID).
+    pub display_id: Option<u32>,
 }
 
 impl StickerColor {

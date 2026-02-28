@@ -226,6 +226,7 @@ impl MainWindow {
             top_most: false,
             created_at: 0,
             updated_at: 0,
+            display_id: None,
         };
 
         let store = self.store.clone();

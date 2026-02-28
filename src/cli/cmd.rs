@@ -45,6 +45,7 @@ pub fn run(
         content: content_json,
         created_at: 0,
         updated_at: 0,
+        display_id: None,
     }))?;
 
     let mut out = console_writer();
