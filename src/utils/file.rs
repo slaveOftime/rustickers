@@ -1,5 +1,22 @@
 use std::path::Path;
 
+use gpui::ImageFormat;
+
+pub fn is_binary_text_content(content: &str) -> bool {
+    if content.is_empty() {
+        return false;
+    }
+    if content.as_bytes().contains(&0) {
+        return true;
+    }
+    let sample = content.as_bytes();
+    let control_count = sample
+        .iter()
+        .filter(|&&byte| matches!(byte, 0x01..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F | 0x7F))
+        .count();
+    control_count > sample.len() / 10
+}
+
 pub fn read_text_full(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
@@ -42,6 +59,20 @@ pub fn is_image_ext(ext: &str) -> bool {
             | "qoi"
             | "svg"
     )
+}
+
+pub fn image_format_for_ext(ext: &str) -> Option<ImageFormat> {
+    match ext {
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "png" => Some(ImageFormat::Png),
+        "gif" => Some(ImageFormat::Gif),
+        "bmp" => Some(ImageFormat::Bmp),
+        "svg" => Some(ImageFormat::Svg),
+        "webp" => Some(ImageFormat::Webp),
+        "ico" => Some(ImageFormat::Ico),
+        "tiff" | "tif" => Some(ImageFormat::Tiff),
+        _ => None,
+    }
 }
 
 pub fn is_markdown_ext(ext: &str) -> bool {

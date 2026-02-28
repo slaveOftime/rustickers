@@ -12,9 +12,11 @@ use gpui_component::{
 };
 use notify::RecommendedWatcher;
 use preview::FilePreview;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use summary::FileSummary;
+use url::Url;
 
 use crate::model::content::FileStickerContent;
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
@@ -33,7 +35,7 @@ pub struct FileSticker {
     preview: Option<FilePreview>,
     preview_editor: Option<Entity<gpui_component::input::InputState>>,
     refreshing: bool,
-    sticking: bool,
+    pining: bool,
     error: Option<String>,
     watcher: Option<RecommendedWatcher>,
     watch_events_rx: Option<async_mpsc::UnboundedReceiver<()>>,
@@ -44,7 +46,54 @@ pub struct FileSticker {
 
 impl FileSticker {
     pub fn default_window_size_for_sources(sources: &[&str]) -> gpui::Size<i32> {
-        preview::build_default_size(sources)
+        if sources.is_empty() {
+            return <Self as super::Sticker>::default_window_size();
+        }
+
+        if sources.len() > 1 {
+            let row_bonus = (sources.len().saturating_sub(1) as i32).clamp(0, 14) * 12;
+            return gpui::size(300, (380 + row_bonus).clamp(380, 560));
+        }
+
+        let source = &sources[0];
+        let ext = if crate::utils::url::is_url(source) {
+            Url::parse(source).ok().and_then(|url| {
+                Path::new(url.path())
+                    .extension()
+                    .and_then(|raw_ext| raw_ext.to_str())
+                    .map(|raw_ext| raw_ext.to_ascii_lowercase())
+            })
+        } else {
+            let path = Path::new(source);
+            if path.is_dir() {
+                return gpui::size(300, 200);
+            }
+            path.extension()
+                .and_then(|raw_ext| raw_ext.to_str())
+                .map(|raw_ext| raw_ext.to_ascii_lowercase())
+        };
+
+        if let Some(ext) = ext.as_deref() {
+            if crate::utils::file::is_image_ext(ext) {
+                return gpui::size(480, 480);
+            }
+            if crate::utils::file::is_web_doc_ext(ext) || crate::utils::file::is_video_ext(ext) {
+                return gpui::size(760, 640);
+            }
+            if crate::utils::file::is_audio_ext(ext) {
+                return gpui::size(340, 160);
+            }
+            if crate::utils::file::is_markdown_ext(ext) {
+                return gpui::size(640, 760);
+            }
+            if crate::utils::file::is_code_ext(ext) {
+                return gpui::size(640, 760);
+            }
+            if crate::utils::file::is_text_ext(ext) {
+                return gpui::size(540, 640);
+            }
+        }
+        gpui::size(400, 200)
     }
 
     pub fn new(
@@ -73,7 +122,7 @@ impl FileSticker {
         let source_paths = parsed.files;
         let mut summaries: Vec<FileSummary> = source_paths
             .iter()
-            .map(|raw_path| FileSummary::from_source(raw_path))
+            .map(|raw_path| FileSummary::new(raw_path))
             .collect();
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -87,7 +136,7 @@ impl FileSticker {
             preview: None,
             preview_editor: None,
             refreshing: false,
-            sticking: false,
+            pining: false,
             error: None,
             watcher: None,
             watch_events_rx: None,
@@ -106,7 +155,7 @@ impl FileSticker {
         self.id > 0
     }
 
-    fn stick_title(&self) -> String {
+    fn title(&self) -> String {
         if self.summaries.len() == 1 {
             self.summaries[0].name.clone()
         } else {
@@ -114,53 +163,15 @@ impl FileSticker {
         }
     }
 
-    fn stick_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        Button::new("stick")
-            .icon(IconName::Pin)
-            .absolute()
-            .top_0()
-            .right(px(68.0))
-            .disabled(self.sticking)
-            .bg(rgba(0x000000))
-            .border_0()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.stick(window, cx);
-            }))
-            .into_any_element()
-    }
-
-    fn refresh_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        Button::new("refresh")
-            .icon(IconName::Refresh)
-            .absolute()
-            .top_0()
-            .right_9()
-            .disabled(self.refreshing)
-            .bg(rgba(0x000000))
-            .border_0()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, window, cx| {
-                if let Some(FilePreview::WebView(web)) = &this.preview {
-                    let _ = web.update(cx, |web, cx| web.reload(cx));
-                    this.spawn_refresh_summaries(window, cx);
-                    return;
-                }
-                this.spawn_refresh_preview(window, cx);
-                this.spawn_refresh_summaries(window, cx);
-            }))
-            .into_any_element()
-    }
-
-    fn stick(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.is_persisted() || self.sticking {
+    fn pin(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.is_persisted() || self.pining {
             return;
         }
-        self.sticking = true;
+        self.pining = true;
         self.error = None;
         cx.notify();
 
-        let title = self.stick_title();
+        let title = self.title();
         let content = FileStickerContent {
             files: self
                 .summaries
@@ -197,13 +208,13 @@ impl FileSticker {
                     let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
                     let _ = entity.update(cx, |this, cx| {
                         this.id = id;
-                        this.sticking = false;
+                        this.pining = false;
                         cx.notify();
                     });
                 }
                 Err(err) => {
                     let _ = entity.update(cx, |this, cx| {
-                        this.sticking = false;
+                        this.pining = false;
                         this.error = Some(format!("Failed to save file sticker: {err:#}"));
                         cx.notify();
                     });
@@ -211,6 +222,44 @@ impl FileSticker {
             },
         )
         .detach();
+    }
+
+    fn pin_btn(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        Button::new("stick")
+            .icon(IconName::Pin)
+            .absolute()
+            .top_0()
+            .right(px(68.0))
+            .disabled(self.pining)
+            .bg(rgba(0x000000))
+            .border_0()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.pin(window, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn refresh_btn(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        Button::new("refresh")
+            .icon(IconName::Refresh)
+            .absolute()
+            .top_0()
+            .right_9()
+            .disabled(self.refreshing)
+            .bg(rgba(0x000000))
+            .border_0()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                if let Some(FilePreview::WebView(web)) = &this.preview {
+                    let _ = web.update(cx, |web, cx| web.reload(cx));
+                    this.spawn_refresh_summaries(window, cx);
+                    return;
+                }
+                this.spawn_refresh_preview(window, cx);
+                this.spawn_refresh_summaries(window, cx);
+            }))
+            .into_any_element()
     }
 }
 
@@ -242,8 +291,8 @@ impl super::Sticker for FileSticker {
 impl Render for FileSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(14.0));
+
         self.ensure_watch_loop(window, cx);
-        self.ensure_anim_loop(cx);
 
         let bg_color = Rgba {
             a: 0.85,
@@ -288,7 +337,7 @@ impl Render for FileSticker {
                         .left_0()
                         .right_0()
                         .bottom_0()
-                        .child(Alert::error("file-preview-error", err.as_str())),
+                        .child(Alert::error("file-error", err.as_str())),
                 )
             })
             .when(
@@ -297,16 +346,7 @@ impl Render for FileSticker {
             )
             .when(
                 self.preview.is_some()
-                    && !matches!(
-                        self.preview,
-                        Some(FilePreview::Audio {
-                            state: audio::AudioState {
-                                handle: Some(_),
-                                ..
-                            },
-                            ..
-                        })
-                    )
+                    && !matches!(self.preview, Some(FilePreview::Audio { .. }))
                     && window.is_window_hovered(),
                 |view| {
                     view.child(
@@ -333,10 +373,10 @@ impl Render for FileSticker {
                 },
             )
             .when(!self.is_persisted() && window.is_window_hovered(), |view| {
-                view.child(self.stick_controls(cx))
+                view.child(self.pin_btn(cx))
             })
             .when(window.is_window_hovered(), |view| {
-                view.child(self.refresh_controls(cx))
+                view.child(self.refresh_btn(cx))
             })
     }
 }

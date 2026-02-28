@@ -1,14 +1,13 @@
 use futures::StreamExt;
 use futures::channel::mpsc as async_mpsc;
 use gpui::{Context, Window};
-use notify::{Config, RecommendedWatcher, Watcher};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-pub(super) const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
-
-// ── FileSticker file-watcher methods ─────────────────────────────────────────
+const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 impl super::FileSticker {
     pub(super) fn init_file_watcher(&mut self) {
@@ -22,7 +21,7 @@ impl super::FileSticker {
                     return;
                 }
                 let Ok(event) = result else { return };
-                if !super::utils::is_relevant_watch_event(&event.kind) {
+                if matches!(&event.kind, notify::event::EventKind::Access(_)) {
                     return;
                 }
                 if !watch_pending.swap(true, Ordering::AcqRel) {
@@ -39,7 +38,7 @@ impl super::FileSticker {
         };
 
         for raw_path in &self.source_paths {
-            let Some((watch_path, mode)) = super::utils::watch_target(raw_path) else {
+            let Some((watch_path, mode)) = build_watch_target(raw_path) else {
                 continue;
             };
             if let Err(err) = watcher.watch(&watch_path, mode) {
@@ -106,4 +105,20 @@ impl super::FileSticker {
         self.spawn_refresh_summaries(window, cx);
         true
     }
+}
+
+fn build_watch_target(raw_path: &str) -> Option<(PathBuf, RecursiveMode)> {
+    if crate::utils::url::is_url(raw_path) {
+        return None;
+    }
+    let path = PathBuf::from(raw_path);
+    if path.is_dir() {
+        return Some((path, RecursiveMode::Recursive));
+    }
+    if path.is_file() {
+        return Some((path, RecursiveMode::NonRecursive));
+    }
+    path.parent()
+        .filter(|parent| parent.exists())
+        .map(|parent| (parent.to_path_buf(), RecursiveMode::NonRecursive))
 }
