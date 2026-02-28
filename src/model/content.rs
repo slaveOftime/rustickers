@@ -62,6 +62,7 @@ pub enum CommandResult {
     Html(Option<String>),
     Svg(Option<String>),
     Markdown(Option<String>),
+    Source(Option<String>),
 }
 
 impl Default for CommandContent {

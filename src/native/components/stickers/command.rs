@@ -28,8 +28,12 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::native::{
-    components::IconName, components::webview::SimpleWebView, windows::StickerWindowEvent,
+use crate::{
+    model::content::FileStickerContent,
+    native::{
+        components::{IconName, stickers::file::FileSticker, webview::SimpleWebView},
+        windows::StickerWindowEvent,
+    },
 };
 
 use crate::model::content::{CommandContent, CommandResult, Scheduler};
@@ -56,6 +60,7 @@ pub struct CommandSticker {
 
     result: CommandResult,
     result_html_entity: Option<Entity<SimpleWebView>>,
+    result_file_entity: Option<Entity<FileSticker>>,
 
     process: Option<Arc<Mutex<std::process::Child>>>,
     stopping: bool,
@@ -121,6 +126,19 @@ impl CommandSticker {
             _ => None,
         };
 
+        let result_file_entity = match &cmd.result {
+            CommandResult::Source(Some(x)) => Some(Self::build_file_content(
+                id,
+                x,
+                color,
+                store.clone(),
+                window,
+                cx,
+                sticker_events_tx.clone(),
+            )),
+            _ => None,
+        };
+
         let padding = cx.new(|_cx| {
             SliderState::new()
                 .default_value(cmd.padding.unwrap_or(0) as f32)
@@ -163,8 +181,11 @@ impl CommandSticker {
             scheduler: cmd.scheduler,
             scheduler_cron_input: cron_entity,
             run_immediately: cmd.run_immediately,
+
             result: cmd.result,
             result_html_entity,
+            result_file_entity,
+
             stream_result: cmd.stream_result,
             padding,
             started_at: cmd.started_at,
@@ -190,6 +211,31 @@ impl CommandSticker {
             padding: Some(self.padding.read(cx).value().start() as u8),
             started_at: self.started_at,
         }
+    }
+
+    fn build_file_content(
+        id: i64,
+        source: &str,
+        color: StickerColor,
+        store: ArcStickerStore,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
+    ) -> Entity<FileSticker> {
+        let sources = vec![source.replace("\n", "").trim().to_string()];
+        println!("Building file content from source: {:?}", sources);
+        let content = FileStickerContent::from_sources(&sources).to_json();
+        cx.new(move |cx| {
+            FileSticker::new(
+                id,
+                color,
+                store.clone(),
+                &content,
+                window,
+                cx,
+                sticker_events_tx,
+            )
+        })
     }
 
     fn save_config(&mut self, cx: &mut Context<Self>) -> bool {
@@ -487,16 +533,19 @@ impl CommandSticker {
                 CommandResult::Text(ref mut result)
                 | CommandResult::Markdown(ref mut result)
                 | CommandResult::Html(ref mut result)
-                | CommandResult::Svg(ref mut result) => {
+                | CommandResult::Svg(ref mut result)
+                | CommandResult::Source(ref mut result) => {
                     *result = None;
                 }
             }
             self.result_html_entity = None;
+            self.result_file_entity = None;
         } else {
             match &self.result {
-                CommandResult::Html(_) => {}
+                CommandResult::Html(_) | CommandResult::Source(_) => {}
                 _ => {
                     self.result_html_entity = None;
+                    self.result_file_entity = None;
                 }
             };
         }
@@ -531,7 +580,9 @@ impl CommandSticker {
                                                     *result_temp.write().unwrap() += "\n";
                                                 }
                                             }
-                                            CommandResult::Html(_) | CommandResult::Svg(_) => {
+                                            CommandResult::Html(_)
+                                            | CommandResult::Svg(_)
+                                            | CommandResult::Source(_) => {
                                                 *result_temp.write().unwrap() += &line;
                                                 *result_temp.write().unwrap() += "\n";
                                             }
@@ -552,7 +603,8 @@ impl CommandSticker {
                                             }
                                         }
                                         CommandResult::Html(ref mut result)
-                                        | CommandResult::Svg(ref mut result) => {
+                                        | CommandResult::Svg(ref mut result)
+                                        | CommandResult::Source(ref mut result) => {
                                             *result = Some(result_temp.read().unwrap().clone());
                                             cx.notify();
                                         }
@@ -588,6 +640,18 @@ impl CommandSticker {
                                 view.set_bg(color, cx);
                                 view
                             })),
+                            _ => None,
+                        };
+                        this.result_file_entity = match &this.result {
+                            CommandResult::Source(Some(x)) => Some(Self::build_file_content(
+                                this.id,
+                                x,
+                                this.color,
+                                this.store.clone(),
+                                window,
+                                cx,
+                                this.sticker_events_tx.clone(),
+                            )),
                             _ => None,
                         };
                         this.save_config(cx);
@@ -633,11 +697,13 @@ impl CommandSticker {
             CommandResult::Text(Some(_))
             | CommandResult::Markdown(Some(_))
             | CommandResult::Html(Some(_))
-            | CommandResult::Svg(Some(_)) => true,
+            | CommandResult::Svg(Some(_))
+            | CommandResult::Source(Some(_)) => true,
             CommandResult::Text(None)
             | CommandResult::Markdown(None)
             | CommandResult::Html(None)
-            | CommandResult::Svg(None) => false,
+            | CommandResult::Svg(None)
+            | CommandResult::Source(None) => false,
         };
 
         return self.process.is_none() && !has_result && !self.is_schedule_active();
@@ -709,6 +775,21 @@ impl CommandSticker {
                                 )
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Svg(None)
+                                })),
+                        )
+                        .child(
+                            Button::new("source")
+                                .label("file/url")
+                                .small()
+                                .when(
+                                    match self.result {
+                                        CommandResult::Source(_) => true,
+                                        _ => false,
+                                    },
+                                    |v| v.primary(),
+                                )
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.result = CommandResult::Source(None)
                                 })),
                         ),
                 ),
@@ -835,6 +916,11 @@ impl CommandSticker {
             .object_fit(gpui::ObjectFit::Fill)
             .into_any_element(),
             CommandResult::Svg(None) => empty_view,
+            CommandResult::Source(None) => empty_view,
+            CommandResult::Source(Some(_)) => match &self.result_file_entity {
+                Some(entity) => div().size_full().child(entity.clone()).into_any_element(),
+                None => empty_view,
+            },
         };
 
         div().relative().size_full().child(view).into_any_element()
@@ -947,7 +1033,8 @@ impl Render for CommandSticker {
                                         CommandResult::Text(ref mut result)
                                         | CommandResult::Markdown(ref mut result)
                                         | CommandResult::Html(ref mut result)
-                                        | CommandResult::Svg(ref mut result) => {
+                                        | CommandResult::Svg(ref mut result)
+                                        | CommandResult::Source(ref mut result) => {
                                             *result = None;
                                         }
                                     }
