@@ -316,7 +316,7 @@ impl Render for MarkdownSticker {
 
             let convert_btn = Button::new("convert-to-file")
                 .icon(IconName::DocumentText)
-                .small()
+                .tooltip("Convert to local file")
                 .disabled(self.converting)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.start_convert(cx);

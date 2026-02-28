@@ -12,13 +12,16 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::model::content::FileStickerContent;
 use crate::native::components::IconName;
 use crate::native::windows::StickerWindowEvent;
 
-pub(super) const ANIM_INTERVAL_MS: u64 = 80;
+const ANALYSIS_INTERVAL_MS: u64 = 40;
+const ANALYZER_SEEK_BACK_MS: u64 = 40;
+const MATRIX_CELL_SIZE_PX: f32 = 12.0;
+const MATRIX_IDLE_ALPHA: f32 = 0.3;
 
 pub(super) enum AudioCmd {
     Load(PathBuf),
@@ -57,6 +60,17 @@ pub(super) struct AudioMetadata {
     pub(super) cover: Option<Arc<Image>>,
 }
 
+impl Default for AudioMetadata {
+    fn default() -> Self {
+        Self {
+            title: None,
+            artist: None,
+            album: None,
+            cover: None,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum AudioPlayMode {
     Manual,
@@ -90,7 +104,6 @@ pub(super) struct AudioState {
     pub(super) siblings: Vec<PathBuf>,
     pub(super) current_idx: usize,
     pub(super) siblings_loaded: bool,
-    pub(super) anim_tick: u64,
     pub(super) anim_loop_started: bool,
     pub(super) frame_metrics: AudioFrameMetrics,
     pub(super) metadata: Option<AudioMetadata>,
@@ -106,7 +119,6 @@ impl Default for AudioState {
             siblings: Vec::new(),
             current_idx: 0,
             siblings_loaded: false,
-            anim_tick: 0,
             anim_loop_started: false,
             frame_metrics: AudioFrameMetrics::default(),
             metadata: None,
@@ -114,29 +126,96 @@ impl Default for AudioState {
     }
 }
 
+impl AudioState {
+    fn reset_visual_state(&mut self) {
+        self.anim_loop_started = false;
+        self.frame_metrics = AudioFrameMetrics::default();
+    }
+
+    fn load_path(&mut self, path: PathBuf) {
+        if let Some(handle) = &self.handle {
+            let _ = handle.cmd_tx.send(AudioCmd::Load(path));
+        } else {
+            let mut handle = spawn_thread(path);
+            self.event_rx = handle.take_event_rx();
+            self.handle = Some(handle);
+        }
+
+        self.is_playing = true;
+        self.reset_visual_state();
+    }
+}
+
 struct AudioAnalyzer {
-    frames: Vec<AudioFrameMetrics>,
-    index: usize,
+    decoder: Option<Decoder<BufReader<fs::File>>>,
+    chunk_len: usize,
 }
 
 impl AudioAnalyzer {
     fn from_path(path: &Path) -> Self {
+        let file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) => {
+                tracing::warn!(
+                    "Audio: cannot open {} for frame analysis: {e}",
+                    path.display()
+                );
+                return Self::default();
+            }
+        };
+        let decoder = match Decoder::new(BufReader::new(file)) {
+            Ok(decoder) => decoder,
+            Err(e) => {
+                tracing::warn!(
+                    "Audio: decode error for frame analysis {}: {e}",
+                    path.display()
+                );
+                return Self::default();
+            }
+        };
+
+        let channels = decoder.channels().get().max(1) as usize;
+        let sample_rate = decoder.sample_rate().get().max(1) as usize;
+        let chunk_len = ((sample_rate * ANALYSIS_INTERVAL_MS as usize) / 1000).max(128) * channels;
+
         Self {
-            frames: decode_audio_frames(path),
-            index: 0,
+            decoder: Some(decoder),
+            chunk_len,
         }
     }
 
-    fn next(&mut self) -> AudioFrameMetrics {
-        if self.frames.is_empty() {
+    fn at_pos(&mut self, position: Duration) -> AudioFrameMetrics {
+        let Some(decoder) = self.decoder.as_mut() else {
             return AudioFrameMetrics::default();
+        };
+
+        let seek_position_ms = position
+            .as_millis()
+            .saturating_sub(ANALYZER_SEEK_BACK_MS as u128);
+        let _ = decoder.try_seek(Duration::from_millis(seek_position_ms as u64));
+
+        let mut chunk = Vec::with_capacity(self.chunk_len);
+        for _ in 0..self.chunk_len {
+            match decoder.next() {
+                Some(sample) => chunk.push(sample),
+                None => break,
+            }
         }
-        if self.index >= self.frames.len() {
-            return AudioFrameMetrics::default();
+
+        if chunk.is_empty() {
+            AudioFrameMetrics::default()
+        } else {
+            chunk_metrics(&chunk)
         }
-        let frame = self.frames[self.index];
-        self.index = self.index.saturating_add(1);
-        frame
+    }
+}
+
+impl Default for AudioAnalyzer {
+    fn default() -> Self {
+        Self {
+            decoder: None,
+            chunk_len: 128,
+        }
     }
 }
 
@@ -176,37 +255,46 @@ fn chunk_metrics(chunk: &[f32]) -> AudioFrameMetrics {
     }
 }
 
-fn decode_audio_frames(path: &Path) -> Vec<AudioFrameMetrics> {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(e) => {
-            tracing::warn!(
-                "Audio: cannot open {} for frame analysis: {e}",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    let decoder = match Decoder::new(BufReader::new(file)) {
-        Ok(decoder) => decoder,
-        Err(e) => {
-            tracing::warn!(
-                "Audio: decode error for frame analysis {}: {e}",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
+fn pick_cover_image(tag: &lofty::tag::Tag) -> Option<Arc<Image>> {
+    tag.pictures()
+        .iter()
+        .find(|picture| matches!(picture.pic_type(), lofty::picture::PictureType::CoverFront))
+        .or_else(|| tag.pictures().first())
+        .and_then(|picture| {
+            let format = match picture.mime_type() {
+                Some(lofty::picture::MimeType::Jpeg) => ImageFormat::Jpeg,
+                Some(lofty::picture::MimeType::Png) => ImageFormat::Png,
+                _ => return None,
+            };
+            Some(Arc::new(Image::from_bytes(format, picture.data().to_vec())))
+        })
+}
 
-    let channels = decoder.channels().get().max(1) as usize;
-    let sample_rate = decoder.sample_rate().get().max(1) as usize;
-    let chunk_len = ((sample_rate * ANIM_INTERVAL_MS as usize) / 1000).max(128) * channels;
+fn blend_frequency_bands(frame: AudioFrameMetrics, x: f32) -> f32 {
+    if x < 0.5 {
+        let t = x / 0.5;
+        frame.low * (1.0 - t) + frame.mid * t
+    } else {
+        let t = (x - 0.5) / 0.5;
+        frame.mid * (1.0 - t) + frame.high * t
+    }
+}
 
-    let samples: Vec<f32> = decoder.collect();
-    samples
-        .chunks(chunk_len)
-        .map(chunk_metrics)
-        .collect::<Vec<_>>()
+fn matrix_cell_alpha(
+    frame: AudioFrameMetrics,
+    rows: usize,
+    row_from_bottom: f32,
+    band: f32,
+) -> f32 {
+    let fill = (band * (0.35 + frame.energy * 0.65)).clamp(0.0, 1.0);
+    let cell_height = (1.0 / rows as f32).max(0.0001);
+    let is_active = row_from_bottom <= fill + cell_height;
+
+    if is_active {
+        (MATRIX_IDLE_ALPHA + 0.58 * band * (1.0 - row_from_bottom * 0.55)).min(0.7)
+    } else {
+        MATRIX_IDLE_ALPHA
+    }
 }
 
 pub(super) fn spawn_thread(initial_path: PathBuf) -> AudioHandle {
@@ -223,19 +311,23 @@ pub(super) fn spawn_thread(initial_path: PathBuf) -> AudioHandle {
         let player = rodio::Player::connect_new(&device_sink.mixer());
         load_file(&player, &initial_path);
         let mut analyzer = AudioAnalyzer::from_path(&initial_path);
-        let mut last_frame_sent = Instant::now();
         let mut was_empty = player.empty();
         loop {
-            match rx.recv_timeout(Duration::from_millis(ANIM_INTERVAL_MS)) {
+            match rx.recv_timeout(Duration::from_millis(ANALYSIS_INTERVAL_MS)) {
                 Ok(cmd) => match cmd {
                     AudioCmd::Load(path) => {
                         load_file(&player, &path);
                         analyzer = AudioAnalyzer::from_path(&path);
-                        let _ = event_tx.send(AudioEvent::Frame(AudioFrameMetrics::default()));
+                        let pos = player.get_pos();
+                        let _ = event_tx.send(AudioEvent::Frame(analyzer.at_pos(pos)));
                         was_empty = player.empty();
                         continue;
                     }
-                    AudioCmd::Play => player.play(),
+                    AudioCmd::Play => {
+                        player.play();
+                        let pos = player.get_pos();
+                        let _ = event_tx.send(AudioEvent::Frame(analyzer.at_pos(pos)));
+                    }
                     AudioCmd::Pause => player.pause(),
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -248,12 +340,9 @@ pub(super) fn spawn_thread(initial_path: PathBuf) -> AudioHandle {
                 let _ = event_tx.send(AudioEvent::Frame(AudioFrameMetrics::default()));
             }
 
-            if !is_empty
-                && !player.is_paused()
-                && last_frame_sent.elapsed() >= Duration::from_millis(ANIM_INTERVAL_MS)
-            {
-                let _ = event_tx.send(AudioEvent::Frame(analyzer.next()));
-                last_frame_sent = Instant::now();
+            if !is_empty && !player.is_paused() {
+                let pos = player.get_pos();
+                let _ = event_tx.send(AudioEvent::Frame(analyzer.at_pos(pos)));
             }
             was_empty = is_empty;
         }
@@ -265,11 +354,11 @@ pub(super) fn spawn_thread(initial_path: PathBuf) -> AudioHandle {
 }
 
 fn load_file(player: &rodio::Player, path: &Path) {
-    player.stop();
     match fs::File::open(path) {
         Ok(file) => match Decoder::new(BufReader::new(file)) {
-            Ok(dec) => {
-                player.append(dec);
+            Ok(source) => {
+                player.stop();
+                player.append(source);
                 player.play();
             }
             Err(e) => tracing::warn!("Audio: decode error for {}: {e}", path.display()),
@@ -279,53 +368,19 @@ fn load_file(player: &rodio::Player, path: &Path) {
 }
 
 pub(super) fn load_metadata(path: &Path) -> AudioMetadata {
-    let probe = match Probe::open(path) {
-        Ok(p) => p,
-        Err(_) => {
-            return AudioMetadata {
-                title: None,
-                artist: None,
-                album: None,
-                cover: None,
-            };
-        }
-    };
-    let tagged = match probe.read() {
-        Ok(t) => t,
-        Err(_) => {
-            return AudioMetadata {
-                title: None,
-                artist: None,
-                album: None,
-                cover: None,
-            };
-        }
+    let Ok(tagged) = Probe::open(path).and_then(|probe| probe.read()) else {
+        return AudioMetadata::default();
     };
     let tag = tagged.primary_tag().or_else(|| tagged.tags().first());
     let Some(tag) = tag else {
-        return AudioMetadata {
-            title: None,
-            artist: None,
-            album: None,
-            cover: None,
-        };
+        return AudioMetadata::default();
     };
+
     let title = tag.title().map(|s| s.into_owned());
     let artist = tag.artist().map(|s| s.into_owned());
     let album = tag.album().map(|s| s.into_owned());
-    let cover = tag
-        .pictures()
-        .iter()
-        .find(|p| matches!(p.pic_type(), lofty::picture::PictureType::CoverFront))
-        .or_else(|| tag.pictures().first())
-        .and_then(|pic| {
-            let format = match pic.mime_type() {
-                Some(lofty::picture::MimeType::Jpeg) => ImageFormat::Jpeg,
-                Some(lofty::picture::MimeType::Png) => ImageFormat::Png,
-                _ => return None,
-            };
-            Some(Arc::new(Image::from_bytes(format, pic.data().to_vec())))
-        });
+    let cover = pick_cover_image(tag);
+
     AudioMetadata {
         title,
         artist,
@@ -356,8 +411,7 @@ impl super::FileSticker {
             state.handle = None;
             state.event_rx = None;
             state.is_playing = false;
-            state.anim_loop_started = false;
-            state.frame_metrics = AudioFrameMetrics::default();
+            state.reset_visual_state();
         }
     }
 
@@ -382,7 +436,7 @@ impl super::FileSticker {
             cx.notify();
 
             if state.play_mode.is_autoplay() && !state.is_playing {
-                self.navigate(1, cx);
+                self.navigate_autoplay(cx);
             }
         }
     }
@@ -435,11 +489,19 @@ impl super::FileSticker {
         }
 
         if should_autoplay {
-            self.navigate(1, cx);
+            self.navigate_autoplay(cx);
         }
     }
 
     pub(super) fn navigate(&mut self, delta: i64, cx: &mut Context<Self>) {
+        self.navigate_with_mode(delta, false, cx);
+    }
+
+    fn navigate_autoplay(&mut self, cx: &mut Context<Self>) {
+        self.navigate_with_mode(1, true, cx);
+    }
+
+    fn navigate_with_mode(&mut self, delta: i64, allow_random: bool, cx: &mut Context<Self>) {
         if !self
             .state()
             .map(|state| state.siblings_loaded)
@@ -455,7 +517,7 @@ impl super::FileSticker {
             return;
         }
 
-        let next_idx = if state.play_mode.is_random() {
+        let next_idx = if allow_random && state.play_mode.is_random() {
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as usize)
@@ -477,20 +539,7 @@ impl super::FileSticker {
         {
             *source_path = new_path.clone();
             state.current_idx = next_idx;
-
-            if let Some(handle) = &state.handle {
-                let _ = handle.cmd_tx.send(AudioCmd::Load(new_path.clone()));
-                state.is_playing = true;
-                state.anim_loop_started = false;
-                state.frame_metrics = AudioFrameMetrics::default();
-            } else {
-                let mut handle = spawn_thread(new_path.clone());
-                state.event_rx = handle.take_event_rx();
-                state.handle = Some(handle);
-                state.is_playing = true;
-                state.anim_loop_started = false;
-                state.frame_metrics = AudioFrameMetrics::default();
-            }
+            state.load_path(new_path.clone());
         }
 
         if self.id > 0 {
@@ -583,13 +632,12 @@ impl super::FileSticker {
     fn spawn_anim_tick(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |entity, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(ANIM_INTERVAL_MS))
+                .timer(Duration::from_millis(ANALYSIS_INTERVAL_MS))
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 this.poll_events(cx);
                 if let Some(state) = this.state_mut() {
                     if state.is_playing {
-                        state.anim_tick = state.anim_tick.wrapping_add(1);
                         cx.notify();
                         this.spawn_anim_tick(cx);
                     } else {
@@ -602,65 +650,54 @@ impl super::FileSticker {
     }
 
     pub(super) fn matrix_bg(&self, window: &Window) -> gpui::AnyElement {
-        let tick = self.state().map(|state| state.anim_tick).unwrap_or(0);
-        let is_playing = self.state().map(|state| state.is_playing).unwrap_or(false);
-        let frame = self
-            .state()
-            .map(|state| state.frame_metrics)
-            .unwrap_or_default();
-        let base_opacity: f32 = if is_playing { 0.045 } else { 0.02 };
-        let rows = (window.bounds().size.height.as_f32() / 8.0)
-            .floor()
-            .max(1.0) as i32;
-        let cols = (window.bounds().size.width.as_f32() / 8.0).floor().max(1.0) as i32;
+        let default_view = div()
+            .absolute()
+            .inset_0()
+            .bg(Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: MATRIX_IDLE_ALPHA,
+            })
+            .into_any_element();
+
+        let Some(state) = self.state() else {
+            return default_view;
+        };
+
+        if !state.is_playing {
+            return default_view;
+        }
+
+        let frame = state.frame_metrics;
+        let rows =
+            ((window.bounds().size.height.as_f32() / MATRIX_CELL_SIZE_PX).floor() as usize).max(1);
+        let cols =
+            ((window.bounds().size.width.as_f32() / MATRIX_CELL_SIZE_PX).floor() as usize).max(1);
+
         v_flex()
             .absolute()
-            .left_0()
-            .top_0()
-            .right_0()
-            .bottom_0()
+            .inset_0()
             .overflow_hidden()
             .children((0..rows).map(move |row| {
                 div()
                     .flex_none()
-                    .py(px(2.0))
+                    .w_full()
                     .h(relative(1.0 / rows as f32))
                     .child(h_flex().h_full().children((0..cols).map(move |col| {
                         let x = col as f32 / cols as f32;
-                        let y = row as f32 / rows as f32;
-                        let band = if y < 0.34 {
-                            frame.high
-                        } else if y < 0.67 {
-                            frame.mid
-                        } else {
-                            frame.low
-                        };
+                        let row_from_bottom = (rows.saturating_sub(1) - row) as f32 / rows as f32;
+                        let band = blend_frequency_bands(frame, x);
+                        let alpha = matrix_cell_alpha(frame, rows, row_from_bottom, band);
 
-                        let sweep = ((tick as f32 * 0.24) + x * 10.0 - y * 5.5)
-                            .sin()
-                            .mul_add(0.5, 0.5);
-                        let pulse = ((tick as f32 * 0.17) + x * 3.5 + y * 4.0)
-                            .cos()
-                            .mul_add(0.5, 0.5);
-
-                        let beat = (frame.low * 0.7 + frame.mid * 0.3).powf(0.75);
-                        let beat_gate = ((beat - 0.28) / 0.72).clamp(0.0, 1.0).powf(1.6);
-                        let driven = (0.10 + band * 0.90) * (0.10 + frame.energy * 0.90);
-                        let shimmer = (0.2 + 0.8 * sweep * pulse).powf(1.3);
-                        let alpha = (base_opacity
-                            + 0.28 * driven * shimmer
-                            + 0.44 * beat_gate * (0.45 + 0.55 * sweep))
-                            .clamp(0.0, 1.0);
                         div()
-                            .px(px(2.0))
                             .flex_none()
                             .w(relative(1.0 / cols as f32))
                             .h_full()
-                            .rounded(px(2.0))
                             .bg(Rgba {
-                                r: 1.0,
-                                g: 1.0,
-                                b: 1.0,
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
                                 a: alpha,
                             })
                     })))
@@ -756,57 +793,52 @@ impl super::FileSticker {
                     })),
             );
 
-        let info_row = h_flex()
-            .gap(px(10.0))
-            .items_center()
-            .when_some(cover, |row, cover_img| {
-                row.child(
-                    img(ImageSource::Image(cover_img))
-                        .w(px(72.0))
-                        .h(px(72.0))
-                        .rounded(px(6.0))
-                        .object_fit(ObjectFit::Cover)
-                        .flex_none(),
+        let info_row = h_flex().gap(px(10.0)).items_center().child(
+            v_flex()
+                .gap(px(2.0))
+                .max_w(px(200.0))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .opacity(0.95)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(display_title),
                 )
-            })
-            .child(
-                v_flex()
-                    .gap(px(2.0))
-                    .max_w(px(200.0))
-                    .child(
+                .when_some(display_artist, |v, artist| {
+                    v.child(
                         div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .opacity(0.95)
+                            .text_xs()
+                            .opacity(0.75)
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child(display_title),
+                            .child(artist),
                     )
-                    .when_some(display_artist, |v, artist| {
-                        v.child(
-                            div()
-                                .text_xs()
-                                .opacity(0.75)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(artist),
-                        )
-                    })
-                    .when_some(display_album, |v, album| {
-                        v.child(
-                            div()
-                                .text_xs()
-                                .opacity(0.55)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(album),
-                        )
-                    }),
-            );
+                })
+                .when_some(display_album, |v, album| {
+                    v.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.55)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(album),
+                    )
+                }),
+        );
 
         div()
             .size_full()
             .relative()
+            .when_some(cover, |row, cover_img| {
+                row.child(
+                    img(ImageSource::Image(cover_img))
+                        .absolute()
+                        .inset_0()
+                        .object_fit(ObjectFit::Cover),
+                )
+            })
             .child(self.matrix_bg(window))
             .child(
                 div()
@@ -816,7 +848,8 @@ impl super::FileSticker {
                     .flex_col()
                     .justify_center()
                     .items_center()
-                    .gap(px(14.0))
+                    .p_2()
+                    .gap_3()
                     .child(info_row)
                     .child(controls),
             )
