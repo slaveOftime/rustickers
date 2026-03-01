@@ -73,6 +73,19 @@ pub struct StickerDetail {
     pub display_id: Option<u32>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StickerListItem {
+    pub id: i64,
+    pub title: String,
+    pub state: StickerState,
+    #[sqlx(rename = "type")]
+    pub sticker_type: StickerType,
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 impl StickerColor {
     pub const ALL: [Self; 5] = [
         Self::Pink,

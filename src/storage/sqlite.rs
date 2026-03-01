@@ -336,4 +336,35 @@ impl super::StickerStore for SqliteStore {
 
         Ok(rows)
     }
+
+    async fn list_stickers(
+        &self,
+        state: Option<StickerState>,
+        search: Option<String>,
+    ) -> anyhow::Result<Vec<StickerListItem>> {
+        tracing::debug!(
+            state = ?state,
+            has_search = search.as_ref().map(|s| !s.is_empty()).unwrap_or(false),
+            "List stickers"
+        );
+
+        let search_pattern: Option<String> = search.map(|s| format!("%{}%", s));
+
+        let rows = sqlx::query_as::<_, StickerListItem>(
+            r#"
+            SELECT id, title, state, type, left, top, width, height
+            FROM stickers
+            WHERE (?1 IS NULL OR state = ?1)
+              AND (?2 IS NULL OR title LIKE ?2 OR content LIKE ?2)
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(state)
+        .bind(search_pattern)
+        .fetch_all(&self.pool)
+        .await
+        .context("list stickers with filters")?;
+
+        Ok(rows)
+    }
 }

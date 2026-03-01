@@ -38,6 +38,11 @@ pub trait StickerStore: Send + Sync {
     ) -> anyhow::Result<Vec<StickerBrief>>;
     async fn count_stickers(&self, search: Option<String>) -> anyhow::Result<i64>;
     async fn get_open_sticker_ids(&self) -> anyhow::Result<Vec<i64>>;
+    async fn list_stickers(
+        &self,
+        state: Option<StickerState>,
+        search: Option<String>,
+    ) -> anyhow::Result<Vec<StickerListItem>>;
 }
 
 pub type ArcStickerStore = Arc<dyn StickerStore>;

@@ -6,7 +6,7 @@ mod open;
 mod show;
 pub mod view;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::storage::paths::AppPaths;
 
@@ -31,8 +31,16 @@ enum Commands {
         id: i64,
     },
 
-    /// List all open stickers (id, title, type, position, size)
-    List,
+    /// List stickers (id, title, type, position, size)
+    List {
+        /// Filter by state (default: open)
+        #[arg(long, value_enum, default_value = "open")]
+        state: ListState,
+
+        /// Search in title and content
+        #[arg(long)]
+        search: Option<String>,
+    },
 
     /// Show full detail for a sticker by ID
     Show {
@@ -69,11 +77,18 @@ enum Commands {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ListState {
+    Open,
+    Close,
+    All,
+}
+
 pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
     match cli.command {
         Commands::Close { id } => close::run(id),
         Commands::Open { id } => open::run(id),
-        Commands::List => list::run(app_paths),
+        Commands::List { state, search } => list::run(app_paths, state, search),
         Commands::Show { id } => show::run(app_paths, id),
         Commands::View { source } => view::run(source),
         Commands::Cmd {
