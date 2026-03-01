@@ -350,6 +350,7 @@ impl Render for FileSticker {
             .when(
                 self.preview.is_some()
                     && !matches!(self.preview, Some(FilePreview::Audio { .. }))
+                    && self.preview_editor.is_none()
                     && window.is_window_hovered(),
                 |view| {
                     view.child(
