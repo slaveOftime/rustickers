@@ -6684,7 +6684,6 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
- "serde_yaml",
  "sqlx",
  "tracing",
  "tracing-appender",

@@ -42,6 +42,7 @@ impl SqliteStore {
             .await
             .context("connect sqlite pool")?;
 
+        #[cfg(feature = "ui")]
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
