@@ -1,10 +1,8 @@
-use std::io::Write as _;
-
 use crate::model::content::{CommandContent, CommandResult, Scheduler};
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::storage::paths::AppPaths;
 
-use super::console::{block_on, console_writer, signal_open, truncate};
+use super::console::{block_on, signal_open, truncate};
 
 pub fn run(
     app_paths: &AppPaths,
@@ -48,8 +46,9 @@ pub fn run(
         display_id: None,
     }))?;
 
-    let mut out = console_writer();
-    writeln!(out, "Created command sticker (id={id})")?;
-    signal_open(id, &mut *out);
+    println!("Created command sticker (id={id})");
+
+    signal_open(id);
+
     Ok(())
 }

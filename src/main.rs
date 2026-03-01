@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -11,6 +11,7 @@ mod storage;
 mod utils;
 
 use clap::Parser as _;
+use clap::error::ErrorKind;
 use ipc::IpcEvent;
 use native::windows::StickerWindowEvent;
 use std::sync::mpsc;
@@ -24,18 +25,24 @@ fn main() {
     // started and the process exits after the command completes.
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.len() > 1 {
-        cli::setup_console();
-
-        if let Ok(cli) = cli::Cli::try_parse() {
-            if let Err(err) = cli::run(cli, &app_paths) {
-                eprintln!("error: {err:#}");
-                std::process::exit(1);
+        let cli = match cli::Cli::try_parse() {
+            Ok(cli) => cli,
+            Err(err) => {
+                let code = match err.kind() {
+                    ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
+                    _ => 2,
+                };
+                let _ = err.print();
+                std::process::exit(code);
             }
-        } else {
-            // Let clap print its own help/error message
-            let _ = cli::Cli::parse();
+        };
+
+        if let Err(err) = cli::run(cli, &app_paths) {
+            eprintln!("error: {err:#}");
+            std::process::exit(1);
         }
-        return;
+
+        std::process::exit(0);
     }
 
     // ── GUI mode ──────────────────────────────────────────────────────────────

@@ -77,7 +77,3 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         } => cmd::run(app_paths, command, cron, run_immediately, env, dir),
     }
 }
-
-pub fn setup_console() {
-    console::setup();
-}
