@@ -1,5 +1,5 @@
 pub fn run(id: i64) -> anyhow::Result<()> {
-    match crate::ipc::send_ipc_command("rustickers", &format!("CLOSE_STICKER {id}")) {
+    match crate::ipc::send_ipc_command("rustickers", &format!("OPEN_STICKER {id}")) {
         Ok(true) => {
             return Ok(());
         }

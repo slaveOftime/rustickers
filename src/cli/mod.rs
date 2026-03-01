@@ -2,6 +2,7 @@ mod close;
 mod cmd;
 mod console;
 mod list;
+mod open;
 mod show;
 pub mod view;
 
@@ -20,6 +21,12 @@ pub struct Cli {
 enum Commands {
     /// Close an open sticker by ID
     Close {
+        /// Sticker ID
+        id: i64,
+    },
+
+    /// Open a closed sticker by ID
+    Open {
         /// Sticker ID
         id: i64,
     },
@@ -64,7 +71,8 @@ enum Commands {
 
 pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Close { id } => close::run(app_paths, id),
+        Commands::Close { id } => close::run(id),
+        Commands::Open { id } => open::run(id),
         Commands::List => list::run(app_paths),
         Commands::Show { id } => show::run(app_paths, id),
         Commands::View { source } => view::run(source),
