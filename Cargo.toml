@@ -3,19 +3,67 @@ name = "rustickers"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["ui"]
+ui = [
+	"dep:gpui",
+	"dep:gpui-component",
+	"dep:gpui-wry",
+	"dep:wry",
+	"dep:lyon",
+	"dep:mimalloc",
+	"dep:rdev",
+	"dep:winsplit",
+	"dep:rust-embed",
+	"dep:notify-rust",
+	"dep:async-compat",
+	"dep:futures",
+	"dep:rfd",
+	"dep:reqwest",
+	"dep:windows-sys",
+	"dep:windows",
+	"dep:webbrowser",
+	"dep:url",
+	"dep:urlencoding",
+	"dep:ignore",
+	"dep:arboard",
+	"dep:notify",
+	"dep:rodio",
+	"dep:lofty",
+	"dep:tracing-appender",
+	"dep:tracing-error",
+	"dep:tracing-subscriber",
+	"dep:cocoa",
+	"dep:objc",
+]
+cli = [
+	"dep:clap",
+	"dep:futures",
+]
+
+[[bin]]
+name = "rustickers"
+path = "src/main.rs"
+required-features = ["ui"]
+
+[[bin]]
+name = "rsc"
+path = "src/bin/rsc.rs"
+required-features = ["cli"]
+
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4" }
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4"}
-wry = { version = "0.53.3", package = "lb-wry" }
+gpui = { git = "https://github.com/zed-industries/zed", optional = true }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4", optional = true }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4", optional = true }
+wry = { version = "0.53.3", package = "lb-wry", optional = true }
 anyhow = "1.0.102"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 async-trait = "0.1.85"
 directories = "6.0.0"
 tracing = "0.1.41"
-tracing-appender = "0.2.3"
-tracing-error = "0.2.1"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "registry"] }
+tracing-appender = { version = "0.2.3", optional = true }
+tracing-error = { version = "0.2.1", optional = true }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "registry"], optional = true }
 sqlx = { version = "0.8.6", features = ["runtime-async-std", "sqlite", "macros", "migrate"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
@@ -23,31 +71,31 @@ serde_yaml = "0.9.34"
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
 cron = "0.15.0"
 interprocess = "2.2.1"
-lyon = "1.0.16"
-mimalloc = { version = "*", features = ["v3"] }
-rdev = "0.5.3"
+lyon = { version = "1.0.16", optional = true }
+mimalloc = { version = "*", features = ["v3"], optional = true }
+rdev = { version = "0.5.3", optional = true }
 which = "8.0.0"
-winsplit = "0.1.0"
-rust-embed = { version = "8", features = ["interpolate-folder-path"] }
-notify-rust = "4.11.7"
-async-compat = "0.2.5"
-futures = "0.3.32"
-rfd = "0.17.2"
-reqwest = "0.13.2"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-webbrowser = "1.1.0"
-url = "2.5.7"
-urlencoding = "2.1.3"
-ignore = "0.4.25"
-arboard = "3.6.1"
-notify = "8.2.0"
-rodio = { version = "0.22.1", features = ["symphonia-all"] }
-lofty = "0.23.2"
+winsplit = { version = "0.1.0", optional = true }
+rust-embed = { version = "8", features = ["interpolate-folder-path"], optional = true }
+notify-rust = { version = "4.11.7", optional = true }
+async-compat = { version = "0.2.5", optional = true }
+futures = { version = "0.3.32", optional = true }
+rfd = { version = "0.17.2", optional = true }
+reqwest = { version = "0.13.2", optional = true }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"], optional = true }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"], optional = true }
+webbrowser = { version = "1.1.0", optional = true }
+url = { version = "2.5.7", optional = true }
+urlencoding = { version = "2.1.3", optional = true }
+ignore = { version = "0.4.25", optional = true }
+arboard = { version = "3.6.1", optional = true }
+notify = { version = "8.2.0", optional = true }
+rodio = { version = "0.22.1", features = ["symphonia-all"], optional = true }
+lofty = { version = "0.23.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26.0"
-objc = "0.2.7"
+cocoa = { version = "0.26.0", optional = true }
+objc = { version = "0.2.7", optional = true }
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.

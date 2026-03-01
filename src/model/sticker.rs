@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use gpui::rgb;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -83,7 +82,10 @@ impl StickerColor {
         Self::Gray,
     ];
 
+    #[cfg(feature = "ui")]
     pub fn bg(&self) -> gpui::Rgba {
+        use gpui::rgb;
+
         match self {
             Self::Yellow => rgb(0x2d2a1b),
             Self::Green => rgb(0x1b2d20),
@@ -93,7 +95,10 @@ impl StickerColor {
         }
     }
 
+    #[cfg(feature = "ui")]
     pub fn swatch(&self) -> gpui::Rgba {
+        use gpui::rgb;
+
         match self {
             Self::Yellow => rgb(0xf2c94c),
             Self::Green => rgb(0x27ae60),

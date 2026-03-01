@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Rgba, Size, Window, WindowControlArea, div, prelude::*, px, transparent_white
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Rgba, Size, Window,
+    WindowControlArea, div, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     IndexPath, Sizable, StyledExt,

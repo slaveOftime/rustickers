@@ -1,53 +1,20 @@
-// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-mod cli;
-mod ipc;
-mod model;
-mod native;
-mod storage;
-mod utils;
-
-use clap::Parser as _;
-use clap::error::ErrorKind;
-use ipc::IpcEvent;
-use native::windows::StickerWindowEvent;
+use rustickers::ipc::{self, IpcEvent};
+use rustickers::native;
+use rustickers::native::windows::StickerWindowEvent;
+use rustickers::storage::paths::AppPaths;
 use std::sync::mpsc;
-use storage::paths::AppPaths;
 
 fn main() {
     let app_paths = AppPaths::new().expect("App paths should initialize");
 
-    // ── CLI mode ──────────────────────────────────────────────────────────────
-    // If any arguments are passed the binary acts as a CLI tool; no GUI is
-    // started and the process exits after the command completes.
-    let raw_args: Vec<String> = std::env::args().collect();
-    if raw_args.len() > 1 {
-        let cli = match cli::Cli::try_parse() {
-            Ok(cli) => cli,
-            Err(err) => {
-                let code = match err.kind() {
-                    ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
-                    _ => 2,
-                };
-                let _ = err.print();
-                std::process::exit(code);
-            }
-        };
-
-        if let Err(err) = cli::run(cli, &app_paths) {
-            eprintln!("error: {err:#}");
-            std::process::exit(1);
-        }
-
-        std::process::exit(0);
-    }
-
     // ── GUI mode ──────────────────────────────────────────────────────────────
-    let _ =
-        crate::utils::logging::LoggingGuards::init(&app_paths).expect("Logging should initialize");
+    let _ = rustickers::utils::logging::LoggingGuards::init(&app_paths)
+        .expect("Logging should initialize");
 
     tracing::info!(
         app_version = env!("CARGO_PKG_VERSION"),
@@ -55,7 +22,7 @@ fn main() {
         "Starting Rustickers"
     );
 
-    let mut single_instance = match crate::ipc::SingleInstance::acquire("rustickers") {
+    let mut single_instance = match ipc::SingleInstance::acquire("rustickers") {
         Ok(instance) => Some(instance),
         Err(ipc::AcquireError::AlreadyRunning) => {
             tracing::info!("Another instance is already running; exiting");
@@ -76,11 +43,11 @@ fn main() {
         instance.start_ipc_server(ipc_events_tx.clone());
     }
 
-    if let Err(err) = crate::native::hotkey::start_global_hotkey_listener(ipc_events_tx.clone()) {
+    if let Err(err) = native::hotkey::start_global_hotkey_listener(ipc_events_tx.clone()) {
         tracing::error!(error = %err, "Failed to start global hotkey listener");
     }
 
-    crate::native::run_native(
+    native::run_native(
         app_paths,
         ipc_events_rx,
         sticker_events_tx,

@@ -11,7 +11,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN_NAME: rustickers
+  UI_BIN_NAME: rustickers
+  CLI_BIN_NAME: rsc
   MACOS_APP_NAME: Rustickers
 
 jobs:
@@ -71,7 +72,9 @@ jobs:
             libgl1-mesa-dev
 
       - name: Build (release)
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} --bin ${{ env.UI_BIN_NAME }}
+          cargo build --release --locked --target ${{ matrix.target }} --bin ${{ env.CLI_BIN_NAME }} --no-default-features --features cli
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -79,23 +82,42 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $artifact = "${env:BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          $uiArtifact = "${env:UI_BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          $cliArtifact = "${env:CLI_BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
 
-          $bin = "${env:BIN_NAME}${{ matrix.binary_ext }}"
-          $src = "target\\${{ matrix.target }}\\release\\$bin"
-          if (-not (Test-Path $src)) {
-            throw "Binary not found at $src"
+          $uiBin = "${env:UI_BIN_NAME}${{ matrix.binary_ext }}"
+          $uiSrc = "target\${{ matrix.target }}\release\$uiBin"
+          if (-not (Test-Path $uiSrc)) {
+            throw "UI binary not found at $uiSrc"
           }
 
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item $src -Destination dist\ -Force
+          $cliBin = "${env:CLI_BIN_NAME}${{ matrix.binary_ext }}"
+          $cliSrc = "target\${{ matrix.target }}\release\$cliBin"
+          if (-not (Test-Path $cliSrc)) {
+            throw "CLI binary not found at $cliSrc"
+          }
+
+          New-Item -ItemType Directory -Force -Path dist-ui | Out-Null
+          Copy-Item $uiSrc -Destination dist-ui\ -Force
+
+          New-Item -ItemType Directory -Force -Path dist-cli | Out-Null
+          Copy-Item $cliSrc -Destination dist-cli\ -Force
 
           # Include common docs if present
-          Get-ChildItem -Path . -Filter "README*" -File -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName -Destination dist\ -Force }
-          if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination dist\ -Force }
+          Get-ChildItem -Path . -Filter "README*" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName -Destination dist-ui\ -Force
+            Copy-Item $_.FullName -Destination dist-cli\ -Force
+          }
+          if (Test-Path "LICENSE") {
+            Copy-Item "LICENSE" -Destination dist-ui\ -Force
+            Copy-Item "LICENSE" -Destination dist-cli\ -Force
+          }
 
-          if (Test-Path $artifact) { Remove-Item $artifact -Force }
-          Compress-Archive -Path "dist\\*" -DestinationPath $artifact -Force
+          if (Test-Path $uiArtifact) { Remove-Item $uiArtifact -Force }
+          Compress-Archive -Path "dist-ui\*" -DestinationPath $uiArtifact -Force
+
+          if (Test-Path $cliArtifact) { Remove-Item $cliArtifact -Force }
+          Compress-Archive -Path "dist-cli\*" -DestinationPath $cliArtifact -Force
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -103,29 +125,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          src="target/${{ matrix.target }}/release/${BIN_NAME}"
-          if [[ ! -f "$src" ]]; then
-            echo "Binary not found at $src" >&2
+          ui_src="target/${{ matrix.target }}/release/${UI_BIN_NAME}"
+          if [[ ! -f "$ui_src" ]]; then
+            echo "UI binary not found at $ui_src" >&2
             exit 1
           fi
 
-          rm -rf dist
-          mkdir -p dist
-          cp "$src" "dist/${BIN_NAME}"
-          chmod +x "dist/${BIN_NAME}"
+          cli_src="target/${{ matrix.target }}/release/${CLI_BIN_NAME}"
+          if [[ ! -f "$cli_src" ]]; then
+            echo "CLI binary not found at $cli_src" >&2
+            exit 1
+          fi
+
+          rm -rf dist-ui dist-cli
+          mkdir -p dist-ui dist-cli
+
+          cp "$ui_src" "dist-ui/${UI_BIN_NAME}"
+          chmod +x "dist-ui/${UI_BIN_NAME}"
+
+          cp "$cli_src" "dist-cli/${CLI_BIN_NAME}"
+          chmod +x "dist-cli/${CLI_BIN_NAME}"
 
           # Linux desktop integration helpers
-          cp "assets/icon.png" "dist/${BIN_NAME}.png"
-          cp "packaging/linux/${BIN_NAME}.desktop" "dist/${BIN_NAME}.desktop"
-          cp "packaging/linux/install.sh" "dist/install.sh"
-          chmod +x "dist/install.sh"
+          cp "assets/icon.png" "dist-ui/${UI_BIN_NAME}.png"
+          cp "packaging/linux/${UI_BIN_NAME}.desktop" "dist-ui/${UI_BIN_NAME}.desktop"
+          cp "packaging/linux/install.sh" "dist-ui/install.sh"
+          chmod +x "dist-ui/install.sh"
 
-          if [[ -f "README.md" ]]; then cp README.md dist/; fi
-          if [[ -f "README" ]]; then cp README dist/; fi
-          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
+          if [[ -f "README.md" ]]; then cp README.md dist-ui/; cp README.md dist-cli/; fi
+          if [[ -f "README" ]]; then cp README dist-ui/; cp README dist-cli/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist-ui/; cp LICENSE dist-cli/; fi
 
-          artifact="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          tar -C dist -czf "$artifact" .
+          ui_artifact="${UI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          cli_artifact="${CLI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          tar -C dist-ui -czf "$ui_artifact" .
+          tar -C dist-cli -czf "$cli_artifact" .
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -133,22 +167,31 @@ jobs:
         run: |
           set -euo pipefail
 
-          src="target/${{ matrix.target }}/release/${BIN_NAME}"
-          if [[ ! -f "$src" ]]; then
-            echo "Binary not found at $src" >&2
+          ui_src="target/${{ matrix.target }}/release/${UI_BIN_NAME}"
+          if [[ ! -f "$ui_src" ]]; then
+            echo "UI binary not found at $ui_src" >&2
+            exit 1
+          fi
+
+          cli_src="target/${{ matrix.target }}/release/${CLI_BIN_NAME}"
+          if [[ ! -f "$cli_src" ]]; then
+            echo "CLI binary not found at $cli_src" >&2
             exit 1
           fi
 
           version="${GITHUB_REF_NAME#v}"
 
-          rm -rf dist
-          mkdir -p dist
+          rm -rf dist-ui dist-cli
+          mkdir -p dist-ui dist-cli
 
-          app_dir="dist/${MACOS_APP_NAME}.app"
+          app_dir="dist-ui/${MACOS_APP_NAME}.app"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 
-          cp "$src" "$app_dir/Contents/MacOS/${BIN_NAME}"
-          chmod +x "$app_dir/Contents/MacOS/${BIN_NAME}"
+          cp "$ui_src" "$app_dir/Contents/MacOS/${UI_BIN_NAME}"
+          chmod +x "$app_dir/Contents/MacOS/${UI_BIN_NAME}"
+
+          cp "$cli_src" "dist-cli/${CLI_BIN_NAME}"
+          chmod +x "dist-cli/${CLI_BIN_NAME}"
 
           # Build icon.icns from assets/icon.png
           tmp_icon_dir="$(mktemp -d)"
@@ -178,7 +221,7 @@ jobs:
             <key>CFBundleDevelopmentRegion</key>
             <string>en</string>
             <key>CFBundleExecutable</key>
-            <string>${BIN_NAME}</string>
+            <string>${UI_BIN_NAME}</string>
             <key>CFBundleIdentifier</key>
             <string>com.slaveoftime.rustickers</string>
             <key>CFBundleInfoDictionaryVersion</key>
@@ -199,16 +242,21 @@ jobs:
           </plist>
           EOF
 
-          if [[ -f "README.md" ]]; then cp README.md dist/; fi
-          if [[ -f "README" ]]; then cp README dist/; fi
-          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
+          if [[ -f "README.md" ]]; then cp README.md dist-ui/; cp README.md dist-cli/; fi
+          if [[ -f "README" ]]; then cp README dist-ui/; cp README dist-cli/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist-ui/; cp LICENSE dist-cli/; fi
 
-          artifact="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          if [[ -f "$artifact" ]]; then rm -f "$artifact"; fi
-          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$artifact"
+          ui_artifact="${UI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          cli_artifact="${CLI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          if [[ -f "$ui_artifact" ]]; then rm -f "$ui_artifact"; fi
+          if [[ -f "$cli_artifact" ]]; then rm -f "$cli_artifact"; fi
+          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$ui_artifact"
+          ditto -c -k --sequesterRsrc --keepParent "dist-cli" "$cli_artifact"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "${{ env.BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          files: |
+            ${{ env.UI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+            ${{ env.CLI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
           fail_on_unmatched_files: true
