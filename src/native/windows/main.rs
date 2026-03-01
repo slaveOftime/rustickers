@@ -6,8 +6,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use gpui_component::alert::Alert;
-use gpui_component::button::Button;
-use gpui_component::dialog::DialogButtonProps;
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
@@ -307,35 +306,43 @@ impl MainWindow {
             let store = store.clone();
             let entity = entity.clone();
             dialog
-                .button_props(
-                    DialogButtonProps::default()
-                        .cancel_text("Cancel")
-                        .ok_text("Delete")
-                        .on_cancel(|_, _, _| true)
-                        .on_ok(move |_, _, cx| {
-                            let store = store.clone();
-                            let entity = entity.clone();
-                            cx.spawn(async move |cx| match store.delete_sticker(id).await {
-                                Ok(()) => {
-                                    let _ = entity.update(cx, |this, cx| {
-                                        StickerWindow::try_close(id, cx);
-                                        this.stickers.retain(|s| s.id != id);
-                                    });
-                                }
-                                Err(err) => {
-                                    let _ = entity.update(cx, |this, cx| {
-                                        this.error =
-                                            Some(format!("Failed to delete sticker: {err:#}"));
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .detach();
-                            true
-                        }),
-                )
                 .title(div().text_color(cx.theme().warning).child("Warning"))
                 .child(format!("Are you confirm to delete: \"{title}\"?"))
+                .footer(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(Button::new("Delete").primary().label("Delete").on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let store = store.clone();
+                                let entity = entity.clone();
+                                cx.spawn(async move |cx| match store.delete_sticker(id).await {
+                                    Ok(()) => {
+                                        let _ = entity.update(cx, |this, cx| {
+                                            StickerWindow::try_close(id, cx);
+                                            this.stickers.retain(|s| s.id != id);
+                                        });
+                                    }
+                                    Err(err) => {
+                                        let _ = entity.update(cx, |this, cx| {
+                                            this.error =
+                                                Some(format!("Failed to delete sticker: {err:#}"));
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                                .detach();
+                            },
+                        )),
+                )
                 .w(px(300.0))
                 .bg(black().opacity(0.9))
                 .text_sm()
