@@ -2,10 +2,6 @@
 
 A tiny desktop sticker app for quick notes, timers, and command outputs — built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and backed by a local SQLite database.
 
-- **Single instance**: launching again focuses the existing app
-- **Global hotkey**: show the main window anytime.
-- **Persistent**: sticker windows restore on restart (position/size/state)
-
 ![demo1](./screenshots/demo1.png)
 
 ## What you can do
@@ -17,12 +13,7 @@ A tiny desktop sticker app for quick notes, timers, and command outputs — buil
 | **Text / Markdown** | Notes, checklists, snippets | Edit mode when empty; **Ctrl+S** saves; double‑click preview to edit |
 | **Timer** | Reminders and quick countdowns | Sends a desktop notification when finished |
 | **Command** | Pin the output of a command | Optional **cron** scheduling; supports env vars + working directory |
-
-### Quality-of-life
-
-- **Search & sort** in the main window (by created/updated time)
-- **Color swatches** on sticker hover
-- **Double‑click** a sticker card to open (or re-open) its window
+| **Preview** | Preview files or URL and pin them | Can also edit small text or Markdown files |
 
 ## Hotkeys
 
@@ -30,7 +21,7 @@ A tiny desktop sticker app for quick notes, timers, and command outputs — buil
   - On macOS: `Cmd + Alt + R` also works
 - **Markdown sticker save**: `Ctrl + S` (while editing)
 
-## Running
+## Getting started
 
 ### From source (development)
 
@@ -49,18 +40,18 @@ Run the CLI:
 cargo run --bin rsc --no-default-features --features cli -- --help
 ```
 
-### Build a release binary
+### Build release binaries
 
 ```bash
 cargo build --release --bin rustickers
 cargo build --release --bin rsc --no-default-features --features cli
 ```
 
-Executables will be in `target/release/` (Windows: `target\release\rustickers.exe` and `target\release\rsc.exe`).
+Executables are generated in `target/release/` (Windows: `target\release\rustickers.exe` and `target\release\rsc.exe`).
 
 ## Data storage
 
-Rustickers stores everything in a local SQLite DB named `stickers.db` under your OS application data directory (via `directories::ProjectDirs`).
+Rustickers stores data in a local SQLite database named `stickers.db` under your OS application data directory (via `directories::ProjectDirs`).
 
 Typical locations:
 - **Windows**: `%LOCALAPPDATA%\rustickers\data\stickers.db`
@@ -82,8 +73,8 @@ Log level can be configured with:
 
 ## Releases
 
-This repo’s GitHub Actions workflow builds release artifacts when you push a tag like `v0.1.0`:
+GitHub Actions builds release artifacts when you push a tag like `v0.1.0`:
 
 - **Windows**: two `.zip` assets — one for `rustickers.exe` (UI) and one for `rsc.exe` (CLI)
-- **Linux**: (not working right now) disabled in CI
+- **Linux**: currently disabled in CI
 - **macOS**: two `.zip` assets — one with `Rustickers.app` (UI), one with `rsc` (CLI)
