@@ -24,7 +24,7 @@ pub fn run_native(
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
 ) {
-    let app = Application::new()
+    let app = Application::with_platform(gpui_platform::current_platform(false))
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
 

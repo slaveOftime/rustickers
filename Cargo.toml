@@ -9,6 +9,7 @@ ui = [
 	"dep:sqlx",
 	"sqlx/migrate",
 	"dep:gpui",
+	"dep:gpui_platform",
 	"dep:gpui-component",
 	"dep:gpui-wry",
 	"dep:wry",
@@ -58,8 +59,9 @@ required-features = ["cli"]
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", optional = true }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4", optional = true }
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "2a3c297d7635146958ff147054016e08f16ec9b4", optional = true }
+gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
 anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }
@@ -83,7 +85,7 @@ winsplit = { version = "0.1.0", optional = true }
 rust-embed = { version = "8", features = ["interpolate-folder-path"], optional = true }
 notify-rust = { version = "4.11.7", optional = true }
 async-compat = { version = "0.2.5", optional = true }
-futures = { version = "0.3.32", optional = true }
+futures = { version = "0.3.31", optional = true }
 rfd = { version = "0.17.2", optional = true }
 reqwest = { version = "0.13.2", optional = true }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"], optional = true }

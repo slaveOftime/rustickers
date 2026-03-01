@@ -2,7 +2,6 @@ use gpui::{
     Context, Image, ImageFormat, ImageSource, ObjectFit, Rgba, Window, div, img, prelude::*, px,
     relative, rgba,
 };
-use gpui_component::PixelsExt;
 use gpui_component::{button::Button, h_flex, v_flex};
 use lofty::prelude::*;
 use lofty::probe::Probe;
