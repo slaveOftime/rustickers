@@ -3,7 +3,7 @@ mod cmd;
 mod console;
 mod list;
 mod show;
-mod view;
+pub mod view;
 
 use clap::{Parser, Subcommand};
 
