@@ -53,8 +53,8 @@ path = "src/main.rs"
 required-features = ["ui"]
 
 [[bin]]
-name = "rsc"
-path = "src/bin/rsc.rs"
+name = "rusticker"
+path = "src/bin/rusticker.rs"
 required-features = ["cli"]
 
 [dependencies]

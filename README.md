@@ -37,17 +37,17 @@ cargo run
 Run the CLI:
 
 ```bash
-cargo run --bin rsc --no-default-features --features cli -- --help
+cargo run --bin rusticker --no-default-features --features cli -- --help
 ```
 
 ### Build release binaries
 
 ```bash
 cargo build --release --bin rustickers
-cargo build --release --bin rsc --no-default-features --features cli
+cargo build --release --bin rusticker --no-default-features --features cli
 ```
 
-Executables are generated in `target/release/` (Windows: `target\release\rustickers.exe` and `target\release\rsc.exe`).
+Executables are generated in `target/release/` (Windows: `target\release\rustickers.exe` and `target\release\rusticker.exe`).
 
 ## Data storage
 
@@ -75,6 +75,6 @@ Log level can be configured with:
 
 GitHub Actions builds release artifacts when you push a tag like `v0.1.0`:
 
-- **Windows**: two `.zip` assets — one for `rustickers.exe` (UI) and one for `rsc.exe` (CLI)
+- **Windows**: two `.zip` assets — one for `rustickers.exe` (UI) and one for `rusticker.exe` (CLI)
 - **Linux**: currently disabled in CI
-- **macOS**: two `.zip` assets — one with `Rustickers.app` (UI), one with `rsc` (CLI)
+- **macOS**: two `.zip` assets — one with `Rustickers.app` (UI), one with `rusticker` (CLI)
