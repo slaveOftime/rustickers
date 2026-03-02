@@ -43,7 +43,7 @@ cargo run --bin rusticker --no-default-features --features cli -- --help
 ### Build release binaries
 
 ```bash
-cargo build --release --bin rustickers
+cargo build --release --bin rustickers 
 cargo build --release --bin rusticker --no-default-features --features cli
 ```
 

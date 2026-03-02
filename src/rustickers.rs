@@ -1,3 +1,6 @@
+//! This is the entry file for the GUI application.
+//! It initializes logging, ensures a single instance is running, starts IPC and hotkey listeners, and then runs the native GUI loop.
+
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[global_allocator]
@@ -12,7 +15,6 @@ use std::sync::mpsc;
 fn main() {
     let app_paths = AppPaths::new().expect("App paths should initialize");
 
-    // ── GUI mode ──────────────────────────────────────────────────────────────
     let _ = rustickers::utils::logging::LoggingGuards::init(&app_paths)
         .expect("Logging should initialize");
 

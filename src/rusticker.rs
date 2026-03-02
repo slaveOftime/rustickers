@@ -1,3 +1,6 @@
+//! This is the entry file for the CLI application. 
+//! It parses command-line arguments and dispatches commands accordingly.
+
 use clap::Parser as _;
 use std::ffi::OsString;
 use std::path::Path;

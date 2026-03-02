@@ -2,6 +2,7 @@
 name = "rustickers"
 version = "0.1.0"
 edition = "2024"
+default-run = "rustickers"
 
 [features]
 default = ["ui"]
@@ -49,7 +50,7 @@ cli = [
 
 [[bin]]
 name = "rustickers"
-path = "src/main.rs"
+path = "src/rustickers.rs"
 required-features = ["ui"]
 
 [[bin]]
