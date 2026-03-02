@@ -57,9 +57,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+            WEBKIT_DEV=libwebkit2gtk-4.1-dev
+            JSCORE_DEV=libjavascriptcoregtk-4.1-dev
+          else
+            WEBKIT_DEV=libwebkit2gtk-4.0-dev
+            JSCORE_DEV=libjavascriptcoregtk-4.0-dev
+          fi
           sudo apt-get install -y --no-install-recommends \
             zip \
             pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            "$WEBKIT_DEV" \
+            "$JSCORE_DEV" \
             libx11-dev \
             libxcursor-dev \
             libxrandr-dev \
