@@ -282,6 +282,7 @@ impl Render for MarkdownSticker {
             window.set_rem_size(cx.theme().font_size);
 
             body = body
+                .occlude()
                 .child(
                     div()
                         .size_full()

@@ -257,6 +257,7 @@ impl super::FileSticker {
                 .size_full()
                 .gap_1()
                 .p_1()
+                .occlude()
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.modifiers.control
                         && event.keystroke.key.eq_ignore_ascii_case("s")
@@ -278,7 +279,6 @@ impl super::FileSticker {
                         Button::new("save-preview-file")
                             .label("Save (ctrl+s)")
                             .small()
-                            .occlude()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_edit(window, cx);
                             })),
