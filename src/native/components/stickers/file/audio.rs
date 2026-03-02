@@ -98,7 +98,7 @@ impl Default for AudioMetadata {
 pub(super) struct AudioState {
     handle: Option<AudioHandle>,
     event_rx: Option<mpsc::Receiver<AudioEvent>>,
-    is_playing: bool,
+    pub is_playing: bool,
     play_mode: AudioPlayMode,
     siblings: Vec<PathBuf>,
     current_idx: usize,

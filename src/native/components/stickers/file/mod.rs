@@ -291,6 +291,13 @@ impl super::Sticker for FileSticker {
     fn set_color(&mut self, color: StickerColor) {
         self.color = color;
     }
+
+    fn disable_color_picker(&self) -> bool {
+        match self.preview.as_ref() {
+            Some(FilePreview::Audio { state, .. }) => state.is_playing,
+            _ => false,
+        }
+    }
 }
 
 impl Render for FileSticker {
