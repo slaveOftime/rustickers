@@ -921,7 +921,7 @@ impl CommandSticker {
             .bg(bg_color)
             .p(px(self.padding.read(cx).value().start()))
             .size_full()
-            .object_fit(gpui::ObjectFit::Fill)
+            .object_fit(gpui::ObjectFit::Cover)
             .into_any_element(),
             CommandResult::Svg(None) => empty_view,
             CommandResult::Source(None) => empty_view,
