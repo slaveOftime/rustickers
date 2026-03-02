@@ -1,34 +1,30 @@
 # Rustickers
 
-A tiny desktop sticker app for quick notes, timers, and command outputs — built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and backed by a local SQLite database.
+A lightweight desktop sticker app for notes, timers, command output, and file previews.
 
-![demo1](./screenshots/demo1.png)
+Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), powered by local SQLite, and designed to stay fast and simple.
 
-## What you can do
+![Rustickers demo](./screenshots/demo1.png)
 
-### Sticker types
+## Highlights
 
-| Type | What it’s for | Handy details |
-| --- | --- | --- |
-| **Text / Markdown** | Notes, checklists, snippets | Edit mode when empty; **Ctrl+S** saves; double‑click preview to edit |
-| **Timer** | Reminders and quick countdowns | Sends a desktop notification when finished |
-| **Command** | Pin the output of a command | Optional **cron** scheduling; supports env vars + working directory |
-| **Preview** | Preview files or URL and pin them | Can also edit small text or Markdown files |
+- **Markdown notes**: quick editing, preview mode, and **Ctrl+S** save.
+- **Timers**: countdown timers with an audible alert on completion.
+- **Command stickers**: pin command output, with optional cron scheduling, env vars, and working directory.
+- **File / URL preview**: preview files, folders, or URLs and pin them as stickers.
+- **Paint stickers**: freehand drawing space for quick sketches.
 
-## Hotkeys
+## Global hotkeys
 
-- **Show main window**: `Ctrl + Alt + R`
-  - On macOS: `Cmd + Alt + R` also works
-- **Markdown sticker save**: `Ctrl + S` (while editing)
+- **Show main window**: `Ctrl + Alt + R` (macOS also supports `Cmd + Alt + R`)
+- **Toggle quick file preview**: `Ctrl/Cmd + Alt`
+- **Save in editor/markdown views**: `Ctrl + S`
 
-## Getting started
+## Quick start
 
-### From source (development)
+Prerequisite: stable Rust toolchain.
 
-Prerequisites:
-- Rust (stable toolchain)
-
-Build and run:
+Run the desktop app:
 
 ```bash
 cargo run
@@ -40,41 +36,43 @@ Run the CLI:
 cargo run --bin rusticker --no-default-features --features cli -- --help
 ```
 
-### Build release binaries
+Build release binaries:
 
 ```bash
-cargo build --release --bin rustickers 
+cargo build --release --bin rustickers
 cargo build --release --bin rusticker --no-default-features --features cli
 ```
 
-Executables are generated in `target/release/` (Windows: `target\release\rustickers.exe` and `target\release\rusticker.exe`).
+Outputs are written to `target/release/`.
 
-## Data storage
+## CLI commands
 
-Rustickers stores data in a local SQLite database named `stickers.db` under your OS application data directory (via `directories::ProjectDirs`).
+`rusticker` supports:
+
+- `list [--state open|close|all] [--search <text>]`
+- `show <id>`
+- `open <id>` / `close <id>`
+- `view <path-or-url>`
+- `cmd <command> [--cron <expr>] [--run-now] [--env KEY=VALUE]... [--dir <path>]`
+
+Tip: passing a single file path or URL is treated as `view <source>` automatically.
+
+## Data and logs
+
+Rustickers stores data in `stickers.db` under your app data directory and writes daily-rotated logs to a sibling `logs/` directory.
 
 Typical locations:
-- **Windows**: `%LOCALAPPDATA%\rustickers\data\stickers.db`
-- **macOS**: `~/Library/Application Support/rustickers/data/stickers.db`
-- **Linux**: `~/.local/share/rustickers/data/stickers.db`
 
-## Logging
+- **Windows**: `%LOCALAPPDATA%\rustickers\data\stickers.db` and `%LOCALAPPDATA%\rustickers\data\logs\`
+- **macOS**: `~/Library/Application Support/rustickers/data/stickers.db` and `~/Library/Application Support/rustickers/data/logs/`
+- **Linux**: `~/.local/share/rustickers/data/stickers.db` and `~/.local/share/rustickers/data/logs/`
 
-Rustickers writes logs to a daily-rotating file under the same app data directory as the database:
+Log level precedence:
 
-- **Windows**: `%LOCALAPPDATA%\rustickers\data\logs\`
-- **macOS**: `~/Library/Application Support/rustickers/data/logs/`
-- **Linux**: `~/.local/share/rustickers/data/logs/`
-
-Log level can be configured with:
-
-- `RUSTICKERS_LOG` (preferred), e.g. `RUSTICKERS_LOG=debug`
-- `RUST_LOG` (fallback)
+1. `RUSTICKERS_LOG`
+2. `RUST_LOG`
+3. fallback: `trace` (debug) / `info` (release)
 
 ## Releases
 
-GitHub Actions builds release artifacts when you push a tag like `v0.1.0`:
-
-- **Windows**: two `.zip` assets — one for `rustickers.exe` (UI) and one for `rusticker.exe` (CLI)
-- **Linux**: currently disabled in CI
-- **macOS**: two `.zip` assets — one with `Rustickers.app` (UI), one with `rusticker` (CLI)
+Tagging (for example `v0.1.0`) triggers GitHub Actions release artifacts for Windows and macOS (UI + CLI bundles).
