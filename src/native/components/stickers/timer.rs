@@ -67,6 +67,8 @@ pub struct TimerSticker {
     last_save_time_while_countdown: i64,
 
     is_just_finished: bool,
+    timer_loop_running: bool,
+    last_displayed_remaining_secs: i32,
 
     error: Option<String>,
 }
@@ -131,6 +133,8 @@ impl TimerSticker {
             seconds,
             last_save_time_while_countdown: 0,
             is_just_finished: false,
+            timer_loop_running: false,
+            last_displayed_remaining_secs: -1,
             error: None,
         }
     }
@@ -231,6 +235,8 @@ impl TimerSticker {
                 state: TimerState::Running,
             }),
         };
+        self.last_displayed_remaining_secs = -1;
+        self.timer_loop_running = false;
 
         self.save_timer_state(cx);
     }
@@ -242,18 +248,25 @@ impl TimerSticker {
                 (TimerState::Paused, TimerState::Running) => {
                     start_info.started_at_ms = crate::utils::time::now_unix_millis();
                     start_info.state = TimerState::Running;
+                    self.last_displayed_remaining_secs = -1;
+                    self.timer_loop_running = false;
                 }
                 (TimerState::Finished, TimerState::Running) => {
                     start_info.started_at_ms = crate::utils::time::now_unix_millis();
                     start_info.state = TimerState::Running;
                     start_info.remaining_secs = self.timer.duration_secs;
+                    self.last_displayed_remaining_secs = -1;
+                    self.timer_loop_running = false;
                 }
                 (TimerState::Running, TimerState::Paused) => {
                     start_info.remaining_secs = remaining_secs;
                     start_info.state = TimerState::Paused;
+                    self.timer_loop_running = false;
                 }
                 (_, TimerState::Finished) => {
                     self.timer.start_info = None;
+                    self.timer_loop_running = false;
+                    self.last_displayed_remaining_secs = -1;
                 }
                 _ => { /* No state change */ }
             }
@@ -269,6 +282,8 @@ impl TimerSticker {
             start_info.started_at_ms = crate::utils::time::now_unix_millis();
             start_info.remaining_secs = self.timer.duration_secs;
             start_info.state = TimerState::Running;
+            self.last_displayed_remaining_secs = -1;
+            self.timer_loop_running = false;
 
             self.save_timer_state(cx);
         }
@@ -298,41 +313,72 @@ impl TimerSticker {
     }
 
     fn spawn_for_timer(&mut self, cx: &mut Context<Self>) {
+        if self.timer_loop_running {
+            return;
+        }
+        self.timer_loop_running = true;
+
         cx.spawn(async move |e, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs_f64(0.8))
-                .await;
-            let _ = e.update(cx, |this, cx| {
-                let mut is_just_finished = false;
-                let remaining_secs = effective_remaining_secs(&this.timer);
-                if let Some(start_info) = &mut this.timer.start_info {
-                    if matches!(start_info.state, TimerState::Finished | TimerState::Paused) {
+            loop {
+                let mut should_continue = true;
+                let mut sleep_ms: u64 = 200;
+
+                let _ = e.update(cx, |this, cx| {
+                    let Some(start_info) = this.timer.start_info.as_ref() else {
+                        this.timer_loop_running = false;
+                        should_continue = false;
+                        return;
+                    };
+
+                    if !matches!(start_info.state, TimerState::Running) {
+                        this.timer_loop_running = false;
+                        should_continue = false;
                         return;
                     }
 
-                    if remaining_secs <= 0 {
-                        is_just_finished = true;
-                        start_info.state = TimerState::Finished;
-                        cx.activate(true);
+                    let now_ms = crate::utils::time::now_unix_millis();
+                    let elapsed_ms = now_ms.saturating_sub(start_info.started_at_ms);
+                    let remaining_ms =
+                        ((start_info.remaining_secs as i64) * 1000 - elapsed_ms).max(0);
+                    let remaining_secs =
+                        (start_info.remaining_secs - (elapsed_ms / 1000) as i32).max(0);
+
+                    if remaining_secs != this.last_displayed_remaining_secs {
+                        this.last_displayed_remaining_secs = remaining_secs;
+                        cx.notify();
                     }
 
-                    cx.notify();
+                    if remaining_secs <= 0 {
+                        this.is_just_finished = true;
+                        if let Some(start_info) = &mut this.timer.start_info {
+                            start_info.state = TimerState::Finished;
+                        }
+                        this.timer_loop_running = false;
+                        should_continue = false;
+                        cx.activate(true);
+                        this.spawn_for_beep(cx);
+                    }
+
+                    if remaining_secs <= 0 || now_ms - this.last_save_time_while_countdown >= 3000 {
+                        this.save_timer_state(cx);
+                        this.last_save_time_while_countdown = now_ms;
+                        tracing::trace!(id = this.id, "Timer sticker state saved");
+                    }
+
+                    if should_continue {
+                        let until_next_second = (remaining_ms % 1000).max(1) as u64;
+                        sleep_ms = until_next_second.min(200);
+                    }
+                });
+
+                if !should_continue {
+                    break;
                 }
 
-                this.is_just_finished = is_just_finished;
-                if is_just_finished {
-                    this.spawn_for_beep(cx);
-                }
-
-                if remaining_secs <= 0
-                    || crate::utils::time::now_unix_millis() - this.last_save_time_while_countdown
-                        >= 3000
-                {
-                    this.save_timer_state(cx);
-                    this.last_save_time_while_countdown = crate::utils::time::now_unix_millis();
-                    tracing::trace!(id = this.id, "Timer sticker state saved");
-                }
-            });
+                cx.background_executor()
+                    .timer(Duration::from_millis(sleep_ms))
+                    .await;
+            }
         })
         .detach();
     }
@@ -350,6 +396,7 @@ impl TimerSticker {
                     .max_w(px(300.0))
                     .items_center()
                     .gap_2()
+                    .occlude()
                     .child(Select::new(&self.hours).small())
                     .child(":")
                     .child(Select::new(&self.minutes).small())
