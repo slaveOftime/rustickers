@@ -247,19 +247,6 @@ impl super::FileSticker {
         }
     }
 
-    fn maybe_edit_hint(&self, editable: bool) -> Option<gpui::AnyElement> {
-        editable.then(|| {
-            div()
-                .absolute()
-                .right_2()
-                .top_8()
-                .text_xs()
-                .opacity(0.7)
-                .child("double-click to edit")
-                .into_any_element()
-        })
-    }
-
     pub(super) fn preview_view(
         &mut self,
         window: &mut Window,
@@ -291,6 +278,7 @@ impl super::FileSticker {
                         Button::new("save-preview-file")
                             .label("Save (ctrl+s)")
                             .small()
+                            .occlude()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_edit(window, cx);
                             })),
@@ -300,9 +288,7 @@ impl super::FileSticker {
         }
 
         match &self.preview {
-            Some(FilePreview::Markdown {
-                content, editable, ..
-            }) => div()
+            Some(FilePreview::Markdown { content, .. }) => div()
                 .p_2()
                 .size_full()
                 .on_mouse_down(
@@ -317,35 +303,22 @@ impl super::FileSticker {
                         .selectable(false)
                         .scrollable(true),
                 )
-                .when_some(
-                    self.maybe_edit_hint(*editable && window.is_window_hovered()),
-                    |view: gpui::Div, hint| view.child(hint),
-                )
                 .into_any_element(),
-            Some(FilePreview::Text {
-                content, editable, ..
-            }) => {
-                let mut base = div()
-                    .p_2()
-                    .size_full()
-                    .text_sm()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            this.handle_preview_double_click(event, window, cx);
-                        }),
-                    )
-                    .child(content.clone());
-                if let Some(hint) = self.maybe_edit_hint(*editable && window.is_window_hovered()) {
-                    base = base.child(hint);
-                }
-                base.overflow_scrollbar().into_any_element()
-            }
+            Some(FilePreview::Text { content, .. }) => div()
+                .p_2()
+                .size_full()
+                .text_sm()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        this.handle_preview_double_click(event, window, cx);
+                    }),
+                )
+                .overflow_scrollbar()
+                .child(content.clone())
+                .into_any_element(),
             Some(FilePreview::Code {
-                content,
-                editable,
-                language,
-                ..
+                content, language, ..
             }) => div()
                 .size_full()
                 .on_mouse_down(
@@ -362,10 +335,6 @@ impl super::FileSticker {
                     .size_full()
                     .selectable(false)
                     .scrollable(true),
-                )
-                .when_some(
-                    self.maybe_edit_hint(*editable && window.is_window_hovered()),
-                    |view: gpui::Div, hint| view.child(hint),
                 )
                 .into_any_element(),
             Some(FilePreview::Image(image)) => div()

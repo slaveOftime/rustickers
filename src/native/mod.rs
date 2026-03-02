@@ -133,11 +133,13 @@ pub fn run_native(
                     for id in sticker_ids {
                         let store = store.clone();
                         let sticker_events_tx = sticker_events_tx.clone();
-                        if let Err(err) =
-                            StickerWindow::open_async(cx, sticker_events_tx, store, id).await
-                        {
-                            tracing::warn!(id, error = ?err, "Failed to open sticker window");
-                        }
+                        cx.spawn(async move |cx| {
+                            if let Err(err) =
+                                StickerWindow::open_async(cx, sticker_events_tx, store, id).await
+                            {
+                                tracing::warn!(id, error = ?err, "Failed to open sticker window");
+                            }
+                        }).detach();
                     }
                 }
                 Err(err) => {

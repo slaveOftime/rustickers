@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, PathStyle, Pixels, Point, Render, Rgba, StrokeOptions, Window, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, transparent_black,
+    PathBuilder, PathStyle, Pixels, Point, Render, StrokeOptions, Window, WindowControlArea,
+    canvas, div, point, prelude::*, px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{
@@ -474,6 +474,7 @@ impl PaintSticker {
             .border_0()
             .bg(transparent_black())
             .text_color(rgba(current_color))
+            .occlude()
             .on_click(cx.listener(|this, _, _, cx| {
                 this.tool = if this.tool == PaintTool::Eraser {
                     PaintTool::Pen
@@ -497,6 +498,7 @@ impl PaintSticker {
                     .when(!is_selected, |v| {
                         v.border_1().border_color(rgba(0x00000000))
                     })
+                    .occlude()
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
@@ -516,6 +518,7 @@ impl PaintSticker {
                 div()
                     .cursor_pointer()
                     .child(make_dot(w, current_color, is_selected))
+                    .occlude()
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
@@ -536,6 +539,8 @@ impl PaintSticker {
             .left_0()
             .top_0()
             .right_0()
+            .occlude()
+            .window_control_area(WindowControlArea::Drag)
             .child(
                 h_flex()
                     .items_center()
@@ -555,6 +560,7 @@ impl PaintSticker {
 
         div()
             .size_full()
+            .occlude()
             .child(
                 canvas(
                     move |_, _, _| {},
@@ -670,10 +676,6 @@ impl Render for PaintSticker {
         v_flex()
             .size_full()
             .gap_2()
-            .bg(Rgba {
-                a: 0.85,
-                ..self.color.bg()
-            })
             .relative()
             .child(self.canvas_view(cx))
             .when(window.is_window_hovered(), |v| {

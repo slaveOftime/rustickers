@@ -1,6 +1,5 @@
 use gpui::{
-    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, Rgba, Window, WindowControlArea,
-    div, prelude::*, px, rgba,
+    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, Window, div, prelude::*, px, rgba,
 };
 use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, Disableable, Sizable, h_flex};
@@ -277,10 +276,7 @@ impl super::Sticker for MarkdownSticker {
 
 impl Render for MarkdownSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().size_full().gap_1().bg(Rgba {
-            a: 0.85,
-            ..self.color.bg()
-        });
+        let mut body = v_flex().size_full().gap_1();
 
         if self.editing {
             window.set_rem_size(cx.theme().font_size);
@@ -305,11 +301,15 @@ impl Render for MarkdownSticker {
                         ),
                 )
                 .child(
-                    h_flex().child(Button::new("save").label("save (ctrl+s)").small().on_click(
-                        cx.listener(|s, _, _, cx| {
-                            s.save_state(cx);
-                        }),
-                    )),
+                    h_flex().child(
+                        Button::new("save")
+                            .label("save (ctrl+s)")
+                            .small()
+                            .occlude()
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.save_state(cx);
+                            })),
+                    ),
                 );
         } else {
             window.set_rem_size(px(14.0));
@@ -318,6 +318,7 @@ impl Render for MarkdownSticker {
                 .icon(IconName::DocumentText)
                 .tooltip("Convert to local file")
                 .disabled(self.converting)
+                .occlude()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.start_convert(cx);
                 }));
@@ -327,9 +328,10 @@ impl Render for MarkdownSticker {
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, e: &MouseDownEvent, _, _| {
+                    cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         if e.click_count >= 2 {
                             this.editing = true;
+                            cx.notify();
                         }
                     }),
                 )
@@ -341,17 +343,6 @@ impl Render for MarkdownSticker {
                         .selectable(false)
                         .scrollable(true),
                 )
-                .child(
-                    div()
-                        .occlude()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .right_0()
-                        .h_5()
-                        .window_control_area(WindowControlArea::Drag),
-                )
-                // Convert button — bottom-left corner, above the drag area.
                 .when(window.is_window_hovered(), |view| {
                     view.child(
                         div()

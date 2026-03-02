@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
-    MouseButton, Render, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
+    MouseButton, Render, Rgba, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
     transparent_black,
 };
@@ -564,6 +564,7 @@ impl StickerWindow {
                     .border_0()
                     .cursor_pointer()
                     .icon(IconName::Close)
+                    .occlude()
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()
@@ -579,11 +580,11 @@ impl StickerWindow {
                     .bg(theme.swatch())
                     .rounded_full()
                     .cursor_pointer()
+                    .window_control_area(WindowControlArea::Drag)
+                    .occlude()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            window.prevent_default();
+                        cx.listener(move |this, _, _, cx| {
                             this.change_color(theme, cx);
                         }),
                     )
@@ -597,7 +598,6 @@ impl StickerWindow {
             .right_0()
             .p_2()
             .gap_2()
-            .window_control_area(WindowControlArea::Drag)
             .when(!self.view.disable_color_picker(cx), move |v| {
                 v.child(color_options)
             })
@@ -616,9 +616,14 @@ impl Render for StickerWindow {
             .font_family(cx.theme().font_family.clone())
             .relative()
             .size_full()
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
+            .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, |event, window, cx| {
                 if !window.is_window_active() {
                     window.activate_window();
+                }
+                if event.click_count >= 2 {
+                    cx.stop_propagation();
+                    window.prevent_default();
                 }
             })
             .on_mouse_up(
@@ -627,6 +632,12 @@ impl Render for StickerWindow {
                     this.change_bounds(window, cx);
                 }),
             )
+            .when(self.view.use_default_bg(cx), |view| {
+                view.bg(Rgba {
+                    a: 0.85,
+                    ..self.detail.color.bg()
+                })
+            })
             .when_some(self.error.as_ref(), |view, msg| {
                 view.child(
                     div()

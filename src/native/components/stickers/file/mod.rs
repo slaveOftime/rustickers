@@ -6,7 +6,7 @@ mod utils;
 mod watcher;
 
 use futures::channel::mpsc as async_mpsc;
-use gpui::{Context, Entity, Rgba, Window, WindowControlArea, div, prelude::*, px, rgba};
+use gpui::{Context, Entity, Rgba, Window, div, prelude::*, px, rgba};
 use gpui_component::{
     Disableable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
 };
@@ -237,6 +237,7 @@ impl FileSticker {
             .bg(rgba(0x000000))
             .border_0()
             .cursor_pointer()
+            .occlude()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.pin(window, cx);
             }))
@@ -253,6 +254,7 @@ impl FileSticker {
             .bg(rgba(0x000000))
             .border_0()
             .cursor_pointer()
+            .occlude()
             .on_click(cx.listener(|this, _, window, cx| {
                 if let Some(FilePreview::WebView(web)) = &this.preview {
                     let _ = web.update(cx, |web, cx| web.reload(cx));
@@ -306,9 +308,7 @@ impl Render for FileSticker {
             .flex()
             .flex_col()
             .size_full()
-            .bg(bg_color)
             .relative()
-            .window_control_area(WindowControlArea::Drag)
             .when(
                 matches!(self.preview, Some(FilePreview::WebView(_))),
                 |view| {
@@ -360,7 +360,6 @@ impl Render for FileSticker {
                                 ..self.color.bg()
                             })
                             .shadow_md()
-                            .window_control_area(WindowControlArea::Drag)
                             .border_t_1()
                             .border_dashed()
                             .absolute()

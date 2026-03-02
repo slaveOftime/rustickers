@@ -319,7 +319,7 @@ impl MainWindow {
                                     window.close_dialog(cx);
                                 }),
                         )
-                        .child(Button::new("Delete").primary().label("Delete").on_click(
+                        .child(Button::new("Delete").warning().label("Delete").on_click(
                             move |_, window, cx| {
                                 window.close_dialog(cx);
                                 let store = store.clone();
@@ -532,6 +532,7 @@ impl MainWindow {
                     .border_0()
                     .bg(rgba(0x00000000))
                     .opacity(0.8)
+                    .occlude()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.delete_sticker(id, title.clone(), window, cx);
                     })),
@@ -566,6 +567,7 @@ impl MainWindow {
                             .border_0()
                             .bg(rgba(0x00000000))
                             .opacity(0.8)
+                            .occlude()
                             .on_click(cx.listener(|_, _, window, _| {
                                 window.minimize_window();
                             })),
@@ -576,6 +578,7 @@ impl MainWindow {
                             .border_0()
                             .bg(rgba(0x00000000))
                             .opacity(0.8)
+                            .occlude()
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.quit();
                             })),

@@ -637,6 +637,7 @@ impl CommandSticker {
                                     a: 0.85,
                                     ..this.color.bg()
                                 };
+                                
                                 view.set_bg(color, cx);
                                 view
                             })),
@@ -728,6 +729,7 @@ impl CommandSticker {
                                     },
                                     |v| v.primary(),
                                 )
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Text(None)
                                 })),
@@ -743,6 +745,7 @@ impl CommandSticker {
                                     },
                                     |v| v.primary(),
                                 )
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Markdown(None)
                                 })),
@@ -758,6 +761,7 @@ impl CommandSticker {
                                     },
                                     |v| v.primary(),
                                 )
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Html(None)
                                 })),
@@ -773,6 +777,7 @@ impl CommandSticker {
                                     },
                                     |v| v.primary(),
                                 )
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Svg(None)
                                 })),
@@ -788,6 +793,7 @@ impl CommandSticker {
                                     },
                                     |v| v.primary(),
                                 )
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Source(None)
                                 })),
@@ -820,6 +826,7 @@ impl CommandSticker {
                                         .label("none")
                                         .small()
                                         .when(self.scheduler.is_none(), |v| v.primary())
+                                        .occlude()
                                         .on_click(cx.listener(|this, _, _, _| {
                                             this.scheduler = None;
                                         })),
@@ -832,6 +839,7 @@ impl CommandSticker {
                                             matches!(self.scheduler, Some(Scheduler::Cron(_))),
                                             |v| v.primary(),
                                         )
+                                        .occlude()
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             // by default, every one minute
                                             let cron = "0 */1 * * * *";
@@ -893,7 +901,7 @@ impl CommandSticker {
                 .bg(bg_color)
                 .p(px(self.padding.read(cx).value().start()))
                 .size_full()
-                .selectable(true)
+                .selectable(false)
                 .scrollable(true)
                 .into_any_element(),
             CommandResult::Markdown(None) => empty_view,
@@ -948,6 +956,10 @@ impl super::Sticker for CommandSticker {
         self.color = color;
     }
 
+    fn use_default_bg(&self) -> bool {
+        false
+    }
+
     fn disable_color_picker(&self) -> bool {
         !self.show_editing_view()
     }
@@ -966,7 +978,6 @@ impl Render for CommandSticker {
 
         if self.show_editing_view() {
             root = root
-                .bg(bg_color)
                 .child(
                     div()
                         .p_2()
@@ -981,6 +992,7 @@ impl Render for CommandSticker {
                             .icon(IconName::Play)
                             .bg(transparent_white())
                             .border_0()
+                            .occlude()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start(window, cx, false);
                             })),
@@ -1009,6 +1021,7 @@ impl Render for CommandSticker {
                                     .when_some(self.next_scheduled_at.clone(), |view, x| {
                                         view.tooltip(format!("Next run at {}", x))
                                     })
+                                    .occlude()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.stop_schedule();
                                         this.stop(cx);
@@ -1027,6 +1040,7 @@ impl Render for CommandSticker {
                                 .icon(IconName::Adjustments)
                                 .bg(transparent_white())
                                 .border_0()
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.result_html_entity = None;
                                     match this.result {
@@ -1046,6 +1060,7 @@ impl Render for CommandSticker {
                                 .icon(IconName::Play)
                                 .bg(transparent_white())
                                 .border_0()
+                                .occlude()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.start(window, cx, false);
                                 })),

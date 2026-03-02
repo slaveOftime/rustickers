@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Rgba, Size, Window,
-    WindowControlArea, div, prelude::*, px, transparent_white,
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window, div,
+    prelude::*, px, transparent_white,
 };
 use gpui_component::{
     IndexPath, Sizable, StyledExt,
@@ -361,6 +361,7 @@ impl TimerSticker {
                     .icon(IconName::Play)
                     .bg(transparent_white())
                     .border_0()
+                    .occlude()
                     .on_click(cx.listener(|s, _, _, cx| s.start(cx))),
             )
             .into_any_element()
@@ -433,6 +434,7 @@ impl TimerSticker {
                         .icon(IconName::Pause)
                         .bg(transparent_white())
                         .border_0()
+                        .occlude()
                         .on_click(
                             cx.listener(|s, _, _, cx| s.change_state(cx, TimerState::Paused)),
                         ),
@@ -446,6 +448,7 @@ impl TimerSticker {
                             .icon(IconName::Adjustments)
                             .bg(transparent_white())
                             .border_0()
+                            .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.is_just_finished = false;
                                 this.change_state(cx, TimerState::Finished)
@@ -456,6 +459,7 @@ impl TimerSticker {
                             .icon(IconName::Play)
                             .bg(transparent_white())
                             .border_0()
+                            .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.is_just_finished = false;
                                 this.change_state(cx, TimerState::Running)
@@ -471,6 +475,7 @@ impl TimerSticker {
                                 .icon(IconName::Adjustments)
                                 .bg(transparent_white())
                                 .border_0()
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.is_just_finished = false;
                                     this.change_state(cx, TimerState::Finished)
@@ -481,6 +486,7 @@ impl TimerSticker {
                                 .icon(IconName::Forward)
                                 .bg(transparent_white())
                                 .border_0()
+                                .occlude()
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.restart(cx);
                                 })),
@@ -521,13 +527,7 @@ impl Sticker for TimerSticker {
 
 impl Render for TimerSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex()
-            .size_full()
-            .bg(Rgba {
-                a: 0.85,
-                ..self.color.bg()
-            })
-            .window_control_area(WindowControlArea::Drag);
+        let mut body = v_flex().size_full();
 
         if let Some(start_info) = &mut self.timer.start_info {
             if let TimerState::Running = start_info.state {

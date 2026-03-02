@@ -1,4 +1,4 @@
-use gpui::{Context, Window, WindowControlArea, div, prelude::*, relative};
+use gpui::{Context, Window, div, prelude::*, relative};
 use gpui_component::{Icon, green_500, h_flex, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -74,7 +74,6 @@ impl super::FileSticker {
         };
 
         v_flex()
-            .window_control_area(WindowControlArea::Drag)
             .when(self.refreshing, |view| {
                 view.child(
                     div()

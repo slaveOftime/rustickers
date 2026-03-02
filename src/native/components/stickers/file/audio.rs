@@ -587,6 +587,7 @@ impl super::FileSticker {
                     .bg(rgba(0x00000000))
                     .border_0()
                     .cursor_pointer()
+                    .occlude()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.navigate(-1, cx);
                     })),
@@ -601,6 +602,7 @@ impl super::FileSticker {
                     .bg(rgba(0x00000000))
                     .border_0()
                     .cursor_pointer()
+                    .occlude()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_play(cx);
                     })),
@@ -611,6 +613,7 @@ impl super::FileSticker {
                     .bg(rgba(0x00000000))
                     .border_0()
                     .cursor_pointer()
+                    .occlude()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.navigate(1, cx);
                     })),
@@ -625,6 +628,7 @@ impl super::FileSticker {
                     })
                     .border_0()
                     .cursor_pointer()
+                    .occlude()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.switch_play_mode(cx);
                     })),

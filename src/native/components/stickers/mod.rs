@@ -19,6 +19,10 @@ pub trait Sticker: Sized {
 
     fn set_color(&mut self, color: StickerColor);
 
+    fn use_default_bg(&self) -> bool {
+        true
+    }
+
     fn disable_color_picker(&self) -> bool {
         false
     }
@@ -29,6 +33,7 @@ pub trait StickerView {
     fn element(&self) -> AnyElement;
     fn save_on_close(&self, cx: &mut App) -> bool;
     fn set_color(&mut self, cx: &mut App, color: StickerColor);
+    fn use_default_bg(&self, cx: &App) -> bool;
     fn disable_color_picker(&self, cx: &App) -> bool;
 }
 
@@ -63,6 +68,10 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
         let _ = self.entity.update(cx, |this, _cx| {
             this.set_color(color);
         });
+    }
+
+    fn use_default_bg(&self, cx: &App) -> bool {
+        self.entity.read(cx).use_default_bg()
     }
 
     fn disable_color_picker(&self, cx: &App) -> bool {
