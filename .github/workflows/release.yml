@@ -69,6 +69,7 @@ jobs:
             pkg-config \
             libglib2.0-dev \
             libgtk-3-dev \
+            libasound2-dev \
             "$WEBKIT_DEV" \
             "$JSCORE_DEV" \
             libx11-dev \
@@ -93,8 +94,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $uiArtifact = "${env:UI_BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          $cliArtifact = "${env:CLI_BIN_NAME}-${env:GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          $safeRef = ($env:GITHUB_REF_NAME -replace '[\\/:*?"<>|]', '-')
+
+          $artifact = "${env:UI_BIN_NAME}-${safeRef}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
 
           $uiBin = "${env:UI_BIN_NAME}${{ matrix.binary_ext }}"
           $uiSrc = "target\${{ matrix.target }}\release\$uiBin"
@@ -108,33 +110,29 @@ jobs:
             throw "CLI binary not found at $cliSrc"
           }
 
-          New-Item -ItemType Directory -Force -Path dist-ui | Out-Null
-          Copy-Item $uiSrc -Destination dist-ui\ -Force
-
-          New-Item -ItemType Directory -Force -Path dist-cli | Out-Null
-          Copy-Item $cliSrc -Destination dist-cli\ -Force
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $uiSrc -Destination dist\ -Force
+          Copy-Item $cliSrc -Destination dist\ -Force
 
           # Include common docs if present
           Get-ChildItem -Path . -Filter "README*" -File -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName -Destination dist-ui\ -Force
-            Copy-Item $_.FullName -Destination dist-cli\ -Force
+            Copy-Item $_.FullName -Destination dist\ -Force
           }
           if (Test-Path "LICENSE") {
-            Copy-Item "LICENSE" -Destination dist-ui\ -Force
-            Copy-Item "LICENSE" -Destination dist-cli\ -Force
+            Copy-Item "LICENSE" -Destination dist\ -Force
           }
 
-          if (Test-Path $uiArtifact) { Remove-Item $uiArtifact -Force }
-          Compress-Archive -Path "dist-ui\*" -DestinationPath $uiArtifact -Force
-
-          if (Test-Path $cliArtifact) { Remove-Item $cliArtifact -Force }
-          Compress-Archive -Path "dist-cli\*" -DestinationPath $cliArtifact -Force
+          if (Test-Path $artifact) { Remove-Item $artifact -Force }
+          Compress-Archive -Path "dist\*" -DestinationPath $artifact -Force
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
+
+          safe_ref="$(echo "$GITHUB_REF_NAME" | tr '/\\:*?"<>|' '-')"
 
           ui_src="target/${{ matrix.target }}/release/${UI_BIN_NAME}"
           if [[ ! -f "$ui_src" ]]; then
@@ -148,35 +146,35 @@ jobs:
             exit 1
           fi
 
-          rm -rf dist-ui dist-cli
-          mkdir -p dist-ui dist-cli
+          rm -rf dist
+          mkdir -p dist
 
-          cp "$ui_src" "dist-ui/${UI_BIN_NAME}"
-          chmod +x "dist-ui/${UI_BIN_NAME}"
+          cp "$ui_src" "dist/${UI_BIN_NAME}"
+          chmod +x "dist/${UI_BIN_NAME}"
 
-          cp "$cli_src" "dist-cli/${CLI_BIN_NAME}"
-          chmod +x "dist-cli/${CLI_BIN_NAME}"
+          cp "$cli_src" "dist/${CLI_BIN_NAME}"
+          chmod +x "dist/${CLI_BIN_NAME}"
 
           # Linux desktop integration helpers
-          cp "assets/icon.png" "dist-ui/${UI_BIN_NAME}.png"
-          cp "packaging/linux/${UI_BIN_NAME}.desktop" "dist-ui/${UI_BIN_NAME}.desktop"
-          cp "packaging/linux/install.sh" "dist-ui/install.sh"
-          chmod +x "dist-ui/install.sh"
+          cp "assets/icon.png" "dist/${UI_BIN_NAME}.png"
+          cp "packaging/linux/${UI_BIN_NAME}.desktop" "dist/${UI_BIN_NAME}.desktop"
+          cp "packaging/linux/install.sh" "dist/install.sh"
+          chmod +x "dist/install.sh"
 
-          if [[ -f "README.md" ]]; then cp README.md dist-ui/; cp README.md dist-cli/; fi
-          if [[ -f "README" ]]; then cp README dist-ui/; cp README dist-cli/; fi
-          if [[ -f "LICENSE" ]]; then cp LICENSE dist-ui/; cp LICENSE dist-cli/; fi
+          if [[ -f "README.md" ]]; then cp README.md dist/; fi
+          if [[ -f "README" ]]; then cp README dist/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
 
-          ui_artifact="${UI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          cli_artifact="${CLI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          tar -C dist-ui -czf "$ui_artifact" .
-          tar -C dist-cli -czf "$cli_artifact" .
+          artifact="${UI_BIN_NAME}-${safe_ref}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          tar -C dist -czf "$artifact" .
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
+
+          safe_ref="$(echo "$GITHUB_REF_NAME" | tr '/\\:*?"<>|' '-')"
 
           ui_src="target/${{ matrix.target }}/release/${UI_BIN_NAME}"
           if [[ ! -f "$ui_src" ]]; then
@@ -257,17 +255,26 @@ jobs:
           if [[ -f "README" ]]; then cp README dist-ui/; cp README dist-cli/; fi
           if [[ -f "LICENSE" ]]; then cp LICENSE dist-ui/; cp LICENSE dist-cli/; fi
 
-          ui_artifact="${UI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          cli_artifact="${CLI_BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          ui_artifact="${UI_BIN_NAME}-${safe_ref}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
+          cli_artifact="${CLI_BIN_NAME}-${safe_ref}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
           if [[ -f "$ui_artifact" ]]; then rm -f "$ui_artifact"; fi
           if [[ -f "$cli_artifact" ]]; then rm -f "$cli_artifact"; fi
           ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$ui_artifact"
           ditto -c -k --sequesterRsrc --keepParent "dist-cli" "$cli_artifact"
 
-      - name: Upload to GitHub Release
+      - name: Upload to GitHub Release (Windows/Linux)
+        if: runner.os != 'macOS'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.UI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
-            ${{ env.CLI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+            ${{ env.UI_BIN_NAME }}-*-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+          fail_on_unmatched_files: true
+
+      - name: Upload to GitHub Release (macOS)
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.UI_BIN_NAME }}-*-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+            ${{ env.CLI_BIN_NAME }}-*-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
           fail_on_unmatched_files: true
