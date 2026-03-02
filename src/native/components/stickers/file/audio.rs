@@ -694,7 +694,7 @@ impl super::FileSticker {
                     .justify_center()
                     .gap_1()
                     .child(info_row)
-                    .child(controls),
+                    .when(window.is_window_hovered(), |view| view.child(controls)),
             )
             .into_any_element()
     }
