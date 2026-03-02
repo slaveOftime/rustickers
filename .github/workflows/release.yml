@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    # tags:
+    #   - "v*"
   workflow_dispatch:
 
 permissions:
@@ -264,10 +264,10 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$ui_artifact"
           ditto -c -k --sequesterRsrc --keepParent "dist-cli" "$cli_artifact"
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ env.UI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
-            ${{ env.CLI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
-          fail_on_unmatched_files: true
+      # - name: Upload to GitHub Release
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     files: |
+      #       ${{ env.UI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+      #       ${{ env.CLI_BIN_NAME }}-${{ github.ref_name }}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
+      #     fail_on_unmatched_files: true
