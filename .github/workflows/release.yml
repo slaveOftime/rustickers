@@ -190,17 +190,17 @@ jobs:
 
           version="${GITHUB_REF_NAME#v}"
 
-          rm -rf dist-ui dist-cli
-          mkdir -p dist-ui dist-cli
+          rm -rf dist
+          mkdir -p dist
 
-          app_dir="dist-ui/${MACOS_APP_NAME}.app"
+          app_dir="dist/${MACOS_APP_NAME}.app"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 
           cp "$ui_src" "$app_dir/Contents/MacOS/${UI_BIN_NAME}"
           chmod +x "$app_dir/Contents/MacOS/${UI_BIN_NAME}"
 
-          cp "$cli_src" "dist-cli/${CLI_BIN_NAME}"
-          chmod +x "dist-cli/${CLI_BIN_NAME}"
+          cp "$cli_src" "dist/${CLI_BIN_NAME}"
+          chmod +x "dist/${CLI_BIN_NAME}"
 
           # Build icon.icns from assets/icon.png
           tmp_icon_dir="$(mktemp -d)"
@@ -251,16 +251,13 @@ jobs:
           </plist>
           EOF
 
-          if [[ -f "README.md" ]]; then cp README.md dist-ui/; cp README.md dist-cli/; fi
-          if [[ -f "README" ]]; then cp README dist-ui/; cp README dist-cli/; fi
-          if [[ -f "LICENSE" ]]; then cp LICENSE dist-ui/; cp LICENSE dist-cli/; fi
+          if [[ -f "README.md" ]]; then cp README.md dist/; fi
+          if [[ -f "README" ]]; then cp README dist/; fi
+          if [[ -f "LICENSE" ]]; then cp LICENSE dist/; fi
 
           ui_artifact="${UI_BIN_NAME}-${safe_ref}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
-          cli_artifact="${CLI_BIN_NAME}-${safe_ref}-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}"
           if [[ -f "$ui_artifact" ]]; then rm -f "$ui_artifact"; fi
-          if [[ -f "$cli_artifact" ]]; then rm -f "$cli_artifact"; fi
-          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$ui_artifact"
-          ditto -c -k --sequesterRsrc --keepParent "dist-cli" "$cli_artifact"
+          ditto -c -k --sequesterRsrc --keepParent "dist" "$ui_artifact"
 
       - name: Upload to GitHub Release (Windows/Linux)
         if: runner.os != 'macOS'
@@ -276,5 +273,4 @@ jobs:
         with:
           files: |
             ${{ env.UI_BIN_NAME }}-*-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
-            ${{ env.CLI_BIN_NAME }}-*-${{ matrix.artifact_suffix }}${{ matrix.artifact_ext }}
           fail_on_unmatched_files: true
