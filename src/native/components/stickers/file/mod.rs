@@ -298,6 +298,10 @@ impl super::Sticker for FileSticker {
             _ => false,
         }
     }
+
+    fn use_default_bg(&self) -> bool {
+        !matches!(self.preview, Some(FilePreview::WebView { .. }))
+    }
 }
 
 impl Render for FileSticker {
