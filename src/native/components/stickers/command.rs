@@ -637,7 +637,7 @@ impl CommandSticker {
                                     a: 0.85,
                                     ..this.color.bg()
                                 };
-                                
+
                                 view.set_bg(color, cx);
                                 view
                             })),
@@ -957,7 +957,7 @@ impl super::Sticker for CommandSticker {
     }
 
     fn use_default_bg(&self) -> bool {
-        false
+        self.show_editing_view()
     }
 
     fn disable_color_picker(&self) -> bool {
