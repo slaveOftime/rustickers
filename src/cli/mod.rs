@@ -2,6 +2,7 @@ mod close;
 mod cmd;
 mod console;
 mod list;
+mod markdown;
 mod open;
 mod show;
 pub mod view;
@@ -54,6 +55,17 @@ enum Commands {
         source: String,
     },
 
+    /// Create and open a markdown sticker
+    Markdown {
+        /// Title for the sticker (defaults to first non-empty line of content)
+        #[arg(long, short = 't')]
+        title: Option<String>,
+
+        /// Initial markdown content
+        #[arg(long, short = 'c')]
+        content: Option<String>,
+    },
+
     /// Create and open a command sticker
     Cmd {
         /// Shell command to run
@@ -91,6 +103,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         Commands::List { state, search } => list::run(app_paths, state, search),
         Commands::Show { id } => show::run(app_paths, id),
         Commands::View { source } => view::run(source),
+        Commands::Markdown { content, title } => markdown::run(app_paths, content, title),
         Commands::Cmd {
             command,
             cron,
