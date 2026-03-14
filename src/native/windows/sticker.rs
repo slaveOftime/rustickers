@@ -201,20 +201,18 @@ impl StickerWindow {
         let id = detail.id;
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             if id <= 0 {
-                let mut closed_self = false;
-                if let Some(pos) = open_stickers.iter().position(|(open_id, _)| *open_id < 0) {
-                    let (id, handle) = open_stickers.remove(pos);
-                    closed_self = id == detail.id;
+                if let Some(pos) = open_stickers
+                    .iter()
+                    .position(|(open_id, _)| *open_id < 0 && *open_id != id)
+                {
+                    let (_, handle) = open_stickers.remove(pos);
                     let _ = handle.update(cx, |_, window, _| {
                         window.remove_window();
                     });
                 }
-                if closed_self {
-                    return Ok(());
-                }
-            } else if let Some((_, handle)) =
-                open_stickers.iter().find(|(open_id, _)| *open_id == id)
-            {
+            }
+
+            if let Some((_, handle)) = open_stickers.iter().find(|(open_id, _)| *open_id == id) {
                 handle.update(cx, |_, window, _| {
                     window.activate_window();
                 })?;
