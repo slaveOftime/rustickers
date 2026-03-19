@@ -249,7 +249,7 @@ impl FileSticker {
             .icon(IconName::Refresh)
             .absolute()
             .top_0()
-            .right_9()
+            .right_20()
             .disabled(self.refreshing)
             .bg(rgba(0x000000))
             .border_0()
