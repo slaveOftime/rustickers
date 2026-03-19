@@ -259,6 +259,7 @@ impl StickerWindow {
             WindowOptions {
                 focus,
                 display_id,
+                kind: gpui::WindowKind::PopUp,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
