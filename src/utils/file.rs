@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use gpui::ImageFormat;
+use memchr::memchr;
 
 pub fn format_terminal_output_for_preview(content: &str) -> String {
     let mut formatted = String::with_capacity(content.len());
@@ -239,24 +240,32 @@ fn control_name(ch: char) -> Option<&'static str> {
     }
 }
 
-pub fn is_binary_text_content(content: &str) -> bool {
-    if content.is_empty() {
+pub fn is_binary_content(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
         return false;
     }
-    if content.as_bytes().contains(&0) {
+
+    if memchr(0, bytes).is_some() {
         return true;
     }
-    let sample = content.as_bytes();
-    let control_count = sample
-        .iter()
-        .filter(|&&byte| matches!(byte, 0x01..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F | 0x7F))
-        .count();
-    control_count > sample.len() / 10
+
+    let mut control_count = 0usize;
+    for &byte in bytes {
+        if matches!(byte, 0x01..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F | 0x7F) {
+            control_count += 1;
+        }
+    }
+
+    control_count > bytes.len() / 10
+}
+
+pub fn decode_text_bytes(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 pub fn read_text_full(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).to_string())
+    Ok(decode_text_bytes(&bytes))
 }
 
 pub fn read_text_truncate(path: &Path, max_bytes: usize) -> std::io::Result<String> {
@@ -267,7 +276,7 @@ pub fn read_text_truncate(path: &Path, max_bytes: usize) -> std::io::Result<Stri
         bytes.as_slice()
     };
 
-    Ok(String::from_utf8_lossy(bytes).to_string())
+    Ok(decode_text_bytes(bytes))
 }
 
 pub fn is_image_ext(ext: &str) -> bool {
@@ -444,7 +453,7 @@ pub fn markdown_language_for_ext(ext: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::format_terminal_output_for_preview;
+    use super::{format_terminal_output_for_preview, is_binary_content};
 
     #[test]
     fn renders_ansi_sequences_as_readable_markers() {
@@ -501,5 +510,20 @@ mod tests {
             format_terminal_output_for_preview(content),
             "<ESC(0 G0 DEC Special Graphics Charset>line"
         );
+    }
+
+    #[test]
+    fn detects_nul_bytes_as_binary() {
+        assert!(is_binary_content(b"hello\0world"));
+    }
+
+    #[test]
+    fn detects_control_heavy_bytes_as_binary() {
+        assert!(is_binary_content(b"abc\x01\x02\x03\x04\x05def"));
+    }
+
+    #[test]
+    fn treats_plain_utf8_text_as_text() {
+        assert!(!is_binary_content("hello, world".as_bytes()));
     }
 }

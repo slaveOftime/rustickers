@@ -6740,6 +6740,7 @@ dependencies = [
  "lb-wry",
  "lofty",
  "lyon",
+ "memchr",
  "mimalloc",
  "notify 8.2.0",
  "notify-rust",

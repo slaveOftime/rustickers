@@ -99,12 +99,13 @@ impl FilePreview {
         if crate::utils::file::is_markdown_ext(ext) {
             let (content_result, editable) = read_text_for_preview(path);
             return content_result
-                .map(|content| FilePreview::Markdown {
-                    source_path: path.to_path_buf(),
-                    content,
-                    editable,
+                .map(|content| {
+                    content.map(|content| FilePreview::Markdown {
+                        source_path: path.to_path_buf(),
+                        content,
+                        editable,
+                    })
                 })
-                .map(Some)
                 .map_err(|err| format!("Failed to read markdown preview: {err}"));
         }
 
@@ -124,17 +125,15 @@ impl FilePreview {
         let (content_result, editable) = read_text_for_preview(path);
         content_result
             .map(|content| {
-                let preview_content =
-                    crate::utils::file::format_terminal_output_for_preview(&content);
-                if crate::utils::file::is_binary_text_content(preview_content.as_str()) {
-                    None
-                } else {
-                    Some(FilePreview::Text {
+                content.map(|content| {
+                    let preview_content =
+                        crate::utils::file::format_terminal_output_for_preview(&content);
+                    FilePreview::Text {
                         source_path: path.to_path_buf(),
                         content: preview_content.clone(),
                         editable: editable && preview_content == content,
-                    })
-                }
+                    }
+                })
             })
             .map_err(|err| format!("Failed to read text preview: {err}"))
     }
@@ -356,14 +355,32 @@ impl super::FileSticker {
     }
 }
 
-fn read_text_for_preview(path: &Path) -> (std::io::Result<String>, bool) {
+fn read_text_for_preview(path: &Path) -> (std::io::Result<Option<String>>, bool) {
     let is_small_text = std::fs::metadata(path)
         .map(|metadata| metadata.len() <= MAX_TEXT_PREVIEW_BYTES as u64)
         .unwrap_or(false);
     let content = if is_small_text {
-        crate::utils::file::read_text_full(path)
+        std::fs::read(path).map(|bytes| {
+            if crate::utils::file::is_binary_content(&bytes) {
+                None
+            } else {
+                Some(crate::utils::file::decode_text_bytes(&bytes))
+            }
+        })
     } else {
-        crate::utils::file::read_text_truncate(path, MAX_TEXT_PREVIEW_BYTES)
+        std::fs::read(path).map(|bytes| {
+            let preview_bytes = if bytes.len() > MAX_TEXT_PREVIEW_BYTES {
+                &bytes[..MAX_TEXT_PREVIEW_BYTES]
+            } else {
+                bytes.as_slice()
+            };
+
+            if crate::utils::file::is_binary_content(preview_bytes) {
+                None
+            } else {
+                Some(crate::utils::file::decode_text_bytes(preview_bytes))
+            }
+        })
     };
     (content, is_small_text)
 }

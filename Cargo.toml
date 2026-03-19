@@ -66,6 +66,7 @@ anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }
 async-trait = "0.1.85"
 directories = "6.0.0"
+memchr = "2.7.6"
 tracing = "0.1.41"
 tracing-appender = { version = "0.2.3", optional = true }
 tracing-error = { version = "0.2.1", optional = true }
