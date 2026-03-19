@@ -10,6 +10,7 @@ use gpui_component::{
     button::Button,
     h_flex,
     input::{InputEvent, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
 use std::{
@@ -556,6 +557,7 @@ impl StickerWindow {
             .items_center()
             .gap_2()
             .child(div().size_full().cursor_move()) // Drag handle area
+            .child(self.create_button(cx))
             .child(
                 Button::new("close")
                     .bg(rgba(0x000000))
@@ -565,6 +567,107 @@ impl StickerWindow {
                     .occlude()
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
+            .into_any_element()
+    }
+
+    fn create_sticker(&mut self, cx: &mut Context<Self>, sticker_type: &StickerType) {
+        let size = match sticker_type {
+            StickerType::Markdown => MarkdownSticker::default_window_size(),
+            StickerType::Command => CommandSticker::default_window_size(),
+            StickerType::Timer => TimerSticker::default_window_size(),
+            StickerType::Paint => PaintSticker::default_window_size(),
+            StickerType::File => FileSticker::default_window_size(),
+        };
+
+        let title = match sticker_type {
+            StickerType::Markdown => "New Text Sticker",
+            StickerType::Command => "New Command Sticker",
+            StickerType::Timer => "New Timer Sticker",
+            StickerType::Paint => "New Paint Sticker",
+            StickerType::File => "New File Sticker",
+        };
+
+        let detail = StickerDetail {
+            id: 0,
+            title: title.to_string(),
+            content: "".to_string(),
+            color: StickerColor::Yellow,
+            sticker_type: *sticker_type,
+            state: StickerState::Open,
+            left: 100,
+            top: 100,
+            width: size.width,
+            height: size.height,
+            top_most: false,
+            created_at: 0,
+            updated_at: 0,
+            display_id: None,
+        };
+
+        let store = self.store.clone();
+        let sticker_events_tx = self.sticker_events_tx.clone();
+        cx.spawn(
+            async move |entity, cx| match store.insert_sticker(detail).await {
+                Ok(id) => {
+                    let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
+
+                    if let Err(err) =
+                        StickerWindow::open_async(cx, sticker_events_tx.clone(), store.clone(), id)
+                            .await
+                    {
+                        let _ = entity.update(cx, |this, cx| {
+                            this.set_error(format!("Failed to open sticker window: {err:#}"), cx);
+                        });
+                    }
+                }
+                Err(err) => {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.set_error(format!("Failed to create sticker: {err:#}"), cx);
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn create_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let root_entity = cx.entity();
+        Button::new("create")
+            .border_0()
+            .bg(rgba(0x00000000))
+            .icon(IconName::Plus)
+            .opacity(0.8)
+            .dropdown_menu(move |menu, window, _| {
+                let root_entity = root_entity.clone();
+                menu.item(
+                    PopupMenuItem::new("text")
+                        .icon(sticker_type_icon(&StickerType::Markdown))
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            this.create_sticker(cx, &StickerType::Markdown);
+                        })),
+                )
+                .item(
+                    PopupMenuItem::new("timer")
+                        .icon(sticker_type_icon(&StickerType::Timer))
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            this.create_sticker(cx, &StickerType::Timer);
+                        })),
+                )
+                .item(
+                    PopupMenuItem::new("command")
+                        .icon(sticker_type_icon(&StickerType::Command))
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            this.create_sticker(cx, &StickerType::Command);
+                        })),
+                )
+                .item(
+                    PopupMenuItem::new("paint")
+                        .icon(sticker_type_icon(&StickerType::Paint))
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            this.create_sticker(cx, &StickerType::Paint);
+                        })),
+                )
+            })
             .into_any_element()
     }
 
@@ -712,4 +815,14 @@ fn generate_consistence_minus_id(sources: &[String]) -> i64 {
     sources.hash(&mut hasher);
     let hash = hasher.finish() as i64;
     -hash.abs()
+}
+
+fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
+    match sticker_type {
+        StickerType::Markdown => IconName::DocumentText,
+        StickerType::Command => IconName::Command,
+        StickerType::Timer => IconName::Bell,
+        StickerType::Paint => IconName::Paint,
+        StickerType::File => IconName::DocumentText,
+    }
 }
