@@ -555,7 +555,6 @@ impl StickerWindow {
             .top_0()
             .right_0()
             .items_center()
-            .gap_2()
             .child(div().size_full().cursor_move()) // Drag handle area
             .child(self.create_button(cx))
             .child(
