@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::native::components::webview::SimpleWebView;
 
-const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 5; // 5 MB
+const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 25; // 25 MB
 
 pub(super) enum FilePreview {
     Markdown {
@@ -124,13 +124,15 @@ impl FilePreview {
         let (content_result, editable) = read_text_for_preview(path);
         content_result
             .map(|content| {
-                if crate::utils::file::is_binary_text_content(content.as_str()) {
+                let preview_content =
+                    crate::utils::file::format_terminal_output_for_preview(&content);
+                if crate::utils::file::is_binary_text_content(preview_content.as_str()) {
                     None
                 } else {
                     Some(FilePreview::Text {
                         source_path: path.to_path_buf(),
-                        content,
-                        editable,
+                        content: preview_content.clone(),
+                        editable: editable && preview_content == content,
                     })
                 }
             })
