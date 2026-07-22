@@ -1,11 +1,10 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
-    MouseButton, Render, Rgba, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
-    transparent_black,
+    MouseButton, Render, Rgba, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+    WindowOptions, div, prelude::*, px, rgba, size, transparent_black,
 };
 use gpui_component::{
-    ActiveTheme, Root, TitleBar,
+    ActiveTheme, Root,
     alert::Alert,
     button::Button,
     h_flex,

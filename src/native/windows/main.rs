@@ -1,8 +1,7 @@
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Bounds, Context, Entity, IntoElement, MouseButton,
-    MouseUpEvent, Render, SharedString, TitlebarOptions, WeakEntity, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowOptions, div, prelude::*,
-    px, rgb, rgba, size, transparent_black,
+    MouseUpEvent, Render, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowOptions, div, prelude::*, px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::Root;
 use gpui_component::alert::Alert;
