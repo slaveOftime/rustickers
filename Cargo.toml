@@ -58,7 +58,9 @@ required-features = ["cli"]
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", optional = true }
-gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true }
+# Enable GPUI's real macOS text backend; without this feature it installs
+# NoopTextSystem, which does not rasterize text.
+gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true, features = ["font-kit", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
 gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
