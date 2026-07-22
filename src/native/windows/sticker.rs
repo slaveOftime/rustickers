@@ -262,10 +262,7 @@ impl StickerWindow {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::new(detail.title.clone())),
-                    ..TitleBar::title_bar_options()
-                }),
+                titlebar: None,
                 ..Default::default()
             },
             |window, cx| {

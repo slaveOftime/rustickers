@@ -57,10 +57,7 @@ impl MainWindow {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(300.0), px(400.0))),
                 window_background: WindowBackgroundAppearance::Transparent,
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::new("Rustiers")),
-                    ..TitleBar::title_bar_options()
-                }),
+                titlebar: None,
                 ..Default::default()
             },
             |window, cx| {
