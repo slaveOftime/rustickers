@@ -1,7 +1,11 @@
-use std::sync::{Arc, Mutex, mpsc::Sender};
+use std::sync::mpsc::Sender;
+
+#[cfg(not(target_os = "macos"))]
+use std::sync::{Arc, Mutex};
 
 use crate::ipc::IpcEvent;
 
+#[cfg(not(target_os = "macos"))]
 #[derive(Default, Debug, Clone, Copy)]
 struct KeyState {
     ctrl: bool,
@@ -11,6 +15,7 @@ struct KeyState {
     r_down: bool,
 }
 
+#[cfg(not(target_os = "macos"))]
 fn primary_modifier_down(state: KeyState) -> bool {
     if cfg!(target_os = "macos") {
         // On macOS, users commonly expect Command; allow Control too.
@@ -21,18 +26,35 @@ fn primary_modifier_down(state: KeyState) -> bool {
 }
 
 pub fn start_global_hotkey_listener(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
-    std::thread::Builder::new()
-        .name("global-hotkey-listener".to_string())
-        .spawn(move || {
-            tracing::info!("Global hotkey listener started");
-            if let Err(err) = start_listen(ipc_events_tx) {
-                tracing::error!(error = %err, "Global hotkey listener stopped");
-            }
-        })?;
+    // rdev's macOS event conversion asks Text Input Services for the active
+    // keyboard layout. Recent macOS versions require that API to run on the
+    // main dispatch queue; rdev invokes it from this listener thread and the
+    // process is killed by dispatch_assert_queue on the first key press.
+    // Keep native GPUI text input working by disabling this incompatible global
+    // listener on macOS. The listener remains unchanged on other platforms.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = ipc_events_tx;
+        tracing::warn!("Global hotkeys are disabled on macOS to keep keyboard input stable");
+        return Ok(());
+    }
 
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::thread::Builder::new()
+            .name("global-hotkey-listener".to_string())
+            .spawn(move || {
+                tracing::info!("Global hotkey listener started");
+                if let Err(err) = start_listen(ipc_events_tx) {
+                    tracing::error!(error = %err, "Global hotkey listener stopped");
+                }
+            })?;
+
+        Ok(())
+    }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
     use rdev::{Event, EventType, Key, listen};
 
