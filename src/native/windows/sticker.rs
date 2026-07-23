@@ -20,7 +20,10 @@ use std::{
 use url::Url;
 
 #[cfg(target_os = "macos")]
-use cocoa::appkit::{NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowCollectionBehavior};
+use cocoa::appkit::{
+    NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
+};
 #[cfg(target_os = "macos")]
 use cocoa::base::{YES, nil};
 #[cfg(target_os = "macos")]
@@ -91,6 +94,26 @@ impl StickerWindow {
             let view = handle.ns_view.as_ptr() as cocoa::base::id;
             let native_window: cocoa::base::id = msg_send![view, window];
             if !native_window.is_null() {
+                // GPUI currently omits NSResizableWindowMask when titlebar is None, even when
+                // WindowOptions::is_resizable is true. Sticker windows are borderless, so restore
+                // the native resize style explicitly.
+                let style = native_window.styleMask();
+                native_window.setStyleMask_(style | NSWindowStyleMask::NSResizableWindowMask);
+
+                // Adding the native resize style can make AppKit recreate the standard titlebar
+                // controls. Keep native edge resizing but hide the traffic-light buttons.
+                for button_kind in [
+                    NSWindowButton::NSWindowCloseButton,
+                    NSWindowButton::NSWindowMiniaturizeButton,
+                    NSWindowButton::NSWindowZoomButton,
+                    NSWindowButton::NSWindowFullScreenButton,
+                ] {
+                    let button = native_window.standardWindowButton_(button_kind);
+                    if !button.is_null() {
+                        let _: () = msg_send![button, setHidden: YES];
+                    }
+                }
+
                 let behavior = native_window.collectionBehavior();
                 let mut behavior =
                     behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary;
@@ -351,6 +374,7 @@ impl StickerWindow {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
+                is_resizable: true,
                 kind: if top_most {
                     WindowKind::Floating
                 } else {
