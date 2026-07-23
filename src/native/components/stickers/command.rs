@@ -982,7 +982,7 @@ impl Render for CommandSticker {
                     div()
                         .p_2()
                         .h_full()
-                        .flex_shrink()
+                        .flex_shrink(1.0)
                         .overflow_hidden()
                         .child(v_flex().overflow_y_scrollbar().child(self.form(cx))),
                 )
@@ -1000,7 +1000,7 @@ impl Render for CommandSticker {
                 );
         } else {
             root = root.child(
-                div().h_full().flex_shrink().overflow_hidden().child(
+                div().h_full().flex_shrink(1.0).overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
                         .child(self.result_view(bg_color, cx)),

@@ -61,8 +61,8 @@ gpui = { git = "https://github.com/zed-industries/zed", optional = true }
 # Enable GPUI's real macOS text backend; without this feature it installs
 # NoopTextSystem, which does not rasterize text.
 gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true, features = ["font-kit", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "c2423239ed8237426abc4848aa2498eb3a03fe0f", optional = true }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", optional = true }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
 anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }
@@ -73,14 +73,14 @@ tracing = "0.1.41"
 tracing-appender = { version = "0.2.3", optional = true }
 tracing-error = { version = "0.2.1", optional = true }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "registry"], optional = true }
-sqlx = { version = "0.8.6", features = ["runtime-async-std", "sqlite", "macros"], optional = true }
+sqlx = { version = "0.9.0", features = ["runtime-async-std", "sqlite", "macros"], optional = true }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
-cron = { version = "0.15.0", optional = true }
+cron = { version = "0.17.0", optional = true }
 interprocess = "2.2.1"
 lyon = { version = "1.0.16", optional = true }
-mimalloc = { version = "*", features = ["v3"], optional = true }
+mimalloc = { version = "0.1.52", features = ["v2"], optional = true }
 rdev = { version = "0.5.3", optional = true }
 which = { version = "8.0.0", optional = true }
 winsplit = { version = "0.1.0", optional = true }
@@ -105,6 +105,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Keep aligned with GPUI's exact macOS binding version.
 cocoa = { version = "0.26.0", optional = true }
 objc = { version = "0.2.7", optional = true }
 

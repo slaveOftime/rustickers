@@ -598,7 +598,7 @@ impl Render for MainWindow {
             })
             .child(self.title_bar(cx))
             .child(
-                div().h_full().flex_shrink().overflow_hidden().child(
+                div().h_full().flex_shrink(1.0).overflow_hidden().child(
                     v_flex().overflow_y_scrollbar().children(
                         self.stickers
                             .iter()

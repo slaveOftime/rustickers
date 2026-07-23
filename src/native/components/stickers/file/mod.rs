@@ -337,7 +337,7 @@ impl Render for FileSticker {
                 },
             )
             .child(
-                div().h_full().flex_shrink().overflow_hidden().child(
+                div().h_full().flex_shrink(1.0).overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
                         .child(self.preview_view(window, cx)),

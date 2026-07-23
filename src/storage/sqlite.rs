@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use sqlx::{
-    SqlitePool,
+    AssertSqlSafe, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use std::fs;
@@ -296,7 +296,9 @@ impl super::StickerStore for SqliteStore {
             order_sql
         );
 
-        let rows = sqlx::query_as::<_, StickerBrief>(&sql)
+        // The only interpolated fragment comes from StickerOrderBy::to_sql(),
+        // which returns one of the fixed ORDER BY clauses above.
+        let rows = sqlx::query_as::<_, StickerBrief>(AssertSqlSafe(sql))
             .bind(search_pattern)
             .bind(limit)
             .bind(offset)

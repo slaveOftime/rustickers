@@ -158,7 +158,7 @@ impl StickerWindow {
             content,
             created_at: 0,
             updated_at: 0,
-            display_id: cx.primary_display().map(|x| u32::from(x.id())),
+            display_id: cx.primary_display().map(|x| u64::from(x.id()) as u32),
         };
 
         Self::open_with_detail(cx, sticker_events_tx, store, detail, true)
@@ -240,8 +240,7 @@ impl StickerWindow {
             }
         };
 
-        let bounds = Bounds::from_corner_and_size(
-            gpui::Corner::TopLeft,
+        let bounds = Bounds::new(
             gpui::point(px(detail.left as f32), px(detail.top as f32)),
             current_size.map(|x| px(x as f32)),
         );
@@ -249,7 +248,7 @@ impl StickerWindow {
         let display_id = detail.display_id.and_then(|saved_id| {
             cx.displays()
                 .iter()
-                .find(|d| u32::from(d.id()) == saved_id)
+                .find(|d| u64::from(d.id()) as u32 == saved_id)
                 .map(|d| d.id())
         });
 
@@ -432,7 +431,7 @@ impl StickerWindow {
 
     fn current_bounds(&self, window: &Window, cx: &Context<Self>) -> WindowState {
         let bounds = window.bounds();
-        let display_id = window.display(cx).map(|x| u32::from(x.id()));
+        let display_id = window.display(cx).map(|x| u64::from(x.id()) as u32);
         let scale_factor = window.scale_factor() as f32;
 
         WindowState {
