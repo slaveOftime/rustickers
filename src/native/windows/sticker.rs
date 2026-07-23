@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     MouseButton, Render, Rgba, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowOptions, div, prelude::*, px, rgba, size, transparent_black,
+    WindowKind, WindowOptions, div, prelude::*, px, rgba, size, transparent_black,
 };
 use gpui_component::{
     ActiveTheme, Root,
@@ -20,7 +20,9 @@ use std::{
 use url::Url;
 
 #[cfg(target_os = "macos")]
-use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+use cocoa::appkit::{NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowCollectionBehavior};
+#[cfg(target_os = "macos")]
+use cocoa::base::{YES, nil};
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -29,7 +31,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SetWindowLongPtrW, SetWindowPos, WS_EX_TOOLWINDOW,
     },
 };
 
@@ -74,7 +77,7 @@ pub struct StickerWindow {
 
 impl StickerWindow {
     #[cfg(target_os = "macos")]
-    fn keep_stationary_when_showing_desktop(window: &Window) {
+    fn configure_native_window(window: &Window, top_most: bool) {
         let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;
         };
@@ -89,15 +92,35 @@ impl StickerWindow {
             let native_window: cocoa::base::id = msg_send![view, window];
             if !native_window.is_null() {
                 let behavior = native_window.collectionBehavior();
-                native_window.setCollectionBehavior_(
-                    behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
-                );
+                let mut behavior =
+                    behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary;
+                if top_most {
+                    behavior |= NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
+                }
+                native_window.setCollectionBehavior_(behavior);
+
+                if top_most {
+                    // GPUI's floating level is only slightly above normal windows. Use the
+                    // status-window level and explicitly order the preview to the front so it
+                    // appears on the active Space without activating the whole application.
+                    native_window.setLevel_((NSMainMenuWindowLevel + 1) as _);
+
+                    // The global hotkey fires while Finder (or another application) is active.
+                    // AppKit may defer presentation of a newly created Metal window belonging to
+                    // an inactive application until that application receives an event. Activate
+                    // Rustickers first, then make this preview the key/front window.
+                    let app = NSApplication::sharedApplication(nil);
+                    app.activateIgnoringOtherApps_(YES);
+                    let _: () = msg_send![native_window, makeKeyAndOrderFront: nil];
+                    native_window.orderFrontRegardless();
+                }
             }
         }
     }
 
     #[cfg(target_os = "windows")]
-    fn keep_visible_when_showing_desktop(window: &Window) {
+    fn configure_preview_window(window: &Window, top_most: bool) {
         let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;
         };
@@ -111,6 +134,17 @@ impl StickerWindow {
             let hwnd = HWND(handle.hwnd.get() as *mut _);
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW.0 as isize);
+            if top_most {
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
         }
     }
 
@@ -207,7 +241,7 @@ impl StickerWindow {
             top,
             width: default_size.width,
             height: default_size.height,
-            top_most: false,
+            top_most: true,
             color: StickerColor::Yellow,
             sticker_type: StickerType::File,
             content,
@@ -307,6 +341,8 @@ impl StickerWindow {
                 .map(|d| d.id())
         });
 
+        let top_most = detail.top_most;
+
         // There is issue which gpui does not restore exactly with the given bounds especially on other displays
         let handle = cx.open_window(
             WindowOptions {
@@ -315,20 +351,39 @@ impl StickerWindow {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
+                kind: if top_most {
+                    WindowKind::Floating
+                } else {
+                    WindowKind::Normal
+                },
                 titlebar: None,
                 ..Default::default()
             },
             |window, cx| {
                 #[cfg(target_os = "macos")]
-                StickerWindow::keep_stationary_when_showing_desktop(window);
+                StickerWindow::configure_native_window(window, top_most);
                 #[cfg(target_os = "windows")]
-                StickerWindow::keep_visible_when_showing_desktop(window);
+                StickerWindow::configure_preview_window(window, top_most);
 
                 let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
                 cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
             },
         )?;
+
+        if focus {
+            // Opening a window from the global-hotkey callback can happen while Rustickers is
+            // inactive. Defer activation until GPUI has committed the new native window;
+            // ordering it during the open_window callback is too early on macOS.
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| {
+                    #[cfg(target_os = "macos")]
+                    StickerWindow::configure_native_window(window, top_most);
+                    window.refresh();
+                    window.activate_window();
+                });
+            });
+        }
 
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             open_stickers.push((id, handle.into()));

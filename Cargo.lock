@@ -7226,6 +7226,8 @@ dependencies = [
  "chrono",
  "clap",
  "cocoa 0.26.0",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
  "cron",
  "directories",
  "futures",

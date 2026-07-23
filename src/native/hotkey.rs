@@ -17,41 +17,95 @@ struct KeyState {
 
 #[cfg(not(target_os = "macos"))]
 fn primary_modifier_down(state: KeyState) -> bool {
-    if cfg!(target_os = "macos") {
-        // On macOS, users commonly expect Command; allow Control too.
-        state.meta || state.ctrl
-    } else {
-        state.ctrl
-    }
+    state.ctrl
 }
 
 pub fn start_global_hotkey_listener(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
-    // rdev's macOS event conversion asks Text Input Services for the active
-    // keyboard layout. Recent macOS versions require that API to run on the
-    // main dispatch queue; rdev invokes it from this listener thread and the
-    // process is killed by dispatch_assert_queue on the first key press.
-    // Keep native GPUI text input working by disabling this incompatible global
-    // listener on macOS. The listener remains unchanged on other platforms.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = ipc_events_tx;
-        tracing::warn!("Global hotkeys are disabled on macOS to keep keyboard input stable");
-        return Ok(());
-    }
+    std::thread::Builder::new()
+        .name("global-hotkey-listener".to_string())
+        .spawn(move || {
+            tracing::info!("Global hotkey listener started");
+            if let Err(err) = start_listen(ipc_events_tx) {
+                tracing::error!(error = %err, "Global hotkey listener stopped");
+            }
+        })?;
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        std::thread::Builder::new()
-            .name("global-hotkey-listener".to_string())
-            .spawn(move || {
-                tracing::info!("Global hotkey listener started");
-                if let Err(err) = start_listen(ipc_events_tx) {
-                    tracing::error!(error = %err, "Global hotkey listener stopped");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
+    use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+    use core_graphics::event::{
+        CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+        CGEventType, EventField,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    // Use a listen-only Quartz event tap instead of rdev on macOS. rdev translates
+    // key codes through Text Input Services from this worker thread, which violates
+    // the main-queue requirement on recent macOS releases and crashes the process.
+    // Quartz key codes and modifier flags need no keyboard-layout translation.
+    const KEY_R: i64 = 0x0f;
+
+    let preview_combo_down = Arc::new(AtomicBool::new(false));
+    let preview_combo_down_for_tap = preview_combo_down.clone();
+    let tap = CGEventTap::new(
+        CGEventTapLocation::Session,
+        CGEventTapPlacement::HeadInsertEventTap,
+        CGEventTapOptions::ListenOnly,
+        vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
+        move |_, event_type, event| {
+            let flags = event.get_flags();
+            let primary = flags.intersects(CGEventFlags::CGEventFlagCommand)
+                || flags.intersects(CGEventFlags::CGEventFlagControl);
+            let alt = flags.intersects(CGEventFlags::CGEventFlagAlternate);
+
+            let preview_combo = primary && alt;
+            let preview_combo_was_down =
+                preview_combo_down_for_tap.swap(preview_combo, Ordering::Relaxed);
+
+            match event_type {
+                CGEventType::FlagsChanged if preview_combo && !preview_combo_was_down => {
+                    tracing::debug!("Hotkey triggered: toggle file preview");
+                    let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
                 }
-            })?;
+                CGEventType::KeyDown
+                    if primary
+                        && alt
+                        && event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) == KEY_R
+                        && event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) == 0 =>
+                {
+                    tracing::debug!("Hotkey triggered: show");
+                    let _ = ipc_events_tx.send(IpcEvent::Show);
+                }
+                _ => {}
+            }
 
-        Ok(())
+            None
+        },
+    )
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "failed to create macOS event tap; enable Input Monitoring for Rustickers in System Settings > Privacy & Security"
+        )
+    })?;
+
+    let run_loop = CFRunLoop::get_current();
+    let source = tap
+        .mach_port
+        .create_runloop_source(0)
+        .map_err(|_| anyhow::anyhow!("failed to create macOS hotkey run-loop source"))?;
+    unsafe {
+        run_loop.add_source(&source, kCFRunLoopCommonModes);
+        tap.enable();
+        CFRunLoop::run_current();
     }
+
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -98,18 +152,7 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                         }
                     }
                     Key::ShiftLeft | Key::ShiftRight => state.shift = true,
-                    Key::MetaLeft | Key::MetaRight => {
-                        state.meta = true;
-                        if state.alt && primary_modifier_down(*state) {
-                            tracing::debug!(
-                                alt = state.alt,
-                                ctrl = state.ctrl,
-                                meta = state.meta,
-                                "Hotkey triggered: toggle file preview"
-                            );
-                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
-                        }
-                    }
+                    Key::MetaLeft | Key::MetaRight => state.meta = true,
                     Key::KeyR => {
                         // Debounce key-repeat while held.
                         if !state.r_down {

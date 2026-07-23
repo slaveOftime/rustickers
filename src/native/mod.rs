@@ -61,9 +61,13 @@ pub fn run_native(
                                         cx,
                                         sticker_events_tx_for_ipc.clone(),
                                         store.clone(),
-                                    )
-                                    {
+                                    ) {
                                         tracing::warn!(error = ?err, "Failed to toggle file sticker preview");
+                                    } else {
+                                        // The event originates outside GPUI's native event loop.
+                                        // Explicitly schedule presentation instead of waiting for
+                                        // the next mouse or keyboard event in a sticker window.
+                                        cx.refresh_windows();
                                     }
                                 });
                             }
