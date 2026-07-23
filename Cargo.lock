@@ -7243,6 +7243,7 @@ dependencies = [
  "notify 8.2.0",
  "notify-rust",
  "objc",
+ "raw-window-handle",
  "rdev",
  "reqwest",
  "rfd",

@@ -39,6 +39,7 @@ ui = [
 	"dep:which",
 	"dep:cocoa",
 	"dep:objc",
+	"dep:raw-window-handle",
 ]
 cli = [
 	"dep:clap",
@@ -63,6 +64,7 @@ gpui = { git = "https://github.com/zed-industries/zed", optional = true }
 gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true, features = ["font-kit", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", optional = true }
 gpui-wry = { git = "https://github.com/longbridge/gpui-component", optional = true }
+raw-window-handle = { version = "0.6.2", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
 anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }

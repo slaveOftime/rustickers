@@ -19,6 +19,20 @@ use std::{
 };
 use url::Url;
 
+#[cfg(target_os = "macos")]
+use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+#[cfg(target_os = "windows")]
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_TOOLWINDOW,
+    },
+};
+
 use crate::model::content::FileStickerContent;
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
@@ -59,6 +73,47 @@ pub struct StickerWindow {
 }
 
 impl StickerWindow {
+    #[cfg(target_os = "macos")]
+    fn keep_stationary_when_showing_desktop(window: &Window) {
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            return;
+        };
+
+        // `Stationary` opts sticker windows out of macOS's Show Desktop animation,
+        // so clicking the desktop does not push them toward the screen edges.
+        unsafe {
+            let view = handle.ns_view.as_ptr() as cocoa::base::id;
+            let native_window: cocoa::base::id = msg_send![view, window];
+            if !native_window.is_null() {
+                let behavior = native_window.collectionBehavior();
+                native_window.setCollectionBehavior_(
+                    behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn keep_visible_when_showing_desktop(window: &Window) {
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+
+        // Windows excludes tool windows from Win+D's minimize-all operation. Preserve all
+        // existing extended styles because GPUI also uses them for rendering and activation.
+        unsafe {
+            let hwnd = HWND(handle.hwnd.get() as *mut _);
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW.0 as isize);
+        }
+    }
+
     pub async fn open_async(
         cx: &mut AsyncApp,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -264,6 +319,11 @@ impl StickerWindow {
                 ..Default::default()
             },
             |window, cx| {
+                #[cfg(target_os = "macos")]
+                StickerWindow::keep_stationary_when_showing_desktop(window);
+                #[cfg(target_os = "windows")]
+                StickerWindow::keep_visible_when_showing_desktop(window);
+
                 let entity =
                     cx.new(|cx| StickerWindow::new(detail, store, sticker_events_tx, window, cx));
                 cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
