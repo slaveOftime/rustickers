@@ -11,6 +11,9 @@ pub fn run(
     run_immediately: bool,
     env: Vec<String>,
     dir: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    color: Option<StickerColor>,
 ) -> anyhow::Result<()> {
     let store = block_on(crate::storage::open_sqlite(&app_paths.db_path))?;
 
@@ -35,10 +38,10 @@ pub fn run(
         state: StickerState::Open,
         left: 100,
         top: 100,
-        width: 400,
-        height: 300,
+        width: width.unwrap_or(400),
+        height: height.unwrap_or(300),
         top_most: false,
-        color: StickerColor::Gray,
+        color: color.unwrap_or(StickerColor::Gray),
         sticker_type: StickerType::Command,
         content: content_json,
         created_at: 0,

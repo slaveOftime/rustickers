@@ -22,17 +22,33 @@ fn main() {
 fn normalize_argv_for_view_alias() -> Vec<OsString> {
     let args: Vec<OsString> = std::env::args_os().collect();
 
-    if args.len() != 2 {
+    if args.len() < 2 {
         return args;
     }
 
     let source = args[1].clone();
+
+    // Don't alias if the first positional arg is a known subcommand or help flag.
+    let known_commands = [
+        "view", "markdown", "cmd", "list", "show", "open", "close", "help",
+    ];
+    if source.to_str().is_some_and(|s| known_commands.contains(&s)) {
+        return args;
+    }
+
+    // Don't alias flags (e.g. --help, --version).
+    if source.to_str().is_some_and(|s| s.starts_with('-')) {
+        return args;
+    }
+
     let source_path = Path::new(&source);
     let is_existing_path = source_path.is_file() || source_path.is_dir();
     let is_url = source.to_str().is_some_and(rustickers::utils::url::is_url);
 
     if is_existing_path || is_url {
-        vec![args[0].clone(), OsString::from("view"), source]
+        let mut result = vec![args[0].clone(), OsString::from("view"), source];
+        result.extend(args.into_iter().skip(2));
+        result
     } else {
         args
     }

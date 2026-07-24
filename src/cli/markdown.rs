@@ -7,6 +7,9 @@ pub fn run(
     app_paths: &AppPaths,
     content: Option<String>,
     title: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    color: Option<StickerColor>,
 ) -> anyhow::Result<()> {
     let content = content.unwrap_or_default();
 
@@ -26,10 +29,10 @@ pub fn run(
         state: StickerState::Open,
         left: 100,
         top: 100,
-        width: 400,
-        height: 300,
+        width: width.unwrap_or(400),
+        height: height.unwrap_or(300),
         top_most: false,
-        color: StickerColor::Yellow,
+        color: color.unwrap_or(StickerColor::Yellow),
         sticker_type: StickerType::Markdown,
         content,
         created_at: 0,

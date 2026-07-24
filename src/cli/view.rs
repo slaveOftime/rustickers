@@ -1,6 +1,14 @@
 use std::path::Path;
 
-pub fn run(source: String) -> anyhow::Result<()> {
+use crate::ipc::PreviewFileRequest;
+use crate::model::sticker::StickerColor;
+
+pub fn run(
+    source: String,
+    width: Option<i32>,
+    height: Option<i32>,
+    color: Option<StickerColor>,
+) -> anyhow::Result<()> {
     // If the source is not a URL and is a relative file path, resolve it to absolute
     let resolved_source = if !crate::utils::url::is_url(&source) {
         let path = Path::new(&source);
@@ -16,7 +24,15 @@ pub fn run(source: String) -> anyhow::Result<()> {
         source
     };
 
-    match crate::ipc::send_ipc_command("rustickers", &format!("PREVIEW_FILE {resolved_source}")) {
+    let request = PreviewFileRequest {
+        source: resolved_source,
+        width,
+        height,
+        color,
+    };
+    let json = serde_json::to_string(&request)?;
+
+    match crate::ipc::send_ipc_command("rustickers", &format!("PREVIEW_FILE {json}")) {
         Ok(true) => Ok(()),
         Ok(false) => {
             anyhow::bail!("Rustickers is not running. Please launch it first, then retry.")

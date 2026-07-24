@@ -160,7 +160,7 @@ fn main() {
 }
 ```
 
-**Special Handling:** Single file path/URL argument is automatically aliased to `view <source>`.
+**Special Handling:** Single file path/URL argument is automatically aliased to `view <source>`. Trailing flags (like `--width`, `--height`, `--color`) are forwarded to the view command.
 
 ---
 
@@ -189,7 +189,7 @@ pub struct SingleInstance {
 | `Show` | `SHOW` | Activate main window |
 | `ToggleFilePreview` | `TOGGLE_FILE_PREVIEW` | Quick file preview from selection |
 | `OpenSticker` | `OPEN_STICKER <id>` | Open closed sticker by ID |
-| `PreviewFile` | `PREVIEW_FILE <source>` | Create file/URL preview sticker |
+| `PreviewFile` | `PREVIEW_FILE <json>` | Create file/URL preview sticker. JSON payload: `{"source":"...","width":400,"height":300,"color":"yellow"}` |
 | `CloseSticker` | `CLOSE_STICKER <id>` | Close sticker by ID |
 
 ---
@@ -438,9 +438,10 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         Commands::Open { id } => open::run(id),
         Commands::List { state, search } => list::run(app_paths, state, search),
         Commands::Show { id } => show::run(app_paths, id),
-        Commands::View { source } => view::run(source),
-        Commands::Markdown { content, title } => markdown::run(app_paths, content, title),
-        Commands::Cmd { .. } => cmd::run(app_paths, command, cron, run_immediately, env, dir),
+        Commands::View { source, width, height, color } => view::run(source, width, height, color),
+        Commands::Markdown { content, title, width, height, color } =>
+            markdown::run(app_paths, content, title, width, height, color),
+        Commands::Cmd { .. } => cmd::run(app_paths, command, cron, run_immediately, env, dir, width, height, color),
     }
 }
 ```

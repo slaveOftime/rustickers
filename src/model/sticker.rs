@@ -29,8 +29,9 @@ pub enum StickerState {
     Close,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum StickerColor {
     Yellow,
     Green,

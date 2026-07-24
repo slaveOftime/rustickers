@@ -9,7 +9,21 @@ pub mod view;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::model::sticker::StickerColor;
 use crate::storage::paths::AppPaths;
+
+fn parse_color(s: &str) -> Result<StickerColor, String> {
+    s.parse::<StickerColor>().map_err(|_| {
+        format!(
+            "Invalid color '{s}'. Expected one of: {}",
+            StickerColor::ALL
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
 
 #[derive(Parser)]
 #[command(name = "rustickers", about = "Rustickers sticker manager")]
@@ -53,6 +67,18 @@ enum Commands {
     View {
         /// File path or URL to display
         source: String,
+
+        /// Sticker width in pixels (default: auto-detected)
+        #[arg(long)]
+        width: Option<i32>,
+
+        /// Sticker height in pixels (default: auto-detected)
+        #[arg(long)]
+        height: Option<i32>,
+
+        /// Sticker color (yellow, green, blue, pink, gray)
+        #[arg(long, value_parser = parse_color)]
+        color: Option<StickerColor>,
     },
 
     /// Create and open a markdown sticker
@@ -64,6 +90,18 @@ enum Commands {
         /// Initial markdown content
         #[arg(long, short = 'c')]
         content: Option<String>,
+
+        /// Sticker width in pixels (default: 400)
+        #[arg(long)]
+        width: Option<i32>,
+
+        /// Sticker height in pixels (default: 300)
+        #[arg(long)]
+        height: Option<i32>,
+
+        /// Sticker color (yellow, green, blue, pink, gray)
+        #[arg(long, value_parser = parse_color)]
+        color: Option<StickerColor>,
     },
 
     /// Create and open a command sticker
@@ -86,6 +124,18 @@ enum Commands {
         /// Working directory for the command
         #[arg(long)]
         dir: Option<String>,
+
+        /// Sticker width in pixels (default: 400)
+        #[arg(long)]
+        width: Option<i32>,
+
+        /// Sticker height in pixels (default: 300)
+        #[arg(long)]
+        height: Option<i32>,
+
+        /// Sticker color (yellow, green, blue, pink, gray)
+        #[arg(long, value_parser = parse_color)]
+        color: Option<StickerColor>,
     },
 }
 
@@ -102,14 +152,38 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         Commands::Open { id } => open::run(id),
         Commands::List { state, search } => list::run(app_paths, state, search),
         Commands::Show { id } => show::run(app_paths, id),
-        Commands::View { source } => view::run(source),
-        Commands::Markdown { content, title } => markdown::run(app_paths, content, title),
+        Commands::View {
+            source,
+            width,
+            height,
+            color,
+        } => view::run(source, width, height, color),
+        Commands::Markdown {
+            content,
+            title,
+            width,
+            height,
+            color,
+        } => markdown::run(app_paths, content, title, width, height, color),
         Commands::Cmd {
             command,
             cron,
             run_immediately,
             env,
             dir,
-        } => cmd::run(app_paths, command, cron, run_immediately, env, dir),
+            width,
+            height,
+            color,
+        } => cmd::run(
+            app_paths,
+            command,
+            cron,
+            run_immediately,
+            env,
+            dir,
+            width,
+            height,
+            color,
+        ),
     }
 }

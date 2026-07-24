@@ -1,11 +1,14 @@
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream, prelude::*,
 };
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{self, BufRead, BufReader, Write};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
+
+use crate::model::sticker::StickerColor;
 
 #[derive(Debug)]
 pub enum AcquireError {
@@ -16,11 +19,19 @@ pub enum AcquireError {
     Io(std::io::Error),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreviewFileRequest {
+    pub source: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub color: Option<StickerColor>,
+}
+
 pub enum IpcEvent {
     Show,
     ToggleFilePreview,
     OpenSticker(i64),
-    PreviewFile(String),
+    PreviewFile(PreviewFileRequest),
     CloseSticker(i64),
 }
 
@@ -111,8 +122,15 @@ impl SingleInstance {
                             if let Ok(id) = id_str.parse::<i64>() {
                                 let _ = ipc_events_tx.send(IpcEvent::OpenSticker(id));
                             }
-                        } else if let Some(source) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
-                            let _ = ipc_events_tx.send(IpcEvent::PreviewFile(source.to_owned()));
+                        } else if let Some(payload) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
+                                                    match serde_json::from_str::<PreviewFileRequest>(payload) {
+                                                        Ok(request) => {
+                                                            let _ = ipc_events_tx.send(IpcEvent::PreviewFile(request));
+                                                        }
+                                                        Err(err) => {
+                                                            tracing::warn!(error = %err, payload, "Invalid PREVIEW_FILE JSON");
+                                                        }
+                                                    }
                         } else if let Some(id_str) = buffer.trim().strip_prefix("CLOSE_STICKER ") {
                             if let Ok(id) = id_str.parse::<i64>() {
                                 let _ = ipc_events_tx.send(IpcEvent::CloseSticker(id));

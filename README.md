@@ -52,10 +52,14 @@ Outputs are written to `target/release/`.
 - `list [--state open|close|all] [--search <text>]`
 - `show <id>`
 - `open <id>` / `close <id>`
-- `view <path-or-url>`
-- `cmd <command> [--cron <expr>] [--run-now] [--env KEY=VALUE]... [--dir <path>]`
+- `view <path-or-url> [--width <px>] [--height <px>] [--color <color>]`
+- `markdown [-t <title>] [-c <content>] [--width <px>] [--height <px>] [--color <color>]`
+- `cmd <command> [--cron <expr>] [--run-now] [--env KEY=VALUE]... [--dir <path>] [--width <px>] [--height <px>] [--color <color>]`
 
-Tip: passing a single file path or URL is treated as `view <source>` automatically.
+Width and height default to 400×300 for markdown and command stickers, and auto-detected for file/URL stickers.
+Color options: yellow, green, blue, pink, gray.
+
+Tip: passing a single file path or URL is treated as `view <source>` automatically, and trailing options are forwarded.
 
 ## Data and logs
 

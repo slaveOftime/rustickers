@@ -229,7 +229,15 @@ impl StickerWindow {
             ));
         }
 
-        Self::open_file_preview_with_sources(cx, sticker_events_tx, store, sources)
+        Self::open_file_preview_with_sources(
+            cx,
+            sticker_events_tx,
+            store,
+            sources,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn open_file_preview_with_sources(
@@ -237,6 +245,9 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
         sources: Vec<String>,
+        width: Option<i32>,
+        height: Option<i32>,
+        color: Option<StickerColor>,
     ) -> anyhow::Result<()> {
         let default_size = FileSticker::default_window_size_for_sources(
             &sources.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -248,12 +259,15 @@ impl StickerWindow {
             format!("{} files", sources.len())
         };
 
+        let width = width.unwrap_or(default_size.width);
+        let height = height.unwrap_or(default_size.height);
+
         let screen_size = cx
             .primary_display()
             .map(|d| d.bounds().size.map(|p| p.to_f64() as i32))
             .unwrap_or(size(1920, 1080));
-        let left = (screen_size.width - default_size.width) / 2;
-        let top = (screen_size.height - default_size.height) / 2;
+        let left = (screen_size.width - width) / 2;
+        let top = (screen_size.height - height) / 2;
 
         let content = FileStickerContent::from_sources(&sources).to_json();
         let detail = StickerDetail {
@@ -262,10 +276,10 @@ impl StickerWindow {
             state: StickerState::Open,
             left,
             top,
-            width: default_size.width,
-            height: default_size.height,
+            width,
+            height,
             top_most: true,
-            color: StickerColor::Yellow,
+            color: color.unwrap_or(StickerColor::Yellow),
             sticker_type: StickerType::File,
             content,
             created_at: 0,
