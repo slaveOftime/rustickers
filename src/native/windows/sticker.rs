@@ -34,8 +34,9 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SetWindowLongPtrW, SetWindowPos, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_EX_TOOLWINDOW,
+        WS_SYSMENU,
     },
 };
 
@@ -155,8 +156,25 @@ impl StickerWindow {
         // existing extended styles because GPUI also uses them for rendering and activation.
         unsafe {
             let hwnd = HWND(handle.hwnd.get() as *mut _);
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW.0 as isize);
+            let extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                extended_style | WS_EX_TOOLWINDOW.0 as isize,
+            );
+
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            SetWindowLongPtrW(hwnd, GWL_STYLE, style & !(WS_SYSMENU.0 as isize));
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+
             if top_most {
                 let _ = SetWindowPos(
                     hwnd,
