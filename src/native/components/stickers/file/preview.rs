@@ -301,7 +301,7 @@ impl super::FileSticker {
                 .child(
                     TextView::markdown("file-markdown", content)
                         .size_full()
-                        .selectable(false)
+                        .selectable(true)
                         .scrollable(true),
                 )
                 .into_any_element(),

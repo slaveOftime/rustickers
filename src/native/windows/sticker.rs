@@ -721,6 +721,7 @@ impl StickerWindow {
             .top_0()
             .right_0()
             .items_center()
+            .window_control_area(WindowControlArea::Drag)
             .child(div().size_full().cursor_move()) // Drag handle area
             .child(self.create_button(cx))
             .child(
@@ -864,6 +865,7 @@ impl StickerWindow {
             .right_0()
             .p_2()
             .gap_2()
+            .window_control_area(WindowControlArea::Drag)
             .when(!self.view.disable_color_picker(cx), move |v| {
                 v.child(color_options)
             })
@@ -882,7 +884,6 @@ impl Render for StickerWindow {
             .font_family(cx.theme().font_family.clone())
             .relative()
             .size_full()
-            .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(MouseButton::Left, |event, window, cx| {
                 if !window.is_window_active() {
                     window.activate_window();

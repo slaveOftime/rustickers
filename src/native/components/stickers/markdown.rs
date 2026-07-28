@@ -341,7 +341,7 @@ impl Render for MarkdownSticker {
                         .py_1()
                         .px_2()
                         .size_full()
-                        .selectable(false)
+                        .selectable(true)
                         .scrollable(true),
                 )
                 .when(window.is_window_hovered(), |view| {

@@ -1,6 +1,7 @@
 use gpui::{
     Animation, AnimationExt, AnyElement, AppContext, Context, Entity, Image, ImageFormat,
-    ImageSource, Render, Rgba, Window, div, img, prelude::*, px, transparent_white,
+    ImageSource, Render, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
+    transparent_white,
 };
 use gpui_component::{
     Sizable,
@@ -974,7 +975,10 @@ impl Render for CommandSticker {
 
         window.set_rem_size(px(14.0));
 
-        let mut root = v_flex().relative().size_full();
+        let mut root = v_flex()
+            .relative()
+            .size_full()
+            .window_control_area(WindowControlArea::Drag);
 
         if self.show_editing_view() {
             root = root

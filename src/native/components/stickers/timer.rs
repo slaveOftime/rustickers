@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window, div,
-    prelude::*, px, transparent_white,
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window,
+    WindowControlArea, div, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     IndexPath, Sizable, StyledExt,
@@ -574,7 +574,9 @@ impl Sticker for TimerSticker {
 
 impl Render for TimerSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex().size_full();
+        let mut body = v_flex()
+            .size_full()
+            .window_control_area(WindowControlArea::Drag);
 
         if let Some(start_info) = &mut self.timer.start_info {
             if let TimerState::Running = start_info.state {
