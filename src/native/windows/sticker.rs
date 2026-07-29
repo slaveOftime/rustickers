@@ -721,8 +721,6 @@ impl StickerWindow {
             .top_0()
             .right_0()
             .items_center()
-            .window_control_area(WindowControlArea::Drag)
-            .child(div().size_full().cursor_move()) // Drag handle area
             .child(self.create_button(cx))
             .child(
                 Button::new("close")
