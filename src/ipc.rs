@@ -33,6 +33,7 @@ pub enum IpcEvent {
     OpenSticker(i64),
     PreviewFile(PreviewFileRequest),
     CloseSticker(i64),
+    TriggerSelectionToCommand,
 }
 
 pub struct SingleInstance {
@@ -123,18 +124,24 @@ impl SingleInstance {
                                 let _ = ipc_events_tx.send(IpcEvent::OpenSticker(id));
                             }
                         } else if let Some(payload) = buffer.trim().strip_prefix("PREVIEW_FILE ") {
-                                                    match serde_json::from_str::<PreviewFileRequest>(payload) {
-                                                        Ok(request) => {
-                                                            let _ = ipc_events_tx.send(IpcEvent::PreviewFile(request));
-                                                        }
-                                                        Err(err) => {
-                                                            tracing::warn!(error = %err, payload, "Invalid PREVIEW_FILE JSON");
-                                                        }
-                                                    }
+                            match serde_json::from_str::<PreviewFileRequest>(payload) {
+                                Ok(request) => {
+                                    let _ = ipc_events_tx.send(IpcEvent::PreviewFile(request));
+                                }
+                                Err(err) => {
+                                    tracing::warn!(error = %err, payload, "Invalid PREVIEW_FILE JSON");
+                                }
+                            }
                         } else if let Some(id_str) = buffer.trim().strip_prefix("CLOSE_STICKER ") {
                             if let Ok(id) = id_str.parse::<i64>() {
                                 let _ = ipc_events_tx.send(IpcEvent::CloseSticker(id));
                             }
+                        } else if matches!(
+                            buffer.trim(),
+                            "SELECTION_TO_COMMAND" | "SELECTION_TO_CMD"
+                        ) {
+                            tracing::debug!("Received selection-to-command IPC");
+                            let _ = ipc_events_tx.send(IpcEvent::TriggerSelectionToCommand);
                         }
                     }
                 }

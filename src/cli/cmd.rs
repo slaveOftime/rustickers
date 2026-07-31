@@ -7,6 +7,7 @@ use super::console::{block_on, signal_open, truncate};
 pub fn run(
     app_paths: &AppPaths,
     command: String,
+    accept_selection: bool,
     cron: Option<String>,
     run_immediately: bool,
     env: Vec<String>,
@@ -27,6 +28,7 @@ pub fn run(
         stream_result: false,
         padding: None,
         started_at: None,
+        accept_selection,
     };
 
     let content_json = serde_json::to_string(&content)?;

@@ -369,4 +369,33 @@ impl super::StickerStore for SqliteStore {
 
         Ok(rows)
     }
+
+    async fn touch_selection_lru(&self, id: i64, last_used_at: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO selection_lru (sticker_id, last_used_at) VALUES (?1, ?2)
+ON CONFLICT(sticker_id) DO UPDATE SET last_used_at = excluded.last_used_at"#,
+        )
+        .bind(id)
+        .bind(last_used_at)
+        .execute(&self.pool)
+        .await
+        .context("touch selection lru")?;
+        Ok(())
+    }
+
+    async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>> {
+        let rows = sqlx::query_as::<_, StickerDetail>(
+            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at, s.display_id
+FROM stickers s
+LEFT JOIN selection_lru l ON s.id = l.sticker_id
+WHERE s.type = 'command'
+  AND json_valid(s.content)
+  AND COALESCE(json_extract(s.content, '$.accept_selection'), 0) = 1
+ORDER BY l.last_used_at DESC NULLS LAST, s.updated_at DESC, s.id DESC"#
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("query accept_selection stickers")?;
+        Ok(rows)
+    }
 }

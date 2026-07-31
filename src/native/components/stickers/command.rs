@@ -69,6 +69,8 @@ pub struct CommandSticker {
     schedule_cancel: Option<Arc<AtomicBool>>,
     next_scheduled_at: Option<String>,
     error: Option<String>,
+    accept_selection: bool,
+    selection: Option<String>,
 }
 
 enum CmdEvent {
@@ -86,6 +88,7 @@ impl CommandSticker {
         window: &mut Window,
         cx: &mut Context<Self>,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
+        selection: Option<String>,
     ) -> Self {
         let cmd = serde_json::from_str::<CommandContent>(content).unwrap_or_default();
         let command_value = cmd.command;
@@ -160,7 +163,10 @@ impl CommandSticker {
         window
             .spawn(cx, async move |cx| {
                 let _ = cx.update_window_entity(&root_entity, |this, window, cx| {
-                    if this.started_at.is_some()
+                    if this.selection.is_some() {
+                        this.started_at = Some(crate::utils::time::now_unix_millis());
+                        this.run(window, cx);
+                    } else if this.started_at.is_some()
                         && this.process.is_none()
                         && !this.is_schedule_active()
                     {
@@ -190,6 +196,8 @@ impl CommandSticker {
             stream_result: cmd.stream_result,
             padding,
             started_at: cmd.started_at,
+            accept_selection: cmd.accept_selection,
+            selection,
 
             process: None,
             stopping: false,
@@ -211,6 +219,7 @@ impl CommandSticker {
             stream_result: self.stream_result,
             padding: Some(self.padding.read(cx).value().start() as u8),
             started_at: self.started_at,
+            accept_selection: self.accept_selection,
         }
     }
 
@@ -448,6 +457,10 @@ impl CommandSticker {
             } else {
                 cmd.env(line, "");
             }
+        }
+
+        if let Some(selection) = &self.selection {
+            cmd.env("RUSTICKERS_SELECTION", selection);
         }
 
         let process = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
@@ -810,6 +823,17 @@ impl CommandSticker {
                         .on_click(
                             cx.listener(|this, _, _, _| this.stream_result = !this.stream_result),
                         ),
+                ),
+            )
+            .child(
+                field().label("Selected text").child(
+                    Switch::new("accept_selection")
+                        .label("Open and run from Ctrl/Cmd + Alt + C")
+                        .small()
+                        .checked(self.accept_selection)
+                        .on_click(cx.listener(|this, _, _, _| {
+                            this.accept_selection = !this.accept_selection
+                        })),
                 ),
             )
             .child(

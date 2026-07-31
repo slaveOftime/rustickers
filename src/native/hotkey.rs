@@ -13,6 +13,10 @@ struct KeyState {
     alt: bool,
     meta: bool,
     r_down: bool,
+    c_down: bool,
+    modifier_combo_active: bool,
+    modifier_combo_consumed: bool,
+    selection_pending: bool,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -50,9 +54,14 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
     // the main-queue requirement on recent macOS releases and crashes the process.
     // Quartz key codes and modifier flags need no keyboard-layout translation.
     const KEY_R: i64 = 0x0f;
+    const KEY_C: i64 = 0x08;
 
-    let preview_combo_down = Arc::new(AtomicBool::new(false));
-    let preview_combo_down_for_tap = preview_combo_down.clone();
+    let modifier_combo_down = Arc::new(AtomicBool::new(false));
+    let modifier_combo_down_for_tap = modifier_combo_down.clone();
+    let modifier_combo_consumed = Arc::new(AtomicBool::new(false));
+    let modifier_combo_consumed_for_tap = modifier_combo_consumed.clone();
+    let selection_pending = Arc::new(AtomicBool::new(false));
+    let selection_pending_for_tap = selection_pending.clone();
     let tap = CGEventTap::new(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -64,14 +73,24 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                 || flags.intersects(CGEventFlags::CGEventFlagControl);
             let alt = flags.intersects(CGEventFlags::CGEventFlagAlternate);
 
-            let preview_combo = primary && alt;
-            let preview_combo_was_down =
-                preview_combo_down_for_tap.swap(preview_combo, Ordering::Relaxed);
+            let modifier_combo = primary && alt;
+            let any_combo_modifier = primary || alt;
+            let modifier_combo_was_down = modifier_combo_down_for_tap.load(Ordering::Relaxed);
 
             match event_type {
-                CGEventType::FlagsChanged if preview_combo && !preview_combo_was_down => {
-                    tracing::debug!("Hotkey triggered: toggle file preview");
-                    let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                CGEventType::FlagsChanged if modifier_combo && !modifier_combo_was_down => {
+                    modifier_combo_down_for_tap.store(true, Ordering::Relaxed);
+                    modifier_combo_consumed_for_tap.store(false, Ordering::Relaxed);
+                }
+                CGEventType::FlagsChanged if !any_combo_modifier && modifier_combo_was_down => {
+                    modifier_combo_down_for_tap.store(false, Ordering::Relaxed);
+                    if selection_pending_for_tap.swap(false, Ordering::Relaxed) {
+                        tracing::debug!("Hotkey triggered: selection to command");
+                        let _ = ipc_events_tx.send(IpcEvent::TriggerSelectionToCommand);
+                    } else if !modifier_combo_consumed_for_tap.swap(false, Ordering::Relaxed) {
+                        tracing::debug!("Hotkey triggered: toggle file preview");
+                        let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                    }
                 }
                 CGEventType::KeyDown
                     if primary
@@ -79,8 +98,18 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                         && event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) == KEY_R
                         && event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) == 0 =>
                 {
+                    modifier_combo_consumed_for_tap.store(true, Ordering::Relaxed);
                     tracing::debug!("Hotkey triggered: show");
                     let _ = ipc_events_tx.send(IpcEvent::Show);
+                }
+                CGEventType::KeyDown
+                    if primary
+                        && alt
+                        && event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) == KEY_C
+                        && event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) == 0 =>
+                {
+                    modifier_combo_consumed_for_tap.store(true, Ordering::Relaxed);
+                    selection_pending_for_tap.store(true, Ordering::Relaxed);
                 }
                 _ => {}
             }
@@ -125,30 +154,19 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
             EventType::KeyPress(key) => {
                 match key {
                     Key::Alt => {
-                        // Debounce key-repeat while held.
                         if !state.alt {
                             state.alt = true;
-                            if primary_modifier_down(*state) {
-                                tracing::debug!(
-                                    alt = state.alt,
-                                    ctrl = state.ctrl,
-                                    meta = state.meta,
-                                    "Hotkey triggered: toggle file preview"
-                                );
-                                let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                            if primary_modifier_down(*state) && !state.modifier_combo_active {
+                                state.modifier_combo_active = true;
+                                state.modifier_combo_consumed = false;
                             }
                         }
                     }
                     Key::ControlLeft | Key::ControlRight => {
                         state.ctrl = true;
-                        if state.alt && primary_modifier_down(*state) {
-                            tracing::debug!(
-                                alt = state.alt,
-                                ctrl = state.ctrl,
-                                meta = state.meta,
-                                "Hotkey triggered: toggle file preview"
-                            );
-                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                        if state.alt && !state.modifier_combo_active {
+                            state.modifier_combo_active = true;
+                            state.modifier_combo_consumed = false;
                         }
                     }
                     Key::ShiftLeft | Key::ShiftRight => state.shift = true,
@@ -158,6 +176,7 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                         if !state.r_down {
                             state.r_down = true;
                             if state.alt && primary_modifier_down(*state) {
+                                state.modifier_combo_consumed = true;
                                 tracing::debug!(
                                     alt = state.alt,
                                     ctrl = state.ctrl,
@@ -168,15 +187,42 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                             }
                         }
                     }
+                    Key::KeyC => {
+                        if !state.c_down {
+                            state.c_down = true;
+                            if state.alt && primary_modifier_down(*state) {
+                                state.modifier_combo_consumed = true;
+                                state.selection_pending = true;
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
             EventType::KeyRelease(key) => match key {
-                Key::Alt => state.alt = false,
-                Key::ControlLeft | Key::ControlRight => state.ctrl = false,
+                Key::Alt | Key::ControlLeft | Key::ControlRight => {
+                    match key {
+                        Key::Alt => state.alt = false,
+                        Key::ControlLeft | Key::ControlRight => state.ctrl = false,
+                        _ => {}
+                    }
+                    if state.modifier_combo_active && !state.alt && !state.ctrl {
+                        if state.selection_pending {
+                            tracing::debug!("Hotkey triggered: selection to command");
+                            let _ = ipc_events_tx.send(IpcEvent::TriggerSelectionToCommand);
+                        } else if !state.modifier_combo_consumed {
+                            tracing::debug!("Hotkey triggered: toggle file preview");
+                            let _ = ipc_events_tx.send(IpcEvent::ToggleFilePreview);
+                        }
+                        state.modifier_combo_active = false;
+                        state.modifier_combo_consumed = false;
+                        state.selection_pending = false;
+                    }
+                }
                 Key::ShiftLeft | Key::ShiftRight => state.shift = false,
                 Key::MetaLeft | Key::MetaRight => state.meta = false,
                 Key::KeyR => state.r_down = false,
+                Key::KeyC => state.c_down = false,
                 _ => {}
             },
             _ => {}

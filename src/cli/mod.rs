@@ -109,6 +109,10 @@ enum Commands {
         /// Shell command to run
         command: String,
 
+        /// Accept selected text from any app (passed as RUSTICKERS_SELECTION env var)
+        #[arg(long = "accept-selection", action = clap::ArgAction::SetTrue)]
+        accept_selection: bool,
+
         /// Cron expression for scheduling (e.g. "0 */1 * * * *" to run every minute)
         #[arg(long)]
         cron: Option<String>,
@@ -167,6 +171,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         } => markdown::run(app_paths, content, title, width, height, color),
         Commands::Cmd {
             command,
+            accept_selection,
             cron,
             run_immediately,
             env,
@@ -177,6 +182,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         } => cmd::run(
             app_paths,
             command,
+            accept_selection,
             cron,
             run_immediately,
             env,

@@ -16,6 +16,7 @@ pub mod components;
 pub mod file_manager;
 pub mod hotkey;
 pub mod http;
+pub mod selection;
 pub mod windows;
 
 pub fn run_native(
@@ -64,9 +65,6 @@ pub fn run_native(
                                     ) {
                                         tracing::warn!(error = ?err, "Failed to toggle file sticker preview");
                                     } else {
-                                        // The event originates outside GPUI's native event loop.
-                                        // Explicitly schedule presentation instead of waiting for
-                                        // the next mouse or keyboard event in a sticker window.
                                         cx.refresh_windows();
                                     }
                                 });
@@ -90,11 +88,11 @@ pub fn run_native(
                                         cx,
                                         sticker_events_tx_for_ipc.clone(),
                                         store.clone(),
-                                                                vec![request.source],
-                                                                request.width,
-                                                                request.height,
-                                                                request.color,
-                                                            ) {
+                                        vec![request.source],
+                                        request.width,
+                                        request.height,
+                                        request.color,
+                                    ) {
                                         tracing::warn!(error = ?err, "Failed to open file preview from IPC");
                                     }
                                 });
@@ -111,6 +109,29 @@ pub fn run_native(
                                 let _ = cx.update(|cx| {
                                     StickerWindow::try_close(id, cx);
                                 });
+                            }
+                        }
+                        crate::ipc::IpcEvent::TriggerSelectionToCommand => {
+                            if let Some(store) = store_handle_clone.get() {
+                                match crate::native::selection::capture_selection() {
+                                    Ok(selection) => {
+                                        let store = store.clone();
+                                        let tx = sticker_events_tx_for_ipc.clone();
+                                        cx.spawn(async move |cx| {
+                                            match cascade_open_selection(cx, tx, store, &selection).await {
+                                                Ok(count) => {
+                                                    tracing::info!(eligible_count = count, "Opened selection command sticker carousel");
+                                                }
+                                                Err(err) => {
+                                                    tracing::warn!(error = ?err, "Failed to cascade-open selection stickers");
+                                                }
+                                            }
+                                        }).detach();
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(error = ?err, "Failed to capture clipboard selection");
+                                    }
+                                }
                             }
                         }
                     }
@@ -168,4 +189,41 @@ pub fn run_native(
         })
         .detach();
     });
+}
+
+/// Open command stickers with accept_selection=true in an LRU-ordered carousel.
+async fn cascade_open_selection(
+    cx: &mut gpui::AsyncApp,
+    sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+    store: ArcStickerStore,
+    selection: &str,
+) -> anyhow::Result<usize> {
+    let stickers = store.get_accept_selection_stickers().await?;
+    if stickers.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No command stickers with accept_selection enabled"
+        ));
+    }
+
+    tracing::debug!(
+        count = stickers.len(),
+        selection_len = selection.len(),
+        "Opening selection command sticker carousel"
+    );
+
+    store
+        .touch_selection_lru(stickers[0].id, crate::utils::time::now_unix_millis())
+        .await?;
+
+    let count = stickers.len();
+    cx.update(|cx| {
+        StickerWindow::open_selection_carousel(
+            cx,
+            sticker_events_tx,
+            store,
+            stickers,
+            selection.to_owned(),
+        )
+    })?;
+    Ok(count)
 }

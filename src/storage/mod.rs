@@ -43,6 +43,12 @@ pub trait StickerStore: Send + Sync {
         state: Option<StickerState>,
         search: Option<String>,
     ) -> anyhow::Result<Vec<StickerListItem>>;
+
+    /// Touch the selection LRU timestamp for a command sticker.
+    async fn touch_selection_lru(&self, id: i64, last_used_at: i64) -> anyhow::Result<()>;
+
+    /// Get command stickers with accept_selection=true, ordered by LRU (most recently used first).
+    async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>>;
 }
 
 pub type ArcStickerStore = Arc<dyn StickerStore>;

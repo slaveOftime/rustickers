@@ -49,6 +49,8 @@ pub struct CommandContent {
     pub stream_result: bool,
     pub padding: Option<u8>,
     pub started_at: Option<i64>,
+    #[serde(default)]
+    pub accept_selection: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +79,7 @@ impl Default for CommandContent {
             result: CommandResult::Text(None),
             padding: None,
             started_at: None,
+            accept_selection: false,
         }
     }
 }
