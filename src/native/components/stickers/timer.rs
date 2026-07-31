@@ -383,7 +383,7 @@ impl TimerSticker {
         .detach();
     }
 
-    fn setter_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn setter_view(&mut self, _cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
             .justify_center()
@@ -402,14 +402,6 @@ impl TimerSticker {
                     .child(Select::new(&self.minutes).small())
                     .child(":")
                     .child(Select::new(&self.seconds).small()),
-            )
-            .child(
-                Button::new("timer-start")
-                    .icon(IconName::Play)
-                    .bg(transparent_white())
-                    .border_0()
-                    .occlude()
-                    .on_click(cx.listener(|s, _, _, cx| s.start(cx))),
             )
             .into_any_element()
     }
@@ -437,7 +429,7 @@ impl TimerSticker {
             0.0
         };
 
-        let mut view = v_flex()
+        v_flex()
             .size_full()
             .p_3()
             .gap_1()
@@ -472,77 +464,8 @@ impl TimerSticker {
                 )
             })
             .when(!title.is_empty(), |view| view.child(title))
-            .child(div().text_2xl().font_bold().child(label));
-
-        view = match start_info.state {
-            TimerState::Running => view.when(window.is_window_hovered(), |view| {
-                view.child(
-                    Button::new("pause")
-                        .icon(IconName::Pause)
-                        .bg(transparent_white())
-                        .border_0()
-                        .occlude()
-                        .on_click(
-                            cx.listener(|s, _, _, cx| s.change_state(cx, TimerState::Paused)),
-                        ),
-                )
-            }),
-            TimerState::Paused => view.child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("reset")
-                            .icon(IconName::Adjustments)
-                            .bg(transparent_white())
-                            .border_0()
-                            .occlude()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.is_just_finished = false;
-                                this.change_state(cx, TimerState::Finished)
-                            })),
-                    )
-                    .child(
-                        Button::new("resume")
-                            .icon(IconName::Play)
-                            .bg(transparent_white())
-                            .border_0()
-                            .occlude()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.is_just_finished = false;
-                                this.change_state(cx, TimerState::Running)
-                            })),
-                    ),
-            ),
-            TimerState::Finished => view.when(window.is_window_hovered(), |view| {
-                view.child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("reset")
-                                .icon(IconName::Adjustments)
-                                .bg(transparent_white())
-                                .border_0()
-                                .occlude()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.is_just_finished = false;
-                                    this.change_state(cx, TimerState::Finished)
-                                })),
-                        )
-                        .child(
-                            Button::new("restart")
-                                .icon(IconName::Forward)
-                                .bg(transparent_white())
-                                .border_0()
-                                .occlude()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.restart(cx);
-                                })),
-                        ),
-                )
-            }),
-        };
-
-        return view.into_any_element();
+            .child(div().text_2xl().font_bold().child(label))
+            .into_any_element()
     }
 }
 
@@ -567,8 +490,85 @@ impl Sticker for TimerSticker {
         self.color = color;
     }
 
-    fn disable_color_picker(&self) -> bool {
-        self.timer.start_info.is_some()
+    fn footer_extension(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Some(state) = self
+            .timer
+            .start_info
+            .as_ref()
+            .map(|start_info| start_info.state.clone())
+        else {
+            return Some(
+                Button::new("timer-start")
+                    .icon(IconName::Play)
+                    .bg(transparent_white())
+                    .border_0()
+                    .occlude()
+                    .on_click(cx.listener(|this, _, _, cx| this.start(cx)))
+                    .into_any_element(),
+            );
+        };
+
+        let controls = h_flex().gap_1();
+        Some(
+            match state {
+                TimerState::Running => controls.child(
+                    Button::new("pause")
+                        .icon(IconName::Pause)
+                        .bg(transparent_white())
+                        .border_0()
+                        .occlude()
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.change_state(cx, TimerState::Paused)),
+                        ),
+                ),
+                TimerState::Paused => controls
+                    .child(
+                        Button::new("reset")
+                            .icon(IconName::Adjustments)
+                            .bg(transparent_white())
+                            .border_0()
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.is_just_finished = false;
+                                this.change_state(cx, TimerState::Finished)
+                            })),
+                    )
+                    .child(
+                        Button::new("resume")
+                            .icon(IconName::Play)
+                            .bg(transparent_white())
+                            .border_0()
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.is_just_finished = false;
+                                this.change_state(cx, TimerState::Running)
+                            })),
+                    ),
+                TimerState::Finished => controls
+                    .child(
+                        Button::new("reset")
+                            .icon(IconName::Adjustments)
+                            .bg(transparent_white())
+                            .border_0()
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.is_just_finished = false;
+                                this.change_state(cx, TimerState::Finished)
+                            })),
+                    )
+                    .child(
+                        Button::new("restart")
+                            .icon(IconName::Forward)
+                            .bg(transparent_white())
+                            .border_0()
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.restart(cx);
+                            })),
+                    ),
+            }
+            .into_any_element(),
+        )
     }
 }
 

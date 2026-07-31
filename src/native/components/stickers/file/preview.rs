@@ -2,10 +2,7 @@ use gpui::{
     Context, Entity, Image, ImageSource, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit,
     Rgba, Window, div, img, prelude::*,
 };
-use gpui_component::{
-    Sizable, button::Button, h_flex, input::Input, scroll::ScrollableElement, text::TextView,
-    v_flex,
-};
+use gpui_component::{input::Input, scroll::ScrollableElement, text::TextView, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -274,16 +271,6 @@ impl super::FileSticker {
                         .size_full()
                         .bordered(false)
                         .bg(gpui::rgba(0x000000)),
-                )
-                .child(
-                    h_flex().child(
-                        Button::new("save-preview-file")
-                            .label("Save (ctrl+s)")
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_edit(window, cx);
-                            })),
-                    ),
                 )
                 .into_any_element();
         }

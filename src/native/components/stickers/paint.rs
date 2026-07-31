@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, PathStyle, Pixels, Point, Render, StrokeOptions, Window, WindowControlArea,
-    canvas, div, point, prelude::*, px, rgb, rgba, size, transparent_black,
+    PathBuilder, PathStyle, Pixels, Point, Render, StrokeOptions, Window, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, transparent_black,
 };
 use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{
@@ -534,13 +534,8 @@ impl PaintSticker {
         div()
             .w_full()
             .pl_1()
-            .pr_3()
-            .absolute()
-            .left_0()
-            .top_0()
-            .right_0()
+            .pr_1()
             .occlude()
-            .window_control_area(WindowControlArea::Drag)
             .child(
                 h_flex()
                     .items_center()
@@ -669,18 +664,19 @@ impl super::Sticker for PaintSticker {
     fn set_color(&mut self, color: StickerColor) {
         self.color = color;
     }
+
+    fn header_extension(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        Some(self.toolbar_view(cx))
+    }
 }
 
 impl Render for PaintSticker {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .gap_2()
             .relative()
             .child(self.canvas_view(cx))
-            .when(window.is_window_hovered(), |v| {
-                v.child(self.toolbar_view(cx))
-            })
     }
 }
 

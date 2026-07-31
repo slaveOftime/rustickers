@@ -26,6 +26,14 @@ pub trait Sticker: Sized {
     fn disable_color_picker(&self) -> bool {
         false
     }
+
+    fn header_extension(&mut self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+
+    fn footer_extension(&mut self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
 }
 
 pub trait StickerView {
@@ -35,6 +43,8 @@ pub trait StickerView {
     fn set_color(&mut self, cx: &mut App, color: StickerColor);
     fn use_default_bg(&self, cx: &App) -> bool;
     fn disable_color_picker(&self, cx: &App) -> bool;
+    fn header_extension(&self, cx: &mut App) -> Option<AnyElement>;
+    fn footer_extension(&self, cx: &mut App) -> Option<AnyElement>;
 }
 
 pub struct StickerViewEntity<T: Render + Sticker + 'static> {
@@ -76,5 +86,13 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
 
     fn disable_color_picker(&self, cx: &App) -> bool {
         self.entity.read(cx).disable_color_picker()
+    }
+
+    fn header_extension(&self, cx: &mut App) -> Option<AnyElement> {
+        self.entity.update(cx, |this, cx| this.header_extension(cx))
+    }
+
+    fn footer_extension(&self, cx: &mut App) -> Option<AnyElement> {
+        self.entity.update(cx, |this, cx| this.footer_extension(cx))
     }
 }

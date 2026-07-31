@@ -8,7 +8,7 @@ mod watcher;
 use futures::channel::mpsc as async_mpsc;
 use gpui::{Context, Entity, Rgba, Window, div, prelude::*, px, rgba};
 use gpui_component::{
-    Disableable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
+    Disableable, Sizable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
 };
 use notify::RecommendedWatcher;
 use preview::FilePreview;
@@ -230,9 +230,6 @@ impl FileSticker {
     fn pin_btn(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         Button::new("stick")
             .icon(IconName::Pin)
-            .absolute()
-            .top_0()
-            .right(px(90.0))
             .disabled(self.pining)
             .bg(rgba(0x000000))
             .border_0()
@@ -247,9 +244,6 @@ impl FileSticker {
     fn refresh_btn(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         Button::new("refresh")
             .icon(IconName::Refresh)
-            .absolute()
-            .top_0()
-            .right(px(60.0))
             .disabled(self.refreshing)
             .bg(rgba(0x000000))
             .border_0()
@@ -301,6 +295,35 @@ impl super::Sticker for FileSticker {
 
     fn use_default_bg(&self) -> bool {
         !matches!(self.preview, Some(FilePreview::WebView { .. }))
+    }
+
+    fn header_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let controls = gpui_component::h_flex()
+            .flex_1()
+            .gap_1()
+            .child(div().flex_1());
+        let controls = if self.is_persisted() {
+            controls
+        } else {
+            controls.child(self.pin_btn(cx))
+        };
+        Some(controls.child(self.refresh_btn(cx)).into_any_element())
+    }
+
+    fn footer_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if self.preview_editor.is_some() {
+            return Some(
+                Button::new("save-preview-file")
+                    .label("Save (ctrl+s)")
+                    .small()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_edit(window, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        self.audio_footer_extension(cx)
     }
 }
 
@@ -386,11 +409,5 @@ impl Render for FileSticker {
                     )
                 },
             )
-            .when(!self.is_persisted() && window.is_window_hovered(), |view| {
-                view.child(self.pin_btn(cx))
-            })
-            .when(window.is_window_hovered(), |view| {
-                view.child(self.refresh_btn(cx))
-            })
     }
 }

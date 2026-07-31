@@ -272,6 +272,34 @@ impl super::Sticker for MarkdownSticker {
     fn set_color(&mut self, color: StickerColor) {
         self.color = color;
     }
+
+    fn footer_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let mut controls = h_flex().flex_1();
+        if self.editing {
+            controls = controls.child(
+                Button::new("save")
+                    .label("save (ctrl+s)")
+                    .small()
+                    .occlude()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.save_state(cx);
+                    })),
+            );
+        } else {
+            controls = controls.child(
+                Button::new("convert-to-file")
+                    .icon(IconName::DocumentText)
+                    .tooltip("Convert to local file")
+                    .disabled(self.converting)
+                    .occlude()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.start_convert(cx);
+                    })),
+            );
+        }
+        
+        return Some(controls.into_any_element());
+    }
 }
 
 impl Render for MarkdownSticker {
@@ -281,48 +309,26 @@ impl Render for MarkdownSticker {
         if self.editing {
             window.set_rem_size(cx.theme().font_size);
 
-            body = body
-                .occlude()
-                .child(
-                    div()
-                        .size_full()
-                        .p_1()
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            if event.keystroke.modifiers.control
-                                && event.keystroke.key.eq_ignore_ascii_case("s")
-                            {
-                                this.save_state(cx);
-                            }
-                        }))
-                        .child(
-                            Input::new(&self.editor)
-                                .size_full()
-                                .bordered(false)
-                                .bg(rgba(0x000000)),
-                        ),
-                )
-                .child(
-                    h_flex().child(
-                        Button::new("save")
-                            .label("save (ctrl+s)")
-                            .small()
-                            .occlude()
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.save_state(cx);
-                            })),
+            body = body.occlude().child(
+                div()
+                    .size_full()
+                    .p_1()
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.modifiers.control
+                            && event.keystroke.key.eq_ignore_ascii_case("s")
+                        {
+                            this.save_state(cx);
+                        }
+                    }))
+                    .child(
+                        Input::new(&self.editor)
+                            .size_full()
+                            .bordered(false)
+                            .bg(rgba(0x000000)),
                     ),
-                );
+            );
         } else {
             window.set_rem_size(px(14.0));
-
-            let convert_btn = Button::new("convert-to-file")
-                .icon(IconName::DocumentText)
-                .tooltip("Convert to local file")
-                .disabled(self.converting)
-                .occlude()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.start_convert(cx);
-                }));
 
             let mut preview_overlay = div()
                 .relative()
@@ -343,17 +349,7 @@ impl Render for MarkdownSticker {
                         .size_full()
                         .selectable(true)
                         .scrollable(true),
-                )
-                .when(window.is_window_hovered(), |view| {
-                    view.child(
-                        div()
-                            .occlude()
-                            .absolute()
-                            .left_0()
-                            .bottom_0()
-                            .child(convert_btn),
-                    )
-                });
+                );
 
             if let Some(err) = &self.convert_error {
                 preview_overlay = preview_overlay.child(

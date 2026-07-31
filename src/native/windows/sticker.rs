@@ -948,13 +948,23 @@ impl StickerWindow {
     }
 
     fn header_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let extension = self.view.header_extension(cx);
+
         h_flex()
             .absolute()
             .left_0()
             .top_0()
             .right_0()
             .items_center()
-            .child(div().size_full())
+            .cursor_grab()
+            .window_control_area(WindowControlArea::Drag)
+            .occlude()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .when_some(extension, |view, extension| view.child(extension)),
+            )
             .child(self.create_button(cx))
             .child(
                 Button::new("close")
@@ -971,10 +981,6 @@ impl StickerWindow {
     fn selection_navigation_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let carousel = self.selection_carousel.as_ref().unwrap();
         h_flex()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
             .items_center()
             .justify_center()
             .gap_1()
@@ -1130,7 +1136,9 @@ impl StickerWindow {
     }
 
     fn footer_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let extension = self.view.footer_extension(cx);
         let color_options = h_flex()
+            .p_2()
             .gap_1()
             .children(StickerColor::ALL.iter().map(|&theme| {
                 div()
@@ -1155,9 +1163,23 @@ impl StickerWindow {
             .bottom_0()
             .left_0()
             .right_0()
-            .p_2()
             .gap_2()
+            .items_center()
+            .occlude()
+            .cursor_grab()
             .window_control_area(WindowControlArea::Drag)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .when_some(extension, |view, extension| view.child(extension)),
+            )
+            .when(
+                self.selection_carousel
+                    .as_ref()
+                    .is_some_and(|carousel| carousel.stickers.len() > 1),
+                |view| view.child(self.selection_navigation_view(cx)),
+            )
             .when(!self.view.disable_color_picker(cx), move |v| {
                 v.child(color_options)
             })
@@ -1206,18 +1228,8 @@ impl Render for StickerWindow {
             })
             .child(self.view.element())
             .when(window.is_window_hovered(), |view| {
-                view.child(self.header_view(cx))
+                view.child(self.header_view(cx)).child(self.footer_view(cx))
             })
-            .when(
-                window.is_window_hovered() && self.selection_carousel.is_none(),
-                |view| view.child(self.footer_view(cx)),
-            )
-            .when(
-                self.selection_carousel
-                    .as_ref()
-                    .is_some_and(|carousel| carousel.stickers.len() > 1),
-                |view| view.child(self.selection_navigation_view(cx)),
-            )
     }
 }
 

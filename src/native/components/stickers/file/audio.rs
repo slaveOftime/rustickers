@@ -541,24 +541,92 @@ impl super::FileSticker {
         self.spawn_anim_tick(cx);
     }
 
-    pub(super) fn view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        self.ensure_anim_loop(cx);
-
-        let (file_name, is_playing, play_mode, metadata) = match &self.preview {
-            Some(super::preview::FilePreview::Audio { source_path, state }) => (
-                super::utils::file_name_for_display(source_path.as_path()),
-                state.is_playing,
-                state.play_mode,
-                state.metadata.as_ref(),
-            ),
-            _ => ("Unknown".to_string(), false, AudioPlayMode::Manual, None),
+    pub(super) fn audio_footer_extension(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let Some(super::preview::FilePreview::Audio { state, .. }) = &self.preview else {
+            return None;
         };
+        let is_playing = state.is_playing;
+        let play_mode = state.play_mode;
         let play_mode_icon = if !play_mode.is_autoplay() {
             IconName::Forward
         } else if play_mode.is_random() {
             IconName::Shuffle
         } else {
             IconName::Loop
+        };
+
+        Some(
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    Button::new("audio-prev")
+                        .icon(IconName::ArrowLeft)
+                        .bg(rgba(0x00000000))
+                        .border_0()
+                        .cursor_pointer()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.navigate(-1, cx);
+                        })),
+                )
+                .child(
+                    Button::new("audio-play-pause")
+                        .icon(if is_playing {
+                            IconName::Pause
+                        } else {
+                            IconName::Play
+                        })
+                        .bg(rgba(0x00000000))
+                        .border_0()
+                        .cursor_pointer()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_play(cx);
+                        })),
+                )
+                .child(
+                    Button::new("audio-next")
+                        .icon(IconName::ArrowRight)
+                        .bg(rgba(0x00000000))
+                        .border_0()
+                        .cursor_pointer()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.navigate(1, cx);
+                        })),
+                )
+                .child(
+                    Button::new("audio-play-mode")
+                        .icon(play_mode_icon)
+                        .bg(if play_mode.is_autoplay() {
+                            rgba(0xffffff30)
+                        } else {
+                            rgba(0x00000000)
+                        })
+                        .border_0()
+                        .cursor_pointer()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.switch_play_mode(cx);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.ensure_anim_loop(cx);
+
+        let (file_name, metadata) = match &self.preview {
+            Some(super::preview::FilePreview::Audio { source_path, state }) => (
+                super::utils::file_name_for_display(source_path.as_path()),
+                state.metadata.as_ref(),
+            ),
+            _ => ("Unknown".to_string(), None),
         };
 
         let (display_title, display_artist, display_album, cover) = if let Some(meta) = metadata {
@@ -575,64 +643,6 @@ impl super::FileSticker {
         } else {
             (file_name, None, None, None)
         };
-
-        let controls = h_flex()
-            .gap_2()
-            .items_center()
-            .justify_center()
-            .w_full()
-            .child(
-                Button::new("audio-prev")
-                    .icon(IconName::ArrowLeft)
-                    .bg(rgba(0x00000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.navigate(-1, cx);
-                    })),
-            )
-            .child(
-                Button::new("audio-play-pause")
-                    .icon(if is_playing {
-                        IconName::Pause
-                    } else {
-                        IconName::Play
-                    })
-                    .bg(rgba(0x00000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.toggle_play(cx);
-                    })),
-            )
-            .child(
-                Button::new("audio-next")
-                    .icon(IconName::ArrowRight)
-                    .bg(rgba(0x00000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.navigate(1, cx);
-                    })),
-            )
-            .child(
-                Button::new("audio-play-mode")
-                    .icon(play_mode_icon)
-                    .bg(if play_mode.is_autoplay() {
-                        rgba(0xffffff30)
-                    } else {
-                        rgba(0x00000000)
-                    })
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.switch_play_mode(cx);
-                    })),
-            );
 
         let info_row = h_flex().gap(px(10.0)).items_center().child(
             v_flex()
@@ -693,8 +703,7 @@ impl super::FileSticker {
                     .items_stretch()
                     .justify_center()
                     .gap_1()
-                    .child(info_row)
-                    .when(window.is_window_hovered(), |view| view.child(controls)),
+                    .child(info_row),
             )
             .into_any_element()
     }

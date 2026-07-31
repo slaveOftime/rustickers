@@ -988,6 +988,76 @@ impl super::Sticker for CommandSticker {
     fn disable_color_picker(&self) -> bool {
         !self.show_editing_view()
     }
+
+    fn footer_extension(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.show_editing_view() {
+            return Some(
+                Button::new("start")
+                    .icon(IconName::Play)
+                    .bg(transparent_white())
+                    .border_0()
+                    .occlude()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.start(window, cx, false);
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        if self.process.is_some() || self.is_schedule_active() {
+            return (!self.stopping || self.is_schedule_active()).then(|| {
+                Button::new("stop")
+                    .icon(IconName::Stop)
+                    .when_some(self.next_scheduled_at.clone(), |view, next_run| {
+                        view.tooltip(format!("Next run at {}", next_run))
+                    })
+                    .bg(transparent_white())
+                    .border_0()
+                    .occlude()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.stop_schedule();
+                        this.stop(cx);
+                    }))
+                    .into_any_element()
+            });
+        }
+
+        Some(
+            h_flex()
+                .gap_1()
+                .child(
+                    Button::new("reset")
+                        .icon(IconName::Adjustments)
+                        .bg(transparent_white())
+                        .border_0()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.result_html_entity = None;
+                            match this.result {
+                                CommandResult::Text(ref mut result)
+                                | CommandResult::Markdown(ref mut result)
+                                | CommandResult::Html(ref mut result)
+                                | CommandResult::Svg(ref mut result)
+                                | CommandResult::Source(ref mut result) => {
+                                    *result = None;
+                                }
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("restart")
+                        .icon(IconName::Play)
+                        .bg(transparent_white())
+                        .border_0()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start(window, cx, false);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
 }
 
 impl Render for CommandSticker {
@@ -1005,27 +1075,14 @@ impl Render for CommandSticker {
             .window_control_area(WindowControlArea::Drag);
 
         if self.show_editing_view() {
-            root = root
-                .child(
-                    div()
-                        .p_2()
-                        .h_full()
-                        .flex_shrink(1.0)
-                        .overflow_hidden()
-                        .child(v_flex().overflow_y_scrollbar().child(self.form(cx))),
-                )
-                .child(
-                    h_flex().child(
-                        Button::new("start")
-                            .icon(IconName::Play)
-                            .bg(transparent_white())
-                            .border_0()
-                            .occlude()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start(window, cx, false);
-                            })),
-                    ),
-                );
+            root = root.child(
+                div()
+                    .p_2()
+                    .h_full()
+                    .flex_shrink(1.0)
+                    .overflow_hidden()
+                    .child(v_flex().overflow_y_scrollbar().child(self.form(cx))),
+            );
         } else {
             root = root.child(
                 div().h_full().flex_shrink(1.0).overflow_hidden().child(
@@ -1034,67 +1091,6 @@ impl Render for CommandSticker {
                         .child(self.result_view(bg_color, cx)),
                 ),
             );
-
-            if self.process.is_some() || self.is_schedule_active() {
-                if window.is_window_hovered() && (!self.stopping || self.is_schedule_active()) {
-                    root = root.child(
-                        h_flex()
-                            .bg(bg_color)
-                            .items_center()
-                            .justify_between()
-                            .gap_1()
-                            .child(
-                                Button::new("stop")
-                                    .icon(IconName::Stop)
-                                    .when_some(self.next_scheduled_at.clone(), |view, x| {
-                                        view.tooltip(format!("Next run at {}", x))
-                                    })
-                                    .occlude()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.stop_schedule();
-                                        this.stop(cx);
-                                    })),
-                            ),
-                    );
-                }
-            } else {
-                root = root.child(
-                    h_flex()
-                        .bg(bg_color)
-                        .w_full()
-                        .gap_1()
-                        .child(
-                            Button::new("reset")
-                                .icon(IconName::Adjustments)
-                                .bg(transparent_white())
-                                .border_0()
-                                .occlude()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.result_html_entity = None;
-                                    match this.result {
-                                        CommandResult::Text(ref mut result)
-                                        | CommandResult::Markdown(ref mut result)
-                                        | CommandResult::Html(ref mut result)
-                                        | CommandResult::Svg(ref mut result)
-                                        | CommandResult::Source(ref mut result) => {
-                                            *result = None;
-                                        }
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("restart")
-                                .icon(IconName::Play)
-                                .bg(transparent_white())
-                                .border_0()
-                                .occlude()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.start(window, cx, false);
-                                })),
-                        ),
-                );
-            }
         }
 
         root.when_some(self.error.as_ref(), |view, msg| {
