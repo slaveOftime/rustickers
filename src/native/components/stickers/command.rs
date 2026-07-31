@@ -1068,6 +1068,14 @@ impl super::Sticker for CommandSticker {
                 .into_any_element(),
         )
     }
+
+    fn is_footer_absoute(&self) -> bool {
+        self.show_editing_view()
+            || match self.result {
+                CommandResult::Html(_) => false,
+                _ => true,
+            }
+    }
 }
 
 impl Render for CommandSticker {

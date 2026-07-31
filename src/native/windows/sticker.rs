@@ -1201,7 +1201,7 @@ impl StickerWindow {
             }));
 
         h_flex()
-            .absolute()
+            .when(self.view.is_footer_absoute(cx), |v| v.absolute())
             .justify_end()
             .bottom_0()
             .left_0()

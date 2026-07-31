@@ -34,6 +34,10 @@ pub trait Sticker: Sized {
     fn footer_extension(&mut self, _cx: &mut Context<Self>) -> Option<AnyElement> {
         None
     }
+
+    fn is_footer_absoute(&self) -> bool {
+        true
+    }
 }
 
 pub trait StickerView {
@@ -45,6 +49,7 @@ pub trait StickerView {
     fn disable_color_picker(&self, cx: &App) -> bool;
     fn header_extension(&self, cx: &mut App) -> Option<AnyElement>;
     fn footer_extension(&self, cx: &mut App) -> Option<AnyElement>;
+    fn is_footer_absoute(&self, cx: &App) -> bool;
 }
 
 pub struct StickerViewEntity<T: Render + Sticker + 'static> {
@@ -94,5 +99,9 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
 
     fn footer_extension(&self, cx: &mut App) -> Option<AnyElement> {
         self.entity.update(cx, |this, cx| this.footer_extension(cx))
+    }
+
+    fn is_footer_absoute(&self, cx: &App) -> bool {
+        self.entity.read(cx).is_footer_absoute()
     }
 }
