@@ -1,7 +1,6 @@
 use gpui::{
     Animation, AnimationExt, AnyElement, AppContext, Context, Entity, Image, ImageFormat,
-    ImageSource, Render, Rgba, Window, WindowControlArea, div, img, prelude::*, px,
-    transparent_white,
+    ImageSource, Render, Rgba, Window, div, img, prelude::*, px, transparent_white,
 };
 use gpui_component::{
     Sizable,
@@ -936,7 +935,7 @@ impl CommandSticker {
                 .bg(bg_color)
                 .p(px(self.padding.read(cx).value().start()))
                 .size_full()
-                .selectable(false)
+                .selectable(true)
                 .scrollable(true)
                 .into_any_element(),
             CommandResult::Markdown(None) => empty_view,
@@ -1070,11 +1069,10 @@ impl super::Sticker for CommandSticker {
     }
 
     fn is_footer_absoute(&self) -> bool {
-        self.show_editing_view()
-            || match self.result {
-                CommandResult::Html(_) => false,
-                _ => true,
-            }
+        match self.result {
+            CommandResult::Html(_) => self.show_editing_view(),
+            _ => true,
+        }
     }
 }
 
@@ -1087,10 +1085,7 @@ impl Render for CommandSticker {
 
         window.set_rem_size(px(14.0));
 
-        let mut root = v_flex()
-            .relative()
-            .size_full()
-            .window_control_area(WindowControlArea::Drag);
+        let mut root = v_flex().relative().size_full();
 
         if self.show_editing_view() {
             root = root.child(
@@ -1103,7 +1098,7 @@ impl Render for CommandSticker {
             );
         } else {
             root = root.child(
-                div().h_full().flex_shrink(1.0).overflow_hidden().child(
+                div().h_full().overflow_hidden().child(
                     v_flex()
                         .overflow_y_scrollbar()
                         .child(self.result_view(bg_color, cx)),

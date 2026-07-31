@@ -1201,11 +1201,10 @@ impl StickerWindow {
             }));
 
         h_flex()
-            .when(self.view.is_footer_absoute(cx), |v| v.absolute())
+            .when(self.view.is_footer_absoute(cx), |v| {
+                v.absolute().bottom_0().left_0().right_0()
+            })
             .justify_end()
-            .bottom_0()
-            .left_0()
-            .right_0()
             .gap_2()
             .items_center()
             .occlude()
@@ -1270,7 +1269,7 @@ impl Render for StickerWindow {
                 )
             })
             .child(self.view.element())
-            .when(window.is_window_hovered(), |view| {
+            .when(window.is_window_active(), |view| {
                 view.child(self.header_view(cx)).child(self.footer_view(cx))
             })
     }
