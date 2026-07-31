@@ -1,8 +1,7 @@
 use gpui::{
-    Anchor, AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
-    KeystrokeEvent, MouseButton, Render, Rgba, Subscription, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, rgba, size,
-    transparent_black,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
+    MouseButton, Render, Rgba, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+    WindowKind, WindowOptions, div, prelude::*, px, rgba, size, transparent_black,
 };
 use gpui_component::{
     ActiveTheme, Root,
@@ -16,7 +15,7 @@ use gpui_component::{
 use std::{
     path::PathBuf,
     sync::{
-        Arc, RwLock,
+        RwLock,
         atomic::{AtomicI64, Ordering},
         mpsc,
     },
@@ -45,7 +44,7 @@ use windows::Win32::{
     },
 };
 
-use crate::model::content::{CommandContent, FileStickerContent};
+use crate::model::content::FileStickerContent;
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
     IconName,
@@ -61,18 +60,8 @@ use crate::storage::ArcStickerStore;
 const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 
 static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new());
-const SELECTION_OPEN_ID_MIN: i64 = i64::MAX / 2;
-static NEXT_SELECTION_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
-
-#[derive(Clone)]
-struct SelectionCarousel {
-    stickers: Arc<Vec<StickerDetail>>,
-    index: usize,
-    selection: Arc<str>,
-    left: i32,
-    top: i32,
-    display_id: Option<u32>,
-}
+const SELECTION_RUN_OPEN_ID_MIN: i64 = i64::MAX / 2;
+static NEXT_SELECTION_RUN_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
 #[derive(PartialEq, Clone, Debug)]
 struct WindowState {
@@ -95,8 +84,8 @@ pub struct StickerWindow {
 
     last_bounds: Option<WindowState>,
     last_bounds_change_at: Option<Instant>,
-    selection_carousel: Option<SelectionCarousel>,
-    _keystroke_subscription: Option<Subscription>,
+    selection_run: bool,
+    closing: bool,
 }
 
 impl StickerWindow {
@@ -371,73 +360,55 @@ impl StickerWindow {
             focus,
             None,
             open_id,
-            None,
+            false,
         )
     }
 
-    pub(crate) fn open_selection_carousel(
+    pub(crate) fn open_with_selection(
         cx: &mut App,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
-        stickers: Vec<StickerDetail>,
+        mut detail: StickerDetail,
         selection: String,
     ) -> anyhow::Result<()> {
-        let (left, top, display_id) = {
-            let first = &stickers[0];
-            (first.left, first.top, first.display_id)
-        };
-        let carousel = SelectionCarousel {
-            stickers: Arc::new(stickers),
-            index: 0,
-            selection: Arc::from(selection),
-            left,
-            top,
-            display_id,
-        };
-        Self::open_selection_slide(cx, sticker_events_tx, store, carousel, true)
-    }
-
-    fn open_selection_slide(
-        cx: &mut App,
-        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
-        store: ArcStickerStore,
-        carousel: SelectionCarousel,
-        focus: bool,
-    ) -> anyhow::Result<()> {
+        tracing::info!(
+            sticker_id = detail.id,
+            left = detail.left,
+            top = detail.top,
+            width = detail.width,
+            height = detail.height,
+            selection_len = selection.len(),
+            "Opening selection command sticker"
+        );
         let existing_open_id = OPEN_STICKERS.read().ok().and_then(|open_stickers| {
             open_stickers
                 .iter()
-                .find(|(open_id, _)| *open_id >= SELECTION_OPEN_ID_MIN)
+                .find(|(open_id, _)| *open_id >= SELECTION_RUN_OPEN_ID_MIN)
                 .map(|(open_id, _)| *open_id)
         });
         if let Some(existing_open_id) = existing_open_id {
             Self::try_close(existing_open_id, cx);
             cx.defer(move |cx| {
                 if let Err(err) =
-                    Self::open_selection_slide(cx, sticker_events_tx, store, carousel, focus)
+                    Self::open_with_selection(cx, sticker_events_tx, store, detail, selection)
                 {
-                    tracing::warn!(error = ?err, "Failed to replace selection carousel");
+                    tracing::warn!(error = ?err, "Failed to replace selection command window");
                 }
             });
             return Ok(());
         }
 
-        let mut detail = carousel.stickers[carousel.index].clone();
-        detail.left = carousel.left;
-        detail.top = carousel.top;
-        detail.display_id = carousel.display_id;
         detail.top_most = true;
-        let selection = carousel.selection.to_string();
-        let open_id = NEXT_SELECTION_OPEN_ID.fetch_sub(1, Ordering::Relaxed);
+        let open_id = NEXT_SELECTION_RUN_OPEN_ID.fetch_sub(1, Ordering::Relaxed);
         Self::open_with_detail_and_selection(
             cx,
             sticker_events_tx,
             store,
             detail,
-            focus,
+            true,
             Some(selection),
             open_id,
-            Some(carousel),
+            true,
         )
     }
 
@@ -449,10 +420,10 @@ impl StickerWindow {
         focus: bool,
         selection: Option<String>,
         open_id: i64,
-        selection_carousel: Option<SelectionCarousel>,
+        selection_run: bool,
     ) -> anyhow::Result<()> {
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
-            if selection_carousel.is_none() && open_id <= 0 {
+            if !selection_run && open_id <= 0 {
                 if let Some(pos) = open_stickers
                     .iter()
                     .position(|(existing_id, _)| *existing_id < 0 && *existing_id != open_id)
@@ -539,7 +510,7 @@ impl StickerWindow {
                         store,
                         sticker_events_tx,
                         selection,
-                        selection_carousel,
+                        selection_run,
                         window,
                         cx,
                     )
@@ -575,7 +546,7 @@ impl StickerWindow {
         store: ArcStickerStore,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         selection: Option<String>,
-        selection_carousel: Option<SelectionCarousel>,
+        selection_run: bool,
         window: &mut Window,
         cx: &mut Context<StickerWindow>,
     ) -> Self {
@@ -613,19 +584,33 @@ impl StickerWindow {
         })
         .detach();
 
-        let keystroke_subscription = selection_carousel.as_ref().map(|_| {
+        let entity = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            entity
+                .update(cx, |this, cx| {
+                    if this.closing {
+                        true
+                    } else {
+                        this.close(window, cx);
+                        false
+                    }
+                })
+                .unwrap_or(true)
+        });
+
+        if selection_run {
             let entity = cx.weak_entity();
             cx.intercept_keystrokes(move |event, window, cx| {
-                if !window.is_window_active() {
-                    return;
-                }
-                if let Some(entity) = entity.upgrade() {
-                    let _ = entity.update(cx, |this, cx| {
-                        this.handle_selection_key(event, window, cx);
-                    });
+                if event.keystroke.key == "escape" && window.is_window_active() {
+                    if let Some(entity) = entity.upgrade() {
+                        let _ = entity.update(cx, |this, cx| this.close(window, cx));
+                    }
+                    cx.stop_propagation();
+                    window.prevent_default();
                 }
             })
-        });
+            .detach();
+        }
 
         Self {
             open_id,
@@ -635,8 +620,8 @@ impl StickerWindow {
             view,
             last_bounds: None,
             last_bounds_change_at: None,
-            selection_carousel,
-            _keystroke_subscription: keystroke_subscription,
+            selection_run,
+            closing: false,
             error: None,
         }
     }
@@ -836,105 +821,24 @@ impl StickerWindow {
         .detach();
     }
 
-    fn close_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.change_bounds(window, cx);
-        let open_id = self.open_id;
-        cx.defer(move |cx| {
-            Self::try_close(open_id, cx);
-        });
-    }
-
-    fn navigate_selection(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(carousel) = self.selection_carousel.as_ref() else {
-            return;
-        };
-        let count = carousel.stickers.len();
-        if count <= 1 {
+    fn close(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing {
             return;
         }
 
-        let next_index = (carousel.index as isize + offset).rem_euclid(count as isize) as usize;
-        self.select_selection(next_index, window, cx);
-    }
-
-    fn select_selection(&mut self, next_index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(carousel) = self.selection_carousel.clone() else {
-            return;
-        };
-        if next_index >= carousel.stickers.len() || next_index == carousel.index {
-            return;
-        }
-
-        let bounds = self.current_bounds(window, cx);
-        self.change_bounds(window, cx);
-        let mut stickers = carousel.stickers.as_ref().clone();
-        let current = &mut stickers[carousel.index];
-        current.left = bounds.left;
-        current.top = bounds.top;
-        current.width = bounds.width;
-        current.height = bounds.height;
-        current.display_id = bounds.display_id;
-
-        let next_id = stickers[next_index].id;
-        let next_carousel = SelectionCarousel {
-            stickers: Arc::new(stickers),
-            index: next_index,
-            selection: carousel.selection.clone(),
-            left: bounds.left,
-            top: bounds.top,
-            display_id: bounds.display_id,
-        };
-
-        let store_for_lru = self.store.clone();
-        cx.spawn(async move |_, _| {
-            if let Err(err) = store_for_lru
-                .touch_selection_lru(next_id, crate::utils::time::now_unix_millis())
-                .await
-            {
-                tracing::warn!(next_id, error = ?err, "Failed to update selection carousel LRU");
-            }
-        })
-        .detach();
-
-        let mut next_detail = next_carousel.stickers[next_index].clone();
-        next_detail.left = bounds.left;
-        next_detail.top = bounds.top;
-        next_detail.display_id = bounds.display_id;
-        next_detail.top_most = true;
-        let next_size = if next_detail.width > 0 && next_detail.height > 0 {
-            size(px(next_detail.width as f32), px(next_detail.height as f32))
-        } else {
-            CommandSticker::default_window_size().map(|value| px(value as f32))
-        };
-        let mut next_view = Self::create_sticker_view(
-            &next_detail,
-            &self.store,
-            Some(next_carousel.selection.to_string()),
-            window,
-            cx,
-            self.sticker_events_tx.clone(),
-        );
-        next_view.set_color(cx, next_detail.color);
-
-        self.detail = next_detail;
-        self.view = next_view;
-        self.selection_carousel = Some(next_carousel);
-        self.last_bounds = None;
-        self.last_bounds_change_at = None;
-        window.resize(next_size);
-        window.refresh();
-        cx.notify();
-    }
-
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selection_carousel.is_some() {
-            self.close_selection(window, cx);
+        if self.selection_run {
+            self.closing = true;
+            let open_id = self.open_id;
+            cx.defer(move |cx| {
+                Self::try_close(open_id, cx);
+            });
             return;
         }
 
         if !self.view.save_on_close(cx) {
             return;
         }
+        self.closing = true;
 
         let id = self.view.id(cx);
         let original_id = self.detail.id;
@@ -988,93 +892,6 @@ impl StickerWindow {
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )
             .into_any_element()
-    }
-
-    fn selection_navigation_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let carousel = self.selection_carousel.as_ref().unwrap();
-        let root_entity = cx.entity();
-        h_flex()
-            .items_center()
-            .justify_center()
-            .gap_1()
-            .child(
-                Button::new(("selection-prev", self.open_id as u64))
-                    .icon(IconName::ArrowLeft)
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.navigate_selection(-1, window, cx);
-                    })),
-            )
-            .child(div().px_1().child(format!(
-                "{} / {}",
-                carousel.index + 1,
-                carousel.stickers.len()
-            )))
-            .child(
-                Button::new(("selection-next", self.open_id as u64))
-                    .icon(IconName::ArrowRight)
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .occlude()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.navigate_selection(1, window, cx);
-                    })),
-            )
-            .child(
-                Button::new(("selection-menu", self.open_id as u64))
-                    .icon(IconName::Folder)
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
-                    .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, window, cx| {
-                        let Some(carousel) = root_entity.read(cx).selection_carousel.clone() else {
-                            return menu;
-                        };
-
-                        carousel
-                            .stickers
-                            .iter()
-                            .enumerate()
-                            .fold(menu, |menu, (index, sticker)| {
-                                let root_entity = root_entity.clone();
-                                menu.item(
-                                    PopupMenuItem::new(selection_sticker_label(sticker))
-                                        .checked(index == carousel.index)
-                                        .on_click(window.listener_for(
-                                            &root_entity,
-                                            move |this, _, window, cx| {
-                                                this.select_selection(index, window, cx);
-                                            },
-                                        )),
-                                )
-                            })
-                    }),
-            )
-            .into_any_element()
-    }
-
-    fn handle_selection_key(
-        &mut self,
-        event: &KeystrokeEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selection_carousel.is_none() {
-            return;
-        }
-
-        match event.keystroke.key.as_str() {
-            "escape" => self.close_selection(window, cx),
-            "left" => self.navigate_selection(-1, window, cx),
-            "right" => self.navigate_selection(1, window, cx),
-            _ => return,
-        }
-        cx.stop_propagation();
-        window.prevent_default();
     }
 
     fn create_sticker(&mut self, cx: &mut Context<Self>, sticker_type: &StickerType) {
@@ -1216,12 +1033,6 @@ impl StickerWindow {
                     .min_w_0()
                     .when_some(extension, |view, extension| view.child(extension)),
             )
-            .when(
-                self.selection_carousel
-                    .as_ref()
-                    .is_some_and(|carousel| carousel.stickers.len() > 1),
-                |view| view.child(self.selection_navigation_view(cx)),
-            )
             .when(!self.view.disable_color_picker(cx), move |v| {
                 v.child(color_options)
             })
@@ -1298,27 +1109,6 @@ fn source_title(source: &str) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string())
         .unwrap_or_else(|| source.to_string())
-}
-
-fn selection_sticker_label(sticker: &StickerDetail) -> String {
-    let title = sticker.title.trim();
-    if !title.is_empty() {
-        return title.to_string();
-    }
-
-    let command = serde_json::from_str::<CommandContent>(&sticker.content)
-        .map(|content| content.command)
-        .unwrap_or_default();
-    let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
-    if command.is_empty() {
-        return "Untitled command".to_string();
-    }
-
-    let mut label: String = command.chars().take(60).collect();
-    if command.chars().count() > 60 {
-        label.push('…');
-    }
-    label
 }
 
 fn clipboard_preview_source() -> Option<String> {

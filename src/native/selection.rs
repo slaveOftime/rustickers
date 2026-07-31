@@ -12,9 +12,12 @@ pub fn capture_selection() -> anyhow::Result<String> {
         "__RUSTICKERS_SELECTION_{}__",
         crate::utils::time::now_unix_millis()
     );
-    clipboard
-        .set_text(marker.clone())
-        .context("failed to prepare clipboard for selection capture")?;
+    if let Err(err) = clipboard.set_text(marker.clone()) {
+        return previous_clipboard_or_error(
+            previous_text,
+            format!("failed to prepare clipboard for selection capture: {err}"),
+        );
+    }
 
     #[cfg(target_os = "macos")]
     let primary = Key::MetaLeft;
@@ -26,8 +29,11 @@ pub fn capture_selection() -> anyhow::Result<String> {
     let _ = simulate(&EventType::KeyRelease(Key::KeyC));
     let _ = simulate(&EventType::KeyRelease(primary));
     if let Err(err) = copy_result {
-        restore_clipboard(&mut clipboard, previous_text);
-        anyhow::bail!("failed to copy selected text: {err:?}");
+        restore_clipboard(&mut clipboard, previous_text.as_deref());
+        return previous_clipboard_or_error(
+            previous_text,
+            format!("failed to copy selected text: {err:?}"),
+        );
     }
 
     let mut text = None;
@@ -41,19 +47,28 @@ pub fn capture_selection() -> anyhow::Result<String> {
         }
     }
 
-    let Some(text) = text else {
-        restore_clipboard(&mut clipboard, previous_text);
-        anyhow::bail!("no text is selected in the active application");
-    };
-    let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
-        restore_clipboard(&mut clipboard, previous_text);
-        anyhow::bail!("selected text is empty");
+    restore_clipboard(&mut clipboard, previous_text.as_deref());
+    match text {
+        Some(text) if !text.trim().is_empty() => Ok(text),
+        Some(_) => previous_clipboard_or_error(previous_text, "selected text is empty"),
+        None => previous_clipboard_or_error(
+            previous_text,
+            "no text is selected in the active application",
+        ),
     }
-    Ok(trimmed)
 }
 
-fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_text: Option<String>) {
+fn previous_clipboard_or_error(
+    previous_text: Option<String>,
+    error: impl Into<String>,
+) -> anyhow::Result<String> {
+    match previous_text {
+        Some(text) if !text.trim().is_empty() => Ok(text),
+        _ => Err(anyhow::anyhow!(error.into())),
+    }
+}
+
+fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_text: Option<&str>) {
     if let Some(previous_text) = previous_text {
         let _ = clipboard.set_text(previous_text);
     } else {

@@ -1,6 +1,7 @@
 use crate::model::sticker::StickerColor;
 
 pub mod main;
+pub mod selection;
 pub mod sticker;
 
 #[allow(dead_code)]

@@ -118,12 +118,12 @@ pub fn run_native(
                                         let store = store.clone();
                                         let tx = sticker_events_tx_for_ipc.clone();
                                         cx.spawn(async move |cx| {
-                                            match cascade_open_selection(cx, tx, store, &selection).await {
+                                            match open_selection_command(cx, tx, store, &selection).await {
                                                 Ok(count) => {
-                                                    tracing::info!(eligible_count = count, "Opened selection command sticker carousel");
+                                                    tracing::info!(eligible_count = count, "Opened selection command chooser");
                                                 }
                                                 Err(err) => {
-                                                    tracing::warn!(error = ?err, "Failed to cascade-open selection stickers");
+                                                    tracing::warn!(error = ?err, "Failed to open selection command chooser");
                                                 }
                                             }
                                         }).detach();
@@ -191,14 +191,14 @@ pub fn run_native(
     });
 }
 
-/// Open command stickers with accept_selection=true in an LRU-ordered carousel.
-async fn cascade_open_selection(
+/// Open the only eligible selection command, or show a chooser when several match.
+async fn open_selection_command(
     cx: &mut gpui::AsyncApp,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     store: ArcStickerStore,
     selection: &str,
 ) -> anyhow::Result<usize> {
-    let stickers = store.get_accept_selection_stickers().await?;
+    let mut stickers = store.get_accept_selection_stickers().await?;
     if stickers.is_empty() {
         return Err(anyhow::anyhow!(
             "No command stickers with accept_selection enabled"
@@ -208,22 +208,37 @@ async fn cascade_open_selection(
     tracing::debug!(
         count = stickers.len(),
         selection_len = selection.len(),
-        "Opening selection command sticker carousel"
+        "Opening selection command chooser"
     );
 
-    store
-        .touch_selection_lru(stickers[0].id, crate::utils::time::now_unix_millis())
-        .await?;
-
     let count = stickers.len();
-    cx.update(|cx| {
-        StickerWindow::open_selection_carousel(
-            cx,
-            sticker_events_tx,
-            store,
-            stickers,
-            selection.to_owned(),
-        )
-    })?;
+    if count == 1 {
+        let sticker = stickers.remove(0);
+        if let Err(err) = store
+            .touch_selection_lru(sticker.id, crate::utils::time::now_unix_millis())
+            .await
+        {
+            tracing::warn!(sticker_id = sticker.id, error = ?err, "Failed to update selection command LRU");
+        }
+        cx.update(|cx| {
+            StickerWindow::open_with_selection(
+                cx,
+                sticker_events_tx,
+                store,
+                sticker,
+                selection.to_owned(),
+            )
+        })?;
+    } else {
+        cx.update(|cx| {
+            crate::native::windows::selection::SelectionPopup::open(
+                cx,
+                sticker_events_tx,
+                store,
+                stickers,
+                selection.to_owned(),
+            )
+        })?;
+    }
     Ok(count)
 }

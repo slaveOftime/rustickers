@@ -1,6 +1,11 @@
 use crate::storage::paths::AppPaths;
 
 use anyhow::Context as _;
+use std::{
+    fs::OpenOptions,
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 use tracing_subscriber::prelude::*;
 
 pub struct LoggingGuards {
@@ -15,7 +20,7 @@ impl LoggingGuards {
         // Log level precedence:
         // 1) RUSTICKERS_LOG
         // 2) RUST_LOG
-        // 3) trace (debug) / info (release)
+        // 3) debug (development) / info (release)
         let (env_filter, filter_source, filter_parse_error) =
             match tracing_subscriber::EnvFilter::try_from_env("RUSTICKERS_LOG") {
                 Ok(filter) => (filter, "RUSTICKERS_LOG", None),
@@ -27,7 +32,7 @@ impl LoggingGuards {
                     Err(_) => {
                         let parse_error = rustickers_log_value.as_ref().map(|_| err.to_string());
                         let fallback = if cfg!(debug_assertions) {
-                            "trace"
+                            "debug"
                         } else {
                             "info"
                         };
@@ -56,7 +61,8 @@ impl LoggingGuards {
             .with_line_number(true)
             .with_file(true);
 
-        // Console logs are helpful in debug/dev; in Windows release GUI builds there may be no console.
+        // Debug builds use the console subsystem, so cargo run displays development logs.
+        // Windows release builds remain GUI applications and may have no attached console.
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(cfg!(debug_assertions))
@@ -75,7 +81,7 @@ impl LoggingGuards {
         tracing::subscriber::set_global_default(subscriber)
             .context("set global tracing subscriber")?;
 
-        install_panic_hook();
+        install_panic_hook(log_dir.clone());
 
         tracing::info!(
             app_version = env!("CARGO_PKG_VERSION"),
@@ -98,12 +104,56 @@ impl LoggingGuards {
     }
 }
 
-fn install_panic_hook() {
+fn install_panic_hook(log_dir: PathBuf) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // Avoid panicking in the panic hook.
-        let backtrace = std::backtrace::Backtrace::capture();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        write_panic_report(&log_dir, &info.to_string(), &backtrace);
         tracing::error!(panic = ?info, backtrace = ?backtrace, "panic");
         previous(info);
     }));
+}
+
+fn write_panic_report(log_dir: &Path, panic_message: &str, backtrace: &std::backtrace::Backtrace) {
+    let report = format!(
+        "\n=== {} ===\nprocess_id={}\npanic={}\nbacktrace:\n{}\n",
+        chrono::Local::now().to_rfc3339(),
+        std::process::id(),
+        panic_message,
+        backtrace
+    );
+    let path = log_dir.join("rustickers-crash.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(report.as_bytes());
+        let _ = file.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_report_is_written_synchronously() {
+        let directory = std::env::temp_dir().join(format!(
+            "rustickers-logging-test-{}-{}",
+            std::process::id(),
+            crate::utils::time::now_unix_millis()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+
+        write_panic_report(
+            &directory,
+            "test panic",
+            &std::backtrace::Backtrace::disabled(),
+        );
+
+        let crash_log = directory.join("rustickers-crash.log");
+        let contents = std::fs::read_to_string(&crash_log).unwrap();
+        assert!(contents.contains("test panic"));
+        assert!(contents.contains("process_id="));
+
+        std::fs::remove_file(crash_log).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
