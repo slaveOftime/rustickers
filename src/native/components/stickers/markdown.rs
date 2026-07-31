@@ -297,7 +297,7 @@ impl super::Sticker for MarkdownSticker {
                     })),
             );
         }
-        
+
         return Some(controls.into_any_element());
     }
 }

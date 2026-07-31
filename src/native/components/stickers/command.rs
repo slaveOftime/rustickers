@@ -49,6 +49,7 @@ pub struct CommandSticker {
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
 
+    title: Entity<InputState>,
     command: Entity<InputState>,
     environments: Entity<InputState>,
     working_dir: Entity<InputState>,
@@ -84,6 +85,7 @@ impl CommandSticker {
         id: i64,
         color: StickerColor,
         store: ArcStickerStore,
+        title: &str,
         content: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -94,6 +96,12 @@ impl CommandSticker {
         let command_value = cmd.command;
         let envs_value = cmd.environments;
         let workdir_value = cmd.working_dir;
+
+        let title = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(title)
+                .placeholder("Optional title")
+        });
 
         let command = cx.new(|cx| {
             InputState::new(window, cx)
@@ -182,6 +190,7 @@ impl CommandSticker {
             store,
             sticker_events_tx,
 
+            title,
             command,
             environments,
             working_dir,
@@ -250,7 +259,7 @@ impl CommandSticker {
 
     fn save_config(&mut self, cx: &mut Context<Self>) -> bool {
         let content = self.build_content(cx);
-        let title = content.command.trim().to_string();
+        let title = self.title.read(cx).value().trim().to_string();
         let json = match serde_json::to_string(&content) {
             Ok(json) => json,
             Err(err) => {
@@ -726,6 +735,7 @@ impl CommandSticker {
 
     fn form(&mut self, cx: &mut Context<Self>) -> AnyElement {
         v_form()
+            .child(field().label("Title").child(Input::new(&self.title)))
             .child(field().label("Command").child(Input::new(&self.command)))
             .child(
                 field().label("Render output as").child(

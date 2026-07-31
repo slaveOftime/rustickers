@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
+    Anchor, AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
     KeystrokeEvent, MouseButton, Render, Rgba, Subscription, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, rgba, size,
     transparent_black,
@@ -45,7 +45,7 @@ use windows::Win32::{
     },
 };
 
-use crate::model::content::FileStickerContent;
+use crate::model::content::{CommandContent, FileStickerContent};
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
     IconName,
@@ -682,6 +682,7 @@ impl StickerWindow {
                     id,
                     color,
                     store,
+                    detail.title.as_str(),
                     content,
                     window,
                     cx,
@@ -844,11 +845,23 @@ impl StickerWindow {
     }
 
     fn navigate_selection(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(carousel) = self.selection_carousel.clone() else {
+        let Some(carousel) = self.selection_carousel.as_ref() else {
             return;
         };
         let count = carousel.stickers.len();
         if count <= 1 {
+            return;
+        }
+
+        let next_index = (carousel.index as isize + offset).rem_euclid(count as isize) as usize;
+        self.select_selection(next_index, window, cx);
+    }
+
+    fn select_selection(&mut self, next_index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(carousel) = self.selection_carousel.clone() else {
+            return;
+        };
+        if next_index >= carousel.stickers.len() || next_index == carousel.index {
             return;
         }
 
@@ -862,7 +875,6 @@ impl StickerWindow {
         current.height = bounds.height;
         current.display_id = bounds.display_id;
 
-        let next_index = (carousel.index as isize + offset).rem_euclid(count as isize) as usize;
         let next_id = stickers[next_index].id;
         let next_carousel = SelectionCarousel {
             stickers: Arc::new(stickers),
@@ -980,6 +992,7 @@ impl StickerWindow {
 
     fn selection_navigation_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let carousel = self.selection_carousel.as_ref().unwrap();
+        let root_entity = cx.entity();
         h_flex()
             .items_center()
             .justify_center()
@@ -1010,6 +1023,36 @@ impl StickerWindow {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.navigate_selection(1, window, cx);
                     })),
+            )
+            .child(
+                Button::new(("selection-menu", self.open_id as u64))
+                    .icon(IconName::Folder)
+                    .bg(rgba(0x000000))
+                    .border_0()
+                    .cursor_pointer()
+                    .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, window, cx| {
+                        let Some(carousel) = root_entity.read(cx).selection_carousel.clone() else {
+                            return menu;
+                        };
+
+                        carousel
+                            .stickers
+                            .iter()
+                            .enumerate()
+                            .fold(menu, |menu, (index, sticker)| {
+                                let root_entity = root_entity.clone();
+                                menu.item(
+                                    PopupMenuItem::new(selection_sticker_label(sticker))
+                                        .checked(index == carousel.index)
+                                        .on_click(window.listener_for(
+                                            &root_entity,
+                                            move |this, _, window, cx| {
+                                                this.select_selection(index, window, cx);
+                                            },
+                                        )),
+                                )
+                            })
+                    }),
             )
             .into_any_element()
     }
@@ -1256,6 +1299,27 @@ fn source_title(source: &str) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string())
         .unwrap_or_else(|| source.to_string())
+}
+
+fn selection_sticker_label(sticker: &StickerDetail) -> String {
+    let title = sticker.title.trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
+
+    let command = serde_json::from_str::<CommandContent>(&sticker.content)
+        .map(|content| content.command)
+        .unwrap_or_default();
+    let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if command.is_empty() {
+        return "Untitled command".to_string();
+    }
+
+    let mut label: String = command.chars().take(60).collect();
+    if command.chars().count() > 60 {
+        label.push('…');
+    }
+    label
 }
 
 fn clipboard_preview_source() -> Option<String> {
