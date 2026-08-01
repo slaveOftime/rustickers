@@ -7,7 +7,7 @@ use gpui::{
     transparent_black,
 };
 use gpui_component::{
-    ActiveTheme, Root,
+    ActiveTheme, Icon, Root,
     button::Button,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -114,7 +114,7 @@ impl SelectionPopup {
         stickers: Vec<StickerDetail>,
         selection: String,
     ) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter commands…"));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers ..."));
         let filtered = (0..stickers.len()).collect();
 
         cx.subscribe_in(
@@ -278,19 +278,18 @@ impl SelectionPopup {
             .w_full()
             .px_3()
             .py_2()
-            .rounded_md()
             .cursor_pointer()
             .when(selected, |row| row.bg(rgba(0x3b82f655)))
             .hover(|row| row.bg(rgba(0xffffff12)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
             }))
-            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+            .child(div().child(title))
             .when(!command.is_empty(), |row| {
                 row.child(
                     div()
                         .text_sm()
-                        .text_color(rgba(0xffffff99))
+                        .opacity(0.7)
                         .overflow_hidden()
                         .flex_wrap()
                         .child(command),
@@ -318,7 +317,15 @@ impl Render for SelectionPopup {
                     .items_center()
                     .pb_2()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(div().flex_1().pl_2().text_sm().child("Choose a sticker"))
+                    .child(
+                        Input::new(&self.query)
+                            .cleanable(true)
+                            .border_0()
+                            .w(px(200.0))
+                            .tab_index(0)
+                            .prefix(Icon::new(IconName::Search)),
+                    )
+                    .child(div().flex_1())
                     .child(
                         Button::new("close-selection-popup")
                             .icon(IconName::Close)
@@ -327,24 +334,14 @@ impl Render for SelectionPopup {
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     ),
             )
-            .child(div().px_2().pb_2().child(Input::new(&self.query)))
-            .child(
-                h_flex()
-                    .px_2()
-                    .pb_2()
-                    .text_sm()
-                    .text_color(rgba(0xffffff88))
-                    .child(format!(
-                        "{visible_count} matches · ↑/↓ select · Enter open · Esc close"
-                    )),
-            )
+            .child(h_flex().px_3().pb_2().text_sm().opacity(0.7).child(format!(
+                "{visible_count} matches · ↑/↓ select · Enter open · Esc close"
+            )))
             .child(
                 v_flex()
                     .id("selection-popup-list")
                     .flex_1()
                     .min_h_0()
-                    .px_2()
-                    .pb_2()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
