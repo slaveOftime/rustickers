@@ -5,7 +5,11 @@ use rdev::{EventType, Key, simulate};
 use std::{thread, time::Duration};
 
 /// Copy and read the current text selection from the active application.
-pub fn capture_selection() -> anyhow::Result<String> {
+///
+/// Returns `Ok(None)` when the active application has no direct text
+/// selection. The previous clipboard content is never used as a fallback,
+/// callers are expected to ask the user for the text instead.
+pub fn capture_selection() -> anyhow::Result<Option<String>> {
     let mut clipboard = arboard::Clipboard::new().context("failed to open system clipboard")?;
     let previous_text = clipboard.get_text().ok();
     let marker = format!(
@@ -13,10 +17,9 @@ pub fn capture_selection() -> anyhow::Result<String> {
         crate::utils::time::now_unix_millis()
     );
     if let Err(err) = clipboard.set_text(marker.clone()) {
-        return previous_clipboard_or_error(
-            previous_text,
-            format!("failed to prepare clipboard for selection capture: {err}"),
-        );
+        return Err(anyhow::anyhow!(
+            "failed to prepare clipboard for selection capture: {err}"
+        ));
     }
 
     #[cfg(target_os = "macos")]
@@ -30,10 +33,7 @@ pub fn capture_selection() -> anyhow::Result<String> {
     let _ = simulate(&EventType::KeyRelease(primary));
     if let Err(err) = copy_result {
         restore_clipboard(&mut clipboard, previous_text.as_deref());
-        return previous_clipboard_or_error(
-            previous_text,
-            format!("failed to copy selected text: {err:?}"),
-        );
+        return Err(anyhow::anyhow!("failed to copy selected text: {err:?}"));
     }
 
     let mut text = None;
@@ -48,24 +48,10 @@ pub fn capture_selection() -> anyhow::Result<String> {
     }
 
     restore_clipboard(&mut clipboard, previous_text.as_deref());
-    match text {
-        Some(text) if !text.trim().is_empty() => Ok(text),
-        Some(_) => previous_clipboard_or_error(previous_text, "selected text is empty"),
-        None => previous_clipboard_or_error(
-            previous_text,
-            "no text is selected in the active application",
-        ),
-    }
-}
-
-fn previous_clipboard_or_error(
-    previous_text: Option<String>,
-    error: impl Into<String>,
-) -> anyhow::Result<String> {
-    match previous_text {
-        Some(text) if !text.trim().is_empty() => Ok(text),
-        _ => Err(anyhow::anyhow!(error.into())),
-    }
+    Ok(match text {
+        Some(text) if !text.trim().is_empty() => Some(text),
+        _ => None,
+    })
 }
 
 fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_text: Option<&str>) {

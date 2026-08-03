@@ -113,10 +113,17 @@ pub fn run_native(
                         }
                         crate::ipc::IpcEvent::TriggerSelectionToCommand => {
                             if let Some(store) = store_handle_clone.get() {
-                                match crate::native::selection::capture_selection() {
-                                    Ok(selection) => {
-                                        let store = store.clone();
-                                        let tx = sticker_events_tx_for_ipc.clone();
+                                let store = store.clone();
+                                let tx = sticker_events_tx_for_ipc.clone();
+                                let selection = match crate::native::selection::capture_selection() {
+                                    Ok(selection) => selection,
+                                    Err(err) => {
+                                        tracing::warn!(error = ?err, "Failed to capture text selection");
+                                        None
+                                    }
+                                };
+                                match selection {
+                                    Some(selection) => {
                                         cx.spawn(async move |cx| {
                                             match open_selection_command(cx, tx, store, &selection).await {
                                                 Ok(count) => {
@@ -128,8 +135,19 @@ pub fn run_native(
                                             }
                                         }).detach();
                                     }
-                                    Err(err) => {
-                                        tracing::warn!(error = ?err, "Failed to capture clipboard selection");
+                                    // No direct selection: ask the user to type the text instead
+                                    // of falling back to whatever is in the clipboard.
+                                    None => {
+                                        tracing::info!("No text selection captured, asking for manual input");
+                                        let _ = cx.update(|cx| {
+                                            if let Err(err) = crate::native::windows::selection::SelectionPopup::open_for_input(
+                                                cx,
+                                                tx,
+                                                store,
+                                            ) {
+                                                tracing::warn!(error = ?err, "Failed to open selection input popup");
+                                            }
+                                        });
                                     }
                                 }
                             }
@@ -191,13 +209,18 @@ pub fn run_native(
     });
 }
 
-/// Open the only eligible selection command, or show a chooser when several match.
-async fn open_selection_command(
-    cx: &mut gpui::AsyncApp,
-    sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
-    store: ArcStickerStore,
-    selection: &str,
-) -> anyhow::Result<usize> {
+/// What to do with the command stickers eligible for a selection.
+pub(crate) enum SelectionCommandTarget {
+    /// Only one sticker is eligible, it can be run right away.
+    Single(crate::model::sticker::StickerDetail),
+    /// Several stickers are eligible, the user has to pick one.
+    Choose(Vec<crate::model::sticker::StickerDetail>),
+}
+
+/// Load the command stickers that accept a selection, in LRU order.
+pub(crate) async fn resolve_selection_command(
+    store: &ArcStickerStore,
+) -> anyhow::Result<SelectionCommandTarget> {
     let mut stickers = store.get_accept_selection_stickers().await?;
     if stickers.is_empty() {
         return Err(anyhow::anyhow!(
@@ -205,40 +228,61 @@ async fn open_selection_command(
         ));
     }
 
-    tracing::debug!(
-        count = stickers.len(),
-        selection_len = selection.len(),
-        "Opening selection command chooser"
-    );
-
-    let count = stickers.len();
-    if count == 1 {
-        let sticker = stickers.remove(0);
-        if let Err(err) = store
-            .touch_selection_lru(sticker.id, crate::utils::time::now_unix_millis())
-            .await
-        {
-            tracing::warn!(sticker_id = sticker.id, error = ?err, "Failed to update selection command LRU");
-        }
-        cx.update(|cx| {
-            StickerWindow::open_with_selection(
-                cx,
-                sticker_events_tx,
-                store,
-                sticker,
-                selection.to_owned(),
-            )
-        })?;
+    Ok(if stickers.len() == 1 {
+        SelectionCommandTarget::Single(stickers.remove(0))
     } else {
-        cx.update(|cx| {
-            crate::native::windows::selection::SelectionPopup::open(
-                cx,
-                sticker_events_tx,
-                store,
-                stickers,
-                selection.to_owned(),
-            )
-        })?;
+        SelectionCommandTarget::Choose(stickers)
+    })
+}
+
+/// Open the only eligible selection command, or show a chooser when several match.
+async fn open_selection_command(
+    cx: &mut gpui::AsyncApp,
+    sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+    store: ArcStickerStore,
+    selection: &str,
+) -> anyhow::Result<usize> {
+    match resolve_selection_command(&store).await? {
+        SelectionCommandTarget::Single(sticker) => {
+            tracing::debug!(
+                sticker_id = sticker.id,
+                selection_len = selection.len(),
+                "Opening the only eligible selection command"
+            );
+            if let Err(err) = store
+                .touch_selection_lru(sticker.id, crate::utils::time::now_unix_millis())
+                .await
+            {
+                tracing::warn!(sticker_id = sticker.id, error = ?err, "Failed to update selection command LRU");
+            }
+            cx.update(|cx| {
+                StickerWindow::open_with_selection(
+                    cx,
+                    sticker_events_tx,
+                    store,
+                    sticker,
+                    selection.to_owned(),
+                )
+            })?;
+            Ok(1)
+        }
+        SelectionCommandTarget::Choose(stickers) => {
+            let count = stickers.len();
+            tracing::debug!(
+                count,
+                selection_len = selection.len(),
+                "Opening selection command chooser"
+            );
+            cx.update(|cx| {
+                crate::native::windows::selection::SelectionPopup::open(
+                    cx,
+                    sticker_events_tx,
+                    store,
+                    stickers,
+                    selection.to_owned(),
+                )
+            })?;
+            Ok(count)
+        }
     }
-    Ok(count)
 }
