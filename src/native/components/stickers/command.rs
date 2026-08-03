@@ -41,6 +41,18 @@ use crate::model::sticker::StickerColor;
 use crate::storage::ArcStickerStore;
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
+const SELECTION_PLACEHOLDER: &str = "{{RUSTICKERS_SELECTION}}";
+
+fn replace_selection_args(args: &mut [String], selection: Option<&str>) {
+    let Some(selection) = selection else {
+        return;
+    };
+    for arg in args {
+        if arg.contains(SELECTION_PLACEHOLDER) {
+            *arg = arg.replace(SELECTION_PLACEHOLDER, selection);
+        }
+    }
+}
 
 pub struct CommandSticker {
     id: i64,
@@ -431,6 +443,7 @@ impl CommandSticker {
         let workdir = content.working_dir.trim();
 
         let program = args.remove(0);
+        replace_selection_args(&mut args, self.selection.as_deref());
         let Ok(path) = which::which(&program) else {
             self.error = Some(format!("Command not found: {}", program));
             cx.notify();
@@ -1126,6 +1139,36 @@ impl Render for CommandSticker {
             )
         })
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replaces_selection_placeholder_in_arguments() {
+        let mut args = vec![
+            "--input={{RUSTICKERS_SELECTION}}".to_string(),
+            "{{RUSTICKERS_SELECTION}}".to_string(),
+            "unchanged".to_string(),
+        ];
+
+        replace_selection_args(&mut args, Some("selected text"));
+
+        assert_eq!(
+            args,
+            ["--input=selected text", "selected text", "unchanged"]
+        );
+    }
+
+    #[test]
+    fn leaves_placeholder_without_selection() {
+        let mut args = vec![SELECTION_PLACEHOLDER.to_string()];
+
+        replace_selection_args(&mut args, None);
+
+        assert_eq!(args, [SELECTION_PLACEHOLDER]);
     }
 }
 
