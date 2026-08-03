@@ -51,6 +51,10 @@ pub struct CommandContent {
     pub started_at: Option<i64>,
     #[serde(default)]
     pub accept_selection: bool,
+    #[serde(default)]
+    pub auto_close: bool,
+    #[serde(default)]
+    pub run_without_window: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +84,8 @@ impl Default for CommandContent {
             padding: None,
             started_at: None,
             accept_selection: false,
+            auto_close: false,
+            run_without_window: false,
         }
     }
 }

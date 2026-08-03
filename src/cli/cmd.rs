@@ -29,6 +29,8 @@ pub fn run(
         padding: None,
         started_at: None,
         accept_selection,
+        auto_close: false,
+        run_without_window: false,
     };
 
     let content_json = serde_json::to_string(&content)?;

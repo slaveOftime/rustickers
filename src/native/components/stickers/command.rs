@@ -82,14 +82,29 @@ pub struct CommandSticker {
     next_scheduled_at: Option<String>,
     error: Option<String>,
     accept_selection: bool,
+    auto_close: bool,
+    run_without_window: bool,
+    /// Opened from the sticker list while `auto_close`/`run_without_window` is on: show the
+    /// settings view instead of restoring the previous run.
+    open_in_settings: bool,
+    /// The host window was created hidden, it is only revealed when the command fails.
+    window_hidden: bool,
     selection: Option<String>,
 }
 
 enum CmdEvent {
     Output(String),
     Error(String),
-    Done,
+    Done { success: bool },
 }
+
+/// What the sticker asks its host window to do.
+pub enum CommandStickerWindowRequest {
+    Close,
+    Show,
+}
+
+impl gpui::EventEmitter<CommandStickerWindowRequest> for CommandSticker {}
 
 impl CommandSticker {
     pub fn new(
@@ -102,8 +117,11 @@ impl CommandSticker {
         cx: &mut Context<Self>,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
         selection: Option<String>,
+        open_in_settings: bool,
+        window_hidden: bool,
     ) -> Self {
         let cmd = serde_json::from_str::<CommandContent>(content).unwrap_or_default();
+        let open_in_settings = open_in_settings && (cmd.auto_close || cmd.run_without_window);
         let command_value = cmd.command;
         let envs_value = cmd.environments;
         let workdir_value = cmd.working_dir;
@@ -143,14 +161,14 @@ impl CommandSticker {
         let cron_entity = cx.new(|cx| InputState::new(window, cx).default_value(cron));
 
         let result_html_entity = match &cmd.result {
-            CommandResult::Html(Some(x)) => {
+            CommandResult::Html(Some(x)) if !open_in_settings => {
                 Some(cx.new(|cx| SimpleWebView::new(x.as_str(), window, cx)))
             }
             _ => None,
         };
 
         let result_file_entity = match &cmd.result {
-            CommandResult::Source(Some(x)) => Some(Self::build_file_content(
+            CommandResult::Source(Some(x)) if !open_in_settings => Some(Self::build_file_content(
                 id,
                 x,
                 color,
@@ -182,7 +200,9 @@ impl CommandSticker {
         window
             .spawn(cx, async move |cx| {
                 let _ = cx.update_window_entity(&root_entity, |this, window, cx| {
-                    if this.selection.is_some() {
+                    if this.open_in_settings {
+                        // Opened to be edited: don't auto run and don't restore the last result.
+                    } else if this.selection.is_some() {
                         this.started_at = Some(crate::utils::time::now_unix_millis());
                         this.run(window, cx);
                     } else if this.started_at.is_some()
@@ -190,6 +210,9 @@ impl CommandSticker {
                         && !this.is_schedule_active()
                     {
                         this.start(window, cx, true);
+                    } else {
+                        // Nothing is going to run, so never leave an invisible window behind.
+                        this.reveal_window(cx);
                     }
                 });
             })
@@ -217,6 +240,10 @@ impl CommandSticker {
             padding,
             started_at: cmd.started_at,
             accept_selection: cmd.accept_selection,
+            auto_close: cmd.auto_close,
+            run_without_window: cmd.run_without_window,
+            open_in_settings,
+            window_hidden,
             selection,
 
             process: None,
@@ -240,6 +267,8 @@ impl CommandSticker {
             padding: Some(self.padding.read(cx).value().start() as u8),
             started_at: self.started_at,
             accept_selection: self.accept_selection,
+            auto_close: self.auto_close,
+            run_without_window: self.run_without_window,
         }
     }
 
@@ -319,7 +348,22 @@ impl CommandSticker {
         self.schedule_cancel.is_some()
     }
 
+    /// Report a failure, and reveal the window when the command is running hidden.
+    fn fail(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.error = Some(message.into());
+        self.reveal_window(cx);
+        cx.notify();
+    }
+
+    fn reveal_window(&mut self, cx: &mut Context<Self>) {
+        if self.window_hidden {
+            self.window_hidden = false;
+            cx.emit(CommandStickerWindowRequest::Show);
+        }
+    }
+
     fn start(&mut self, window: &Window, cx: &mut Context<Self>, is_restore: bool) {
+        self.open_in_settings = false;
         self.started_at = Some(crate::utils::time::now_unix_millis());
 
         let _ = self.save_config(cx);
@@ -335,16 +379,14 @@ impl CommandSticker {
             }
             Some(Scheduler::Cron(expr)) => {
                 if expr.is_empty() {
-                    self.error = Some("Cron expression cannot be empty".to_string());
-                    cx.notify();
+                    self.fail("Cron expression cannot be empty", cx);
                     return;
                 }
 
                 let schedule = match cron::Schedule::from_str(&expr) {
                     Ok(s) => s,
                     Err(err) => {
-                        self.error = Some(format!("Invalid cron expression: {err}"));
-                        cx.notify();
+                        self.fail(format!("Invalid cron expression: {err}"), cx);
                         return;
                     }
                 };
@@ -428,15 +470,13 @@ impl CommandSticker {
     fn run(&mut self, window: &Window, cx: &mut Context<Self>) {
         let content = self.build_content(cx);
         if content.command.trim().is_empty() {
-            self.error = Some("Command cannot be empty".to_string());
-            cx.notify();
+            self.fail("Command cannot be empty", cx);
             return;
         }
 
         let mut args = winsplit::split(&content.command);
         if args.is_empty() {
-            self.error = Some("Command cannot be empty".to_string());
-            cx.notify();
+            self.fail("Command cannot be empty", cx);
             return;
         }
 
@@ -445,8 +485,7 @@ impl CommandSticker {
         let program = args.remove(0);
         replace_selection_args(&mut args, self.selection.as_deref());
         let Ok(path) = which::which(&program) else {
-            self.error = Some(format!("Command not found: {}", program));
-            cx.notify();
+            self.fail(format!("Command not found: {}", program), cx);
             return;
         };
 
@@ -487,8 +526,7 @@ impl CommandSticker {
         let process = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
             Ok(c) => c,
             Err(err) => {
-                self.error = Some(format!("Failed to start command: {err}"));
-                cx.notify();
+                self.fail(format!("Failed to start command: {err}"), cx);
                 return;
             }
         };
@@ -534,24 +572,24 @@ impl CommandSticker {
 
             // IMPORTANT: do not hold the mutex while waiting. If we call `wait()` while
             // holding the lock, `stop()` cannot lock the child to kill it.
-            loop {
-                let is_done = match process.lock() {
+            let success = loop {
+                let done = match process.lock() {
                     Ok(mut child) => match child.try_wait() {
-                        Ok(Some(_status)) => true,
-                        Ok(None) => false,
-                        Err(_err) => true,
+                        Ok(Some(status)) => Some(status.success()),
+                        Ok(None) => None,
+                        Err(_err) => Some(false),
                     },
-                    Err(_err) => true,
+                    Err(_err) => Some(false),
                 };
 
-                if is_done {
-                    break;
+                if let Some(success) = done {
+                    break success;
                 }
 
                 thread::sleep(Duration::from_millis(50));
-            }
+            };
 
-            let _ = tx.send(CmdEvent::Done);
+            let _ = tx.send(CmdEvent::Done { success });
             let _ = out_handle.join();
             let _ = err_handle.join();
         });
@@ -594,6 +632,7 @@ impl CommandSticker {
                     .await;
 
                 let result_temp = Arc::new(RwLock::new(String::new()));
+                let mut succeeded = false;
                 loop {
                     let result_temp = result_temp.clone();
                     match rx.try_recv() {
@@ -626,7 +665,8 @@ impl CommandSticker {
                                     },
                                 );
                             }
-                            CmdEvent::Done => {
+                            CmdEvent::Done { success } => {
+                                succeeded = success;
                                 let _ = window.update_entity(
                                     &entity,
                                     move |this: &mut CommandSticker, cx| match this.result {
@@ -663,6 +703,7 @@ impl CommandSticker {
                 let _ = window.update_window_entity(
                     &entity,
                     move |this: &mut CommandSticker, window, cx| {
+                        let stopped_by_user = this.stopping;
                         this.process = None;
                         this.stopping = false;
                         this.result_html_entity = match &this.result {
@@ -692,10 +733,29 @@ impl CommandSticker {
                         };
                         this.save_config(cx);
                         cx.notify();
+
+                        if this.window_hidden {
+                            // Running without a window: only reveal it when the command failed,
+                            // otherwise dispose of the hidden window (unless it keeps running on
+                            // a schedule).
+                            if succeeded || stopped_by_user {
+                                if !this.is_schedule_active() {
+                                    cx.emit(CommandStickerWindowRequest::Close);
+                                }
+                            } else {
+                                this.fail("Command failed, check the output above".to_string(), cx);
+                            }
+                        } else if this.should_auto_close(succeeded, stopped_by_user) {
+                            cx.emit(CommandStickerWindowRequest::Close);
+                        }
                     },
                 );
             })
             .detach();
+    }
+
+    fn should_auto_close(&self, succeeded: bool, stopped_by_user: bool) -> bool {
+        self.auto_close && succeeded && !stopped_by_user && !self.is_schedule_active()
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -729,6 +789,10 @@ impl CommandSticker {
     }
 
     fn show_editing_view(&self) -> bool {
+        if self.open_in_settings && self.process.is_none() {
+            return true;
+        }
+
         let has_result = match &self.result {
             CommandResult::Text(Some(_))
             | CommandResult::Markdown(Some(_))
@@ -855,6 +919,25 @@ impl CommandSticker {
                         .checked(self.accept_selection)
                         .on_click(cx.listener(|this, _, _, _| {
                             this.accept_selection = !this.accept_selection
+                        })),
+                ),
+            )
+            .child(
+                field().label("Auto close").child(
+                    Switch::new("auto_close")
+                        .label("close the sticker after the command succeeded")
+                        .small()
+                        .on_click(cx.listener(|this, _, _, _| this.auto_close = !this.auto_close)),
+                ),
+            )
+            .child(
+                field().label("Run without window").child(
+                    Switch::new("run_without_window")
+                        .label("stay hidden while running, show only when it failed")
+                        .small()
+                        .checked(self.run_without_window)
+                        .on_click(cx.listener(|this, _, _, _| {
+                            this.run_without_window = !this.run_without_window
                         })),
                 ),
             )
@@ -1104,10 +1187,9 @@ impl Render for CommandSticker {
             root = root.child(
                 div()
                     .p_2()
-                    .h_full()
-                    .flex_shrink(1.0)
-                    .overflow_hidden()
-                    .child(v_flex().overflow_y_scrollbar().child(self.form(cx))),
+                    .size_full()
+                    .overflow_scrollbar()
+                    .child(self.form(cx)),
             );
         } else {
             root = root.child(

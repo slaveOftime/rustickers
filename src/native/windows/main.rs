@@ -511,8 +511,16 @@ impl MainWindow {
                         let store = this.store.clone();
                         let sticker_events_tx = this.sticker_events_sender.clone();
                         cx.spawn(async move |_, cx| {
-                            let _ =
-                                StickerWindow::open_async(cx, sticker_events_tx, store, id).await;
+                            // Opened from the list: command stickers with auto close start in
+                            // their settings view instead of running again.
+                            let _ = StickerWindow::open_async_with_options(
+                                cx,
+                                sticker_events_tx,
+                                store,
+                                id,
+                                true,
+                            )
+                            .await;
                         })
                         .detach();
                     }

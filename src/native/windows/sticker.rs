@@ -44,13 +44,17 @@ use windows::Win32::{
     },
 };
 
-use crate::model::content::FileStickerContent;
+use crate::model::content::{CommandContent, FileStickerContent};
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
 use crate::native::components::{
     IconName,
     stickers::{
-        command::CommandSticker, file::FileSticker, markdown::MarkdownSticker, paint::PaintSticker,
-        timer::TimerSticker, *,
+        command::{CommandSticker, CommandStickerWindowRequest},
+        file::FileSticker,
+        markdown::MarkdownSticker,
+        paint::PaintSticker,
+        timer::TimerSticker,
+        *,
     },
 };
 use crate::native::file_manager;
@@ -71,6 +75,26 @@ struct WindowState {
     height: i32,
     display_id: Option<u32>,
     scale_factor: f32,
+}
+
+/// Extra knobs used when opening a sticker window.
+#[derive(Default)]
+struct OpenOptions {
+    focus: bool,
+    selection: Option<String>,
+    open_id: i64,
+    selection_run: bool,
+    /// Ask the sticker view to start in its settings view instead of running/restoring.
+    open_in_settings: bool,
+    /// Create the window without showing it, the sticker view can reveal it later.
+    hidden: bool,
+}
+
+fn command_content(detail: &StickerDetail) -> Option<CommandContent> {
+    if !matches!(detail.sticker_type, StickerType::Command) {
+        return None;
+    }
+    serde_json::from_str::<CommandContent>(&detail.content).ok()
 }
 
 pub struct StickerWindow {
@@ -204,6 +228,19 @@ impl StickerWindow {
         store: ArcStickerStore,
         id: i64,
     ) -> anyhow::Result<()> {
+        Self::open_async_with_options(cx, sticker_events_tx, store, id, false).await
+    }
+
+    /// `open_in_settings` asks the sticker view to start in its editing/settings view instead of
+    /// auto running or restoring the previous result. It is a hint, each sticker type decides
+    /// whether it applies.
+    pub async fn open_async_with_options(
+        cx: &mut AsyncApp,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+        id: i64,
+        open_in_settings: bool,
+    ) -> anyhow::Result<()> {
         if let Ok(open_stickers) = OPEN_STICKERS.read() {
             if let Some((_, handle)) = open_stickers.iter().find(|(open_id, _)| *open_id == id) {
                 let _ = cx.update(|cx| {
@@ -230,7 +267,16 @@ impl StickerWindow {
             ));
         }
 
-        cx.update(|cx| Self::open_with_detail(cx, sticker_events_tx, store, detail, false))
+        cx.update(|cx| {
+            Self::open_with_detail_and_options(
+                cx,
+                sticker_events_tx,
+                store,
+                detail,
+                false,
+                open_in_settings,
+            )
+        })
     }
 
     pub fn open_file_preview(
@@ -351,17 +397,29 @@ impl StickerWindow {
         detail: StickerDetail,
         focus: bool,
     ) -> anyhow::Result<()> {
-        let open_id = detail.id;
-        Self::open_with_detail_and_selection(
-            cx,
-            sticker_events_tx,
-            store,
-            detail,
+        Self::open_with_detail_and_options(cx, sticker_events_tx, store, detail, focus, false)
+    }
+
+    pub fn open_with_detail_and_options(
+        cx: &mut App,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+        detail: StickerDetail,
+        focus: bool,
+        open_in_settings: bool,
+    ) -> anyhow::Result<()> {
+        // "Run without window" commands stay hidden unless they fail, the only visible way to
+        // open them is from the sticker list, which opens them in their settings view.
+        let hidden =
+            !open_in_settings && command_content(&detail).is_some_and(|cmd| cmd.run_without_window);
+        let options = OpenOptions {
             focus,
-            None,
-            open_id,
-            false,
-        )
+            open_id: detail.id,
+            open_in_settings,
+            hidden,
+            ..Default::default()
+        };
+        Self::open_with_options(cx, sticker_events_tx, store, detail, options)
     }
 
     pub(crate) fn open_with_selection(
@@ -399,29 +457,35 @@ impl StickerWindow {
         }
 
         detail.top_most = true;
-        let open_id = NEXT_SELECTION_RUN_OPEN_ID.fetch_sub(1, Ordering::Relaxed);
-        Self::open_with_detail_and_selection(
-            cx,
-            sticker_events_tx,
-            store,
-            detail,
-            true,
-            Some(selection),
-            open_id,
-            true,
-        )
+        // "Run without window" commands run in a hidden window, it only shows itself when the
+        // command failed.
+        let hidden = command_content(&detail).is_some_and(|cmd| cmd.run_without_window);
+        let options = OpenOptions {
+            focus: !hidden,
+            selection: Some(selection),
+            open_id: NEXT_SELECTION_RUN_OPEN_ID.fetch_sub(1, Ordering::Relaxed),
+            selection_run: true,
+            open_in_settings: false,
+            hidden,
+        };
+        Self::open_with_options(cx, sticker_events_tx, store, detail, options)
     }
 
-    fn open_with_detail_and_selection(
+    fn open_with_options(
         cx: &mut App,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
         detail: StickerDetail,
-        focus: bool,
-        selection: Option<String>,
-        open_id: i64,
-        selection_run: bool,
+        options: OpenOptions,
     ) -> anyhow::Result<()> {
+        let OpenOptions {
+            focus,
+            selection,
+            open_id,
+            selection_run,
+            open_in_settings,
+            hidden,
+        } = options;
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             if !selection_run && open_id <= 0 {
                 if let Some(pos) = open_stickers
@@ -483,7 +547,8 @@ impl StickerWindow {
         // There is issue which gpui does not restore exactly with the given bounds especially on other displays
         let handle = cx.open_window(
             WindowOptions {
-                focus,
+                focus: focus && !hidden,
+                show: !hidden,
                 display_id,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
@@ -511,6 +576,8 @@ impl StickerWindow {
                         sticker_events_tx,
                         selection,
                         selection_run,
+                        open_in_settings,
+                        hidden,
                         window,
                         cx,
                     )
@@ -519,7 +586,7 @@ impl StickerWindow {
             },
         )?;
 
-        if focus {
+        if focus && !hidden {
             // Opening a window from the global-hotkey callback can happen while Rustickers is
             // inactive. Defer activation until GPUI has committed the new native window;
             // ordering it during the open_window callback is too early on macOS.
@@ -547,6 +614,8 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         selection: Option<String>,
         selection_run: bool,
+        open_in_settings: bool,
+        hidden: bool,
         window: &mut Window,
         cx: &mut Context<StickerWindow>,
     ) -> Self {
@@ -557,6 +626,8 @@ impl StickerWindow {
             &detail,
             &store,
             selection,
+            open_in_settings,
+            hidden,
             window,
             cx,
             sticker_events_tx.clone(),
@@ -630,6 +701,8 @@ impl StickerWindow {
         detail: &StickerDetail,
         store: &ArcStickerStore,
         selection: Option<String>,
+        open_in_settings: bool,
+        hidden: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -662,19 +735,40 @@ impl StickerWindow {
                     sticker_events_tx.clone(),
                 )
             }))),
-            StickerType::Command => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                CommandSticker::new(
-                    id,
-                    color,
-                    store,
-                    detail.title.as_str(),
-                    content,
+            StickerType::Command => {
+                let entity = cx.new(|cx| {
+                    CommandSticker::new(
+                        id,
+                        color,
+                        store,
+                        detail.title.as_str(),
+                        content,
+                        window,
+                        cx,
+                        sticker_events_tx.clone(),
+                        selection,
+                        open_in_settings,
+                        hidden,
+                    )
+                });
+
+                cx.subscribe_in(
+                    &entity,
                     window,
-                    cx,
-                    sticker_events_tx.clone(),
-                    selection,
+                    |this, _, event: &CommandStickerWindowRequest, window, cx| match event {
+                        CommandStickerWindowRequest::Close => this.close(window, cx),
+                        CommandStickerWindowRequest::Show => {
+                            #[cfg(target_os = "macos")]
+                            StickerWindow::configure_native_window(window, this.detail.top_most);
+                            window.refresh();
+                            window.activate_window();
+                        }
+                    },
                 )
-            }))),
+                .detach();
+
+                Box::new(StickerViewEntity::new(entity))
+            }
             StickerType::Paint => {
                 Box::new(StickerViewEntity::new(cx.new(|_| {
                     PaintSticker::new(id, color, store, content, sticker_events_tx.clone())
