@@ -285,11 +285,6 @@ impl SelectionPopup {
         }
 
         let text = self.input.read(cx).value().to_string();
-        if text.trim().is_empty() {
-            self.input_error = Some("Type some text first".to_string());
-            cx.notify();
-            return;
-        }
 
         self.resolving = true;
         self.input_error = None;
