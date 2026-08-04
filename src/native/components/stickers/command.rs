@@ -927,6 +927,7 @@ impl CommandSticker {
                     Switch::new("auto_close")
                         .label("close the sticker after the command succeeded")
                         .small()
+                        .checked(self.auto_close)
                         .on_click(cx.listener(|this, _, _, _| this.auto_close = !this.auto_close)),
                 ),
             )

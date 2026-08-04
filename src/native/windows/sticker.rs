@@ -669,19 +669,28 @@ impl StickerWindow {
                 .unwrap_or(true)
         });
 
-        if selection_run {
-            let entity = cx.weak_entity();
-            cx.intercept_keystrokes(move |event, window, cx| {
-                if event.keystroke.key == "escape" && window.is_window_active() {
-                    if let Some(entity) = entity.upgrade() {
-                        let _ = entity.update(cx, |this, cx| this.close(window, cx));
+        let entity = cx.weak_entity();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if event.keystroke.key != "escape" || !window.is_window_active() {
+                return;
+            }
+
+            let handled = entity.upgrade().is_some_and(|entity| {
+                entity.update(cx, |this, cx| {
+                    if !this.selection_run && this.view.id(cx) > 0 {
+                        return false;
                     }
-                    cx.stop_propagation();
-                    window.prevent_default();
-                }
-            })
-            .detach();
-        }
+
+                    this.close(window, cx);
+                    true
+                })
+            });
+            if handled {
+                cx.stop_propagation();
+                window.prevent_default();
+            }
+        })
+        .detach();
 
         Self {
             open_id,
