@@ -437,8 +437,8 @@ impl SelectionPopup {
             .px_3()
             .py_2()
             .cursor_pointer()
-            .when(selected, |row| row.bg(rgba(0xe5c236ff)))
-            .hover(|row| row.bg(rgba(0xffffff12)))
+            .when(selected, |row| row.bg(rgba(0xe5c23696)))
+            .hover(|row| row.bg(rgba(0xe5c23664)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
             }))
