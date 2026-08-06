@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock, mpsc};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, IntoElement, Render,
-    ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
+    Render, ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowKind, WindowOptions, black, div, prelude::*, px, rgba, size,
     transparent_black,
 };
@@ -240,6 +240,14 @@ impl SelectionPopup {
                     this.move_selection(1, cx);
                     true
                 }
+                "tab"
+                    if this.view == SelectionView::Choose
+                        && event.keystroke.modifiers.shift
+                        && this.query.read(cx).focus_handle(cx).is_focused(window) =>
+                {
+                    this.edit_selection(window, cx);
+                    true
+                }
                 "escape" => {
                     this.dismiss(cx);
                     true
@@ -355,6 +363,17 @@ impl SelectionPopup {
         self.filtered = filtered_sticker_indices(&self.stickers, query);
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0);
+        cx.notify();
+    }
+
+    fn edit_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.view = SelectionView::Input;
+        self.input_error = None;
+        let selection = self.selection.to_string();
+        self.input.update(cx, |input, cx| {
+            input.set_value(selection, window, cx);
+            input.focus(window, cx);
+        });
         cx.notify();
     }
 
