@@ -39,9 +39,9 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_EX_TOOLWINDOW,
-        WS_SYSMENU,
+        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
+        WS_EX_TOOLWINDOW, WS_SYSMENU,
     },
 };
 
@@ -61,10 +61,13 @@ use crate::native::components::{
 use crate::native::file_manager;
 use crate::native::windows::{
     EscapeDismissTarget, StickerWindowEvent, set_escape_dismiss_target_active,
+    transient_topmost::TransientTopmost,
 };
 use crate::storage::ArcStickerStore;
 
 const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
+#[cfg(target_os = "macos")]
+const NS_NORMAL_WINDOW_LEVEL: i32 = 0;
 
 static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new());
 const SELECTION_RUN_OPEN_ID_MIN: i64 = i64::MAX / 2;
@@ -113,6 +116,7 @@ pub struct StickerWindow {
     last_bounds_change_at: Option<Instant>,
     selection_run: bool,
     closing: bool,
+    transient_topmost: TransientTopmost,
     _window_activation_subscription: Subscription,
 }
 
@@ -153,20 +157,27 @@ impl StickerWindow {
                 }
 
                 let behavior = native_window.collectionBehavior();
+                let transient_behavior =
+                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
                 let mut behavior =
                     behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary;
                 if top_most {
-                    behavior |= NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
+                    behavior |= transient_behavior;
+                } else {
+                    behavior &= !transient_behavior;
                 }
                 native_window.setCollectionBehavior_(behavior);
+                native_window.setLevel_(if top_most {
+                    (NSMainMenuWindowLevel + 1) as _
+                } else {
+                    NS_NORMAL_WINDOW_LEVEL as _
+                });
 
                 if top_most {
                     // GPUI's floating level is only slightly above normal windows. Use the
                     // status-window level and explicitly order the preview to the front so it
                     // appears on the active Space without activating the whole application.
-                    native_window.setLevel_((NSMainMenuWindowLevel + 1) as _);
-
                     // The global hotkey fires while Finder (or another application) is active.
                     // AppKit may defer presentation of a newly created Metal window belonging to
                     // an inactive application until that application receives an event. Activate
@@ -212,17 +223,19 @@ impl StickerWindow {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
 
-            if top_most {
-                let _ = SetWindowPos(
-                    hwnd,
-                    Some(HWND_TOPMOST),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-            }
+            let _ = SetWindowPos(
+                hwnd,
+                Some(if top_most {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                }),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -571,6 +584,7 @@ impl StickerWindow {
         });
 
         let top_most = detail.top_most;
+        let transient_topmost = top_most && (selection_run || detail.id <= 0);
 
         // There is issue which gpui does not restore exactly with the given bounds especially on other displays
         let handle = cx.open_window(
@@ -582,7 +596,7 @@ impl StickerWindow {
                 window_min_size: Some(min_size.map(|x| px(x as f32))),
                 window_background: WindowBackgroundAppearance::Transparent,
                 is_resizable: true,
-                kind: if top_most {
+                kind: if top_most && !transient_topmost {
                     WindowKind::Floating
                 } else {
                     WindowKind::Normal
@@ -649,6 +663,10 @@ impl StickerWindow {
     ) -> Self {
         let title_val = detail.title.clone();
         let title = cx.new(|cx| InputState::new(window, cx).default_value(title_val));
+        let transient_topmost = TransientTopmost::new(
+            detail.top_most && (selection_run || detail.id <= 0),
+            !hidden,
+        );
 
         let mut view = Self::create_sticker_view(
             &detail,
@@ -698,9 +716,13 @@ impl StickerWindow {
                 .unwrap_or(true)
         });
 
+        let own_window_id = gpui::Window::window_handle(window).window_id();
         let entity = cx.weak_entity();
         cx.intercept_keystrokes(move |event, window, cx| {
-            if event.keystroke.key != "escape" || !window.is_window_active() {
+            if gpui::Window::window_handle(window).window_id() != own_window_id
+                || event.keystroke.key != "escape"
+                || !window.is_window_active()
+            {
                 return;
             }
 
@@ -724,11 +746,15 @@ impl StickerWindow {
         let escape_target = EscapeDismissTarget::Sticker(open_id);
         let window_activation_subscription =
             cx.observe_window_activation(window, move |this, window, cx| {
+                let active = window.is_window_active();
                 let closes_on_escape = this.selection_run || this.view.id(cx) <= 0;
-                set_escape_dismiss_target_active(
-                    escape_target,
-                    closes_on_escape && window.is_window_active(),
-                );
+                set_escape_dismiss_target_active(escape_target, closes_on_escape && active);
+                if this.transient_topmost.update_activation(active) {
+                    #[cfg(target_os = "macos")]
+                    StickerWindow::configure_native_window(window, false);
+                    #[cfg(target_os = "windows")]
+                    StickerWindow::configure_preview_window(window, false);
+                }
             });
 
         Self {
@@ -742,6 +768,7 @@ impl StickerWindow {
             selection_run,
             closing: false,
             error: None,
+            transient_topmost,
             _window_activation_subscription: window_activation_subscription,
         }
     }

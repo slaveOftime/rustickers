@@ -4,6 +4,7 @@ use std::sync::RwLock;
 pub mod main;
 pub mod selection;
 pub mod sticker;
+mod transient_topmost;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EscapeDismissTarget {

@@ -222,9 +222,10 @@ impl SelectionPopup {
         )
         .detach();
 
+        let own_window_id = window.window_handle().window_id();
         let entity = cx.weak_entity();
         let keystroke_subscription = cx.intercept_keystrokes(move |event, window, cx| {
-            if !window.is_window_active() {
+            if window.window_handle().window_id() != own_window_id || !window.is_window_active() {
                 return;
             }
             let Some(entity) = entity.upgrade() else {

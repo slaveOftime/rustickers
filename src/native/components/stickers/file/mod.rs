@@ -107,8 +107,12 @@ impl FileSticker {
     ) -> Self {
         if id <= 0 {
             window.activate_window();
+            let own_window_id = window.window_handle().window_id();
             cx.observe_keystrokes(move |this, event, window, cx| {
-                if !this.is_persisted() && event.keystroke.key == "escape" {
+                if window.window_handle().window_id() == own_window_id
+                    && !this.is_persisted()
+                    && event.keystroke.key == "escape"
+                {
                     if !StickerWindow::try_close(id, cx) {
                         window.remove_window();
                     }
