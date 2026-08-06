@@ -32,6 +32,7 @@ impl super::FileSticker {
             if let Some(language) = code_language.as_ref() {
                 state = state.code_editor(language);
             }
+            state.focus(window, cx);
             state
         }));
         self.error = None;
@@ -66,6 +67,14 @@ impl super::FileSticker {
                 self.error = Some(format!("Failed to save preview file: {err}"));
             }
         }
+        cx.notify();
+    }
+
+    pub(super) fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if self.preview_editor.take().is_none() {
+            return;
+        }
+        self.error = None;
         cx.notify();
     }
 }

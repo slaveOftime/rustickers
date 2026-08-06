@@ -1,8 +1,9 @@
 use gpui::{
-    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, Window, div, prelude::*, px, rgba,
+    Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, Window, div, prelude::*,
+    px, rgba,
 };
 use gpui_component::text::TextView;
-use gpui_component::{ActiveTheme, Disableable, Sizable, h_flex};
+use gpui_component::{ActiveTheme, Disableable, h_flex};
 use gpui_component::{
     button::Button,
     input::{Input, InputState},
@@ -25,6 +26,7 @@ pub struct MarkdownSticker {
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     editor: Entity<InputState>,
     editing: bool,
+    edit_snapshot: Option<String>,
     error: Option<String>,
     converting: bool,
     convert_error: Option<String>,
@@ -67,13 +69,15 @@ impl MarkdownSticker {
             lock_form.focus_password(window, cx);
         }
 
+        let editing = content_visible && content.is_empty();
         Self {
             id,
             color,
             store,
             sticker_events_tx,
             editor,
-            editing: content_visible && content.is_empty(),
+            editing,
+            edit_snapshot: editing.then(String::new),
             error: lock_error,
             converting: false,
             convert_error: None,
@@ -124,6 +128,7 @@ impl MarkdownSticker {
 
             let _ = entity.update(cx, |this, cx| {
                 this.editing = false;
+                this.edit_snapshot = None;
                 this.error = None;
                 cx.notify();
             });
@@ -131,6 +136,26 @@ impl MarkdownSticker {
         .detach();
 
         true
+    }
+
+    fn begin_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing || self.locked_content.is_some() {
+            return;
+        }
+        self.edit_snapshot = Some(self.editor.read(cx).value().to_string());
+        self.editing = true;
+        self.editor.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(content) = self.edit_snapshot.take() {
+            self.editor
+                .update(cx, |input, cx| input.set_value(content, window, cx));
+        }
+        self.editing = false;
+        self.error = None;
+        cx.notify();
     }
 
     fn begin_lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -250,6 +275,7 @@ impl MarkdownSticker {
         });
         self.content_visible = true;
         self.editing = false;
+        self.edit_snapshot = None;
         self.error = None;
         self.lock_form.clear_passwords(window, cx);
         cx.notify();
@@ -301,6 +327,7 @@ impl MarkdownSticker {
                     this.locked_content = None;
                     this.content_visible = true;
                     this.editing = false;
+                    this.edit_snapshot = None;
                     this.editor
                         .update(cx, |input, cx| input.set_value(content, window, cx));
                     this.lock_form.clear_passwords(window, cx);
@@ -327,6 +354,7 @@ impl MarkdownSticker {
     fn hide_unlocked_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.content_visible = false;
         self.editing = false;
+        self.edit_snapshot = None;
         self.editor
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.lock_form.clear_passwords(window, cx);
@@ -509,7 +537,7 @@ impl super::Sticker for MarkdownSticker {
     }
 
     fn suppress_window_escape(&self) -> bool {
-        self.locking || !self.content_visible
+        self.editing || self.locking || !self.content_visible
     }
 
     fn protected_content_visible(&self) -> bool {
@@ -586,7 +614,6 @@ impl super::Sticker for MarkdownSticker {
             controls = controls.child(
                 Button::new("save")
                     .label("save (ctrl+s)")
-                    .small()
                     .occlude()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.save_state(cx);
@@ -646,11 +673,15 @@ impl Render for MarkdownSticker {
                 div()
                     .size_full()
                     .p_1()
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         if event.keystroke.modifiers.control
                             && event.keystroke.key.eq_ignore_ascii_case("s")
                         {
                             this.save_state(cx);
+                        } else if event.keystroke.key == "escape" {
+                            this.cancel_edit(window, cx);
+                            cx.stop_propagation();
+                            window.prevent_default();
                         }
                     }))
                     .child(
@@ -668,10 +699,9 @@ impl Render for MarkdownSticker {
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                        if e.click_count >= 2 && this.locked_content.is_none() {
-                            this.editing = true;
-                            cx.notify();
+                    cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                        if e.click_count >= 2 {
+                            this.begin_edit(window, cx);
                         }
                     }),
                 )

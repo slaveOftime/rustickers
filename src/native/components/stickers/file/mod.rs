@@ -7,8 +7,9 @@ mod watcher;
 
 use futures::channel::mpsc as async_mpsc;
 use gpui::{Context, Entity, Rgba, Window, div, prelude::*, px, rgba};
+use gpui_component::h_flex;
 use gpui_component::{
-    Disableable, Sizable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
+    Disableable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
 };
 use notify::RecommendedWatcher;
 use preview::FilePreview;
@@ -480,7 +481,7 @@ impl super::Sticker for FileSticker {
     }
 
     fn suppress_window_escape(&self) -> bool {
-        self.lock_interaction_active()
+        self.preview_editor.is_some() || self.lock_interaction_active()
     }
 
     fn protected_content_visible(&self) -> bool {
@@ -561,12 +562,15 @@ impl super::Sticker for FileSticker {
         }
         if self.preview_editor.is_some() {
             return Some(
-                Button::new("save-preview-file")
-                    .label("Save (ctrl+s)")
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_edit(window, cx);
-                    }))
+                h_flex()
+                    .child(
+                        Button::new("save-preview-file")
+                            .label("Save (ctrl+s)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save_edit(window, cx);
+                            })),
+                    )
+                    .child(div().flex_1())
                     .into_any_element(),
             );
         }

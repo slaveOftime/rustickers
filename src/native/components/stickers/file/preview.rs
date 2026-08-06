@@ -396,8 +396,9 @@ impl super::FileSticker {
                     {
                         this.save_edit(window, cx);
                     } else if event.keystroke.key == "escape" {
-                        this.preview_editor = None;
-                        cx.notify();
+                        this.cancel_edit(cx);
+                        cx.stop_propagation();
+                        window.prevent_default();
                     }
                 }))
                 .child(
