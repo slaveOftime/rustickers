@@ -1,7 +1,8 @@
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, IntoElement,
-    MouseButton, Render, Rgba, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowKind, WindowOptions, div, prelude::*, px, rgba, size, transparent_black,
+    MouseButton, Render, Rgba, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, rgba, size,
+    transparent_black,
 };
 use gpui_component::{
     ActiveTheme, Root,
@@ -58,7 +59,9 @@ use crate::native::components::{
     },
 };
 use crate::native::file_manager;
-use crate::native::windows::StickerWindowEvent;
+use crate::native::windows::{
+    EscapeDismissTarget, StickerWindowEvent, set_escape_dismiss_target_active,
+};
 use crate::storage::ArcStickerStore;
 
 const BOUNDS_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -110,6 +113,7 @@ pub struct StickerWindow {
     last_bounds_change_at: Option<Instant>,
     selection_run: bool,
     closing: bool,
+    _window_activation_subscription: Subscription,
 }
 
 impl StickerWindow {
@@ -367,7 +371,8 @@ impl StickerWindow {
         tracing::info!("Trying to close sticker with id: {}", id);
         if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             if let Some(pos) = open_stickers.iter().position(|(open_id, _)| *open_id == id) {
-                let (_, handle) = open_stickers.remove(pos);
+                let (open_id, handle) = open_stickers.remove(pos);
+                set_escape_dismiss_target_active(EscapeDismissTarget::Sticker(open_id), false);
                 return handle
                     .update(cx, |_, window, _| {
                         window.remove_window();
@@ -385,9 +390,28 @@ impl StickerWindow {
                 .iter_mut()
                 .find(|(open_id, _)| *open_id == old_id)
             {
+                set_escape_dismiss_target_active(EscapeDismissTarget::Sticker(*open_id), false);
                 *open_id = new_id;
             }
         }
+    }
+
+    pub fn dispatch_escape(open_id: i64, cx: &mut App) -> bool {
+        let escape = gpui::Keystroke::parse("escape").expect("escape is a valid GPUI keystroke");
+        OPEN_STICKERS
+            .read()
+            .ok()
+            .and_then(|open_stickers| {
+                open_stickers
+                    .iter()
+                    .find(|(id, _)| *id == open_id)
+                    .and_then(|(_, handle)| {
+                        handle
+                            .update(cx, |_, window, cx| window.dispatch_keystroke(escape, cx))
+                            .ok()
+                    })
+            })
+            .unwrap_or(false)
     }
 
     pub fn open_with_detail(
@@ -492,7 +516,11 @@ impl StickerWindow {
                     .iter()
                     .position(|(existing_id, _)| *existing_id < 0 && *existing_id != open_id)
                 {
-                    let (_, handle) = open_stickers.remove(pos);
+                    let (existing_id, handle) = open_stickers.remove(pos);
+                    set_escape_dismiss_target_active(
+                        EscapeDismissTarget::Sticker(existing_id),
+                        false,
+                    );
                     let _ = handle.update(cx, |_, window, _| {
                         window.remove_window();
                     });
@@ -657,6 +685,7 @@ impl StickerWindow {
 
         let entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
+            set_escape_dismiss_target_active(EscapeDismissTarget::Sticker(open_id), false);
             entity
                 .update(cx, |this, cx| {
                     if this.closing {
@@ -692,6 +721,16 @@ impl StickerWindow {
         })
         .detach();
 
+        let escape_target = EscapeDismissTarget::Sticker(open_id);
+        let window_activation_subscription =
+            cx.observe_window_activation(window, move |this, window, cx| {
+                let closes_on_escape = this.selection_run || this.view.id(cx) <= 0;
+                set_escape_dismiss_target_active(
+                    escape_target,
+                    closes_on_escape && window.is_window_active(),
+                );
+            });
+
         Self {
             open_id,
             store,
@@ -703,6 +742,7 @@ impl StickerWindow {
             selection_run,
             closing: false,
             error: None,
+            _window_activation_subscription: window_activation_subscription,
         }
     }
 

@@ -30,6 +30,7 @@ pub struct PreviewFileRequest {
 pub enum IpcEvent {
     Show,
     ToggleFilePreview,
+    DismissEscapeTarget,
     OpenSticker(i64),
     PreviewFile(PreviewFileRequest),
     CloseSticker(i64),

@@ -27,7 +27,7 @@ use crate::{
     storage::ArcStickerStore,
 };
 
-use super::sticker::StickerWindow;
+use super::{EscapeDismissTarget, set_escape_dismiss_target_active, sticker::StickerWindow};
 
 const POPUP_WIDTH: f32 = 300.0;
 const POPUP_HEIGHT: f32 = 400.0;
@@ -72,6 +72,7 @@ pub struct SelectionPopup {
     scroll_handle: ScrollHandle,
     closing: bool,
     _keystroke_subscription: Subscription,
+    _window_activation_subscription: Subscription,
 }
 
 impl SelectionPopup {
@@ -114,6 +115,7 @@ impl SelectionPopup {
             .ok()
             .and_then(|mut popup| popup.take());
         if let Some(existing) = existing {
+            set_escape_dismiss_target_active(EscapeDismissTarget::Selection, false);
             let _ = existing.update(cx, |_, window, _| window.remove_window());
             cx.defer(move |cx| {
                 if let Err(err) = Self::open_with(cx, sticker_events_tx, store, init) {
@@ -248,8 +250,16 @@ impl SelectionPopup {
                 window.prevent_default();
             }
         });
+        let window_activation_subscription =
+            cx.observe_window_activation(window, |_, window, _| {
+                set_escape_dismiss_target_active(
+                    EscapeDismissTarget::Selection,
+                    window.is_window_active(),
+                );
+            });
 
         window.on_window_should_close(cx, |_, _| {
+            set_escape_dismiss_target_active(EscapeDismissTarget::Selection, false);
             clear_popup_handle();
             true
         });
@@ -274,6 +284,7 @@ impl SelectionPopup {
             scroll_handle: ScrollHandle::new(),
             closing: false,
             _keystroke_subscription: keystroke_subscription,
+            _window_activation_subscription: window_activation_subscription,
         }
     }
 
@@ -578,12 +589,14 @@ impl Render for SelectionPopup {
 }
 
 fn clear_popup_handle() {
+    set_escape_dismiss_target_active(EscapeDismissTarget::Selection, false);
     if let Ok(mut popup) = SELECTION_POPUP.write() {
         *popup = None;
     }
 }
 
-fn close_popup(cx: &mut App) {
+pub fn close_popup(cx: &mut App) {
+    set_escape_dismiss_target_active(EscapeDismissTarget::Selection, false);
     let popup = SELECTION_POPUP
         .write()
         .ok()
@@ -591,6 +604,21 @@ fn close_popup(cx: &mut App) {
     if let Some(popup) = popup {
         let _ = popup.update(cx, |_, window, _| window.remove_window());
     }
+}
+
+pub fn dispatch_escape(cx: &mut App) -> bool {
+    let escape = gpui::Keystroke::parse("escape").expect("escape is a valid GPUI keystroke");
+    SELECTION_POPUP
+        .read()
+        .ok()
+        .and_then(|popup| {
+            popup.as_ref().and_then(|handle| {
+                handle
+                    .update(cx, |_, window, cx| window.dispatch_keystroke(escape, cx))
+                    .ok()
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn filtered_sticker_indices(stickers: &[StickerDetail], query: &str) -> Vec<usize> {

@@ -18,6 +18,8 @@ Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), 
 
 - **Show main window**: `Ctrl + Alt + R` (macOS also supports `Cmd + Alt + R`)
 - **Toggle quick file preview**: `Ctrl/Cmd + Alt`
+- **Open command for selected text**: `Ctrl/Cmd + Space` (consumed instead of forwarded to the active app)
+- **Dismiss transient Rustickers windows**: `Esc` is consumed for selection popups, quick previews, and selected-text command runs
 - **Save in editor/markdown views**: `Ctrl + S`
 
 ## Quick start

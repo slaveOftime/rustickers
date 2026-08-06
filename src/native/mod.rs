@@ -70,6 +70,11 @@ pub fn run_native(
                                 });
                             }
                         }
+                        crate::ipc::IpcEvent::DismissEscapeTarget => {
+                            let _ = cx.update(|cx| {
+                                crate::native::windows::close_active_escape_target(cx);
+                            });
+                        }
                         crate::ipc::IpcEvent::OpenSticker(id) => {
                             if let Some(store) = store_handle_clone.get() {
                                 let store = store.clone();

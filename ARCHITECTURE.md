@@ -392,12 +392,13 @@ WRY-based WebView for rendering:
 
 #### Hotkey Module (`src/native/hotkey.rs`)
 
-Global hotkey listener using rdev:
+Platform-specific global hotkey listeners: a keycode-only low-level hook on Windows, a Quartz event tap on macOS, and rdev on Linux. Recognized key chords are debounced, and action keys are consumed on Windows and macOS so they are not also handled by the active application. GPUI window-activation observers identify the exact focused transient window that owns `Esc`; the native event is consumed and an internal GPUI `Esc` is dispatched so existing save and cleanup handlers still run.
 
 | Hotkey | Action |
 |--------|--------|
 | `Ctrl + Alt + R` | Show main window |
 | `Ctrl/Cmd + Alt` | Toggle file preview from selection |
+| `Ctrl/Cmd + Space` | Open a command for the selected text |
 
 **Platform-specific modifiers:**
 - Windows/Linux: Ctrl required
