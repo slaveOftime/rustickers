@@ -117,6 +117,7 @@ pub struct StickerWindow {
     selection_run: bool,
     closing: bool,
     transient_topmost: TransientTopmost,
+    protected_relock_generation: u64,
     _window_activation_subscription: Subscription,
 }
 
@@ -720,14 +721,26 @@ impl StickerWindow {
         let entity = cx.weak_entity();
         cx.intercept_keystrokes(move |event, window, cx| {
             if gpui::Window::window_handle(window).window_id() != own_window_id
-                || event.keystroke.key != "escape"
                 || !window.is_window_active()
             {
                 return;
             }
 
+            let lock_shortcut =
+                event.keystroke.modifiers.control && event.keystroke.key.eq_ignore_ascii_case("l");
+            let escape = event.keystroke.key == "escape";
+            if !lock_shortcut && !escape {
+                return;
+            }
+
             let handled = entity.upgrade().is_some_and(|entity| {
                 entity.update(cx, |this, cx| {
+                    if lock_shortcut {
+                        return this.view.handle_lock_shortcut(window, cx);
+                    }
+                    if this.view.suppress_window_escape(cx) {
+                        return false;
+                    }
                     if !this.selection_run && this.view.id(cx) > 0 {
                         return false;
                     }
@@ -747,6 +760,26 @@ impl StickerWindow {
         let window_activation_subscription =
             cx.observe_window_activation(window, move |this, window, cx| {
                 let active = window.is_window_active();
+                this.protected_relock_generation = this.protected_relock_generation.wrapping_add(1);
+                if !active && this.view.protected_content_visible(cx) {
+                    let generation = this.protected_relock_generation;
+                    let entity = cx.entity();
+                    window
+                        .spawn(cx, async move |cx| {
+                            cx.background_executor()
+                                .timer(FOCUS_LOSS_RELOCK_DELAY)
+                                .await;
+                            let _ = entity.update_in(cx, |this, window, cx| {
+                                if this.protected_relock_generation == generation
+                                    && !window.is_window_active()
+                                    && this.view.protected_content_visible(cx)
+                                {
+                                    this.view.relock_protected_content(window, cx);
+                                }
+                            });
+                        })
+                        .detach();
+                }
                 let closes_on_escape = this.selection_run || this.view.id(cx) <= 0;
                 set_escape_dismiss_target_active(escape_target, closes_on_escape && active);
                 if this.transient_topmost.update_activation(active) {
@@ -769,6 +802,7 @@ impl StickerWindow {
             closing: false,
             error: None,
             transient_topmost,
+            protected_relock_generation: 0,
             _window_activation_subscription: window_activation_subscription,
         }
     }

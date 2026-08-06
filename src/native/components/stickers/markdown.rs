@@ -16,6 +16,8 @@ use crate::native::windows::StickerWindowEvent;
 use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
+use super::content_lock::{LockForm, LockedContent};
+
 pub struct MarkdownSticker {
     id: i64,
     color: StickerColor,
@@ -26,6 +28,11 @@ pub struct MarkdownSticker {
     error: Option<String>,
     converting: bool,
     convert_error: Option<String>,
+    locked_content: Option<LockedContent>,
+    content_visible: bool,
+    locking: bool,
+    lock_busy: bool,
+    lock_form: LockForm,
 }
 
 impl MarkdownSticker {
@@ -38,13 +45,27 @@ impl MarkdownSticker {
         cx: &mut Context<MarkdownSticker>,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
+        let (locked_content, initial_content, lock_error) = match LockedContent::parse(content) {
+            Ok(Some(locked)) => (Some(locked), String::new(), None),
+            Ok(None) => (None, content.to_string(), None),
+            Err(err) => (None, String::new(), Some(err)),
+        };
+        let initial_title = locked_content
+            .as_ref()
+            .map(|locked| locked.title.clone())
+            .unwrap_or_else(|| derive_title(&initial_content));
         let editor = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
                 .searchable(true)
                 .placeholder("Input text/markdown, ctrl+s to save and preview it")
-                .default_value(content.to_string())
+                .default_value(initial_content)
         });
+        let lock_form = LockForm::new(initial_title, "Password to unlock this sticker", window, cx);
+        let content_visible = locked_content.is_none() && lock_error.is_none();
+        if !content_visible {
+            lock_form.focus_password(window, cx);
+        }
 
         Self {
             id,
@@ -52,22 +73,24 @@ impl MarkdownSticker {
             store,
             sticker_events_tx,
             editor,
-            editing: content.is_empty(),
-            error: None,
+            editing: content_visible && content.is_empty(),
+            error: lock_error,
             converting: false,
             convert_error: None,
+            locked_content,
+            content_visible,
+            locking: false,
+            lock_busy: false,
+            lock_form,
         }
     }
 
     fn save_state(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.locked_content.is_some() {
+            return true;
+        }
         let content = self.editor.read(cx).value().to_string();
-
-        let title = content
-            .lines()
-            .filter(|x| !x.is_empty())
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let title = derive_title(&content);
 
         let id = self.id;
         let store = self.store.clone();
@@ -108,6 +131,208 @@ impl MarkdownSticker {
         .detach();
 
         true
+    }
+
+    fn begin_lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = derive_title(self.editor.read(cx).value().as_ref());
+        self.lock_form.reset_for_lock(title, window, cx);
+        self.locking = true;
+        self.error = None;
+        cx.notify();
+    }
+
+    fn cancel_lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.locking = false;
+        self.error = None;
+        self.lock_form.clear_passwords(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.error = None;
+        self.lock_form.clear_passwords(window, cx);
+        cx.notify();
+    }
+
+    fn lock_new_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.lock_busy {
+            return;
+        }
+        let content = self.editor.read(cx).value().to_string();
+        let prepared = match self.lock_form.prepare_lock(&content, cx) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.error = Some(err);
+                cx.notify();
+                return;
+            }
+        };
+        let title = prepared.locked.title.clone();
+        let locked = prepared.locked;
+        let serialized = prepared.serialized;
+
+        self.lock_busy = true;
+        self.error = None;
+        let id = self.id;
+        let store = self.store.clone();
+        let sticker_events_tx = self.sticker_events_tx.clone();
+        let entity = cx.entity();
+        window
+            .spawn(cx, async move |cx| {
+                let result = async {
+                    store.update_sticker_content(id, serialized).await?;
+                    store.update_sticker_title(id, title.clone()).await?;
+                    anyhow::Ok(())
+                }
+                .await;
+                let _ = entity.update_in(cx, |this, window, cx| {
+                    this.lock_busy = false;
+                    match result {
+                        Ok(()) => {
+                            this.locked_content = Some(locked);
+                            this.content_visible = false;
+                            this.locking = false;
+                            this.editor
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            this.lock_form.clear_passwords(window, cx);
+                            this.error = None;
+                            let _ = sticker_events_tx
+                                .send(StickerWindowEvent::TitleChanged { id, title });
+                        }
+                        Err(err) => this.error = Some(format!("Failed to lock sticker: {err:#}")),
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(locked) = self.locked_content.clone() else {
+            return;
+        };
+        let prepared = match self.lock_form.prepare_unlock(&locked, cx) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.error = Some(err);
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(updated) = prepared.updated_lock {
+            self.locked_content = Some(updated.locked);
+            let id = self.id;
+            let store = self.store.clone();
+            let events = self.sticker_events_tx.clone();
+            let title = prepared.title.clone();
+            cx.spawn(async move |entity, cx| {
+                let result = async {
+                    store.update_sticker_content(id, updated.serialized).await?;
+                    store.update_sticker_title(id, title.clone()).await?;
+                    anyhow::Ok(())
+                }
+                .await;
+                if let Err(err) = result {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.error = Some(format!(
+                            "Unlocked, but failed to save the new title: {err:#}"
+                        ));
+                        cx.notify();
+                    });
+                } else {
+                    let _ = events.send(StickerWindowEvent::TitleChanged { id, title });
+                }
+            })
+            .detach();
+        }
+        self.editor.update(cx, |input, cx| {
+            input.set_value(prepared.content, window, cx)
+        });
+        self.content_visible = true;
+        self.editing = false;
+        self.error = None;
+        self.lock_form.clear_passwords(window, cx);
+        cx.notify();
+    }
+
+    fn unlock_forever(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.lock_busy {
+            return;
+        }
+        let Some(locked) = self.locked_content.clone() else {
+            return;
+        };
+        let prepared = match self
+            .lock_form
+            .prepare_unlock_forever(&locked, derive_title, cx)
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.error = Some(err);
+                cx.notify();
+                return;
+            }
+        };
+        let content = prepared.content;
+        let title = prepared.title;
+
+        self.lock_busy = true;
+        self.error = None;
+        let id = self.id;
+        let store = self.store.clone();
+        let events = self.sticker_events_tx.clone();
+        let entity = cx.entity();
+        window
+            .spawn(cx, async move |cx| {
+                let content_result = store.update_sticker_content(id, content.clone()).await;
+                let title_result = if content_result.is_ok() {
+                    store.update_sticker_title(id, title.clone()).await
+                } else {
+                    Ok(())
+                };
+                let _ = entity.update_in(cx, |this, window, cx| {
+                    this.lock_busy = false;
+                    if let Err(err) = content_result {
+                        this.error = Some(format!("Failed to remove sticker lock: {err:#}"));
+                        cx.notify();
+                        return;
+                    }
+
+                    this.locked_content = None;
+                    this.content_visible = true;
+                    this.editing = false;
+                    this.editor
+                        .update(cx, |input, cx| input.set_value(content, window, cx));
+                    this.lock_form.clear_passwords(window, cx);
+                    match title_result {
+                        Ok(()) => {
+                            this.error = None;
+                            let _ = events.send(StickerWindowEvent::TitleChanged { id, title });
+                        }
+                        Err(err) => {
+                            this.error =
+                                Some(format!("Lock removed, but failed to save title: {err:#}"));
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn relock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide_unlocked_content(window, cx);
+    }
+
+    fn hide_unlocked_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.content_visible = false;
+        self.editing = false;
+        self.editor
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.lock_form.clear_passwords(window, cx);
+        self.lock_form.focus_password(window, cx);
+        self.error = None;
+        cx.notify();
     }
 
     fn start_convert(&mut self, cx: &mut Context<Self>) {
@@ -252,6 +477,16 @@ fn derive_md_filename(content: &str) -> String {
     }
 }
 
+fn derive_title(content: &str) -> String {
+    content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("Private sticker")
+        .trim_start_matches('#')
+        .trim()
+        .to_string()
+}
+
 impl super::Sticker for MarkdownSticker {
     fn id(&self) -> i64 {
         self.id
@@ -273,7 +508,79 @@ impl super::Sticker for MarkdownSticker {
         self.color = color;
     }
 
+    fn suppress_window_escape(&self) -> bool {
+        self.locking || !self.content_visible
+    }
+
+    fn protected_content_visible(&self) -> bool {
+        self.locked_content.is_some() && self.content_visible
+    }
+
+    fn relock_protected_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide_unlocked_content(window, cx);
+    }
+
+    fn handle_lock_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.lock_busy || self.locking {
+            return false;
+        }
+        if self.locked_content.is_some() || !self.content_visible {
+            if self.content_visible {
+                self.relock(window, cx);
+            } else {
+                self.lock_form.focus_password(window, cx);
+            }
+        } else {
+            self.begin_lock(window, cx);
+        }
+        true
+    }
+
+    fn header_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let is_protected = self.locked_content.is_some() || !self.content_visible;
+        Some(
+            h_flex()
+                .flex_1()
+                .child(div().flex_1())
+                .child(
+                    Button::new("content-lock")
+                        .icon(if is_protected && self.content_visible {
+                            IconName::LockOpen
+                        } else {
+                            IconName::LockClosed
+                        })
+                        .tooltip(if is_protected && self.content_visible {
+                            "Lock sticker now (ctrl+l)"
+                        } else if is_protected {
+                            "Sticker is locked"
+                        } else {
+                            "Protect sticker with a password (ctrl+l)"
+                        })
+                        .disabled(self.lock_busy || self.locking)
+                        .bg(rgba(0x000000))
+                        .border_0()
+                        .cursor_pointer()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.locked_content.is_some() || !this.content_visible {
+                                if this.content_visible {
+                                    this.relock(window, cx);
+                                } else {
+                                    this.lock_form.focus_password(window, cx);
+                                }
+                            } else {
+                                this.begin_lock(window, cx);
+                            }
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn footer_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.content_visible || self.locking || self.locked_content.is_some() {
+            return None;
+        }
         let mut controls = h_flex().flex_1();
         if self.editing {
             controls = controls.child(
@@ -306,6 +613,32 @@ impl Render for MarkdownSticker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut body = v_flex().size_full().gap_1();
 
+        if self.locking {
+            window.set_rem_size(px(14.0));
+            return self.lock_form.locking_view(
+                "markdown",
+                "Lock sticker",
+                self.error.as_deref(),
+                self.lock_busy,
+                cx,
+                Self::cancel_lock,
+                Self::lock_new_content,
+            );
+        }
+
+        if !self.content_visible {
+            window.set_rem_size(px(14.0));
+            return self.lock_form.locked_view(
+                "markdown",
+                self.error.as_deref(),
+                self.lock_busy,
+                cx,
+                Self::cancel_unlock,
+                Self::unlock,
+                Self::unlock_forever,
+            );
+        }
+
         if self.editing {
             window.set_rem_size(cx.theme().font_size);
 
@@ -336,7 +669,7 @@ impl Render for MarkdownSticker {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                        if e.click_count >= 2 {
+                        if e.click_count >= 2 && this.locked_content.is_none() {
                             this.editing = true;
                             cx.notify();
                         }
@@ -370,6 +703,6 @@ impl Render for MarkdownSticker {
             body = body.child(preview_overlay);
         }
 
-        body
+        body.into_any_element()
     }
 }

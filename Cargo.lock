@@ -7223,6 +7223,7 @@ dependencies = [
  "arboard",
  "async-compat",
  "async-trait",
+ "base64",
  "chrono",
  "clap",
  "cocoa 0.26.0",
@@ -7249,6 +7250,7 @@ dependencies = [
  "rdev",
  "reqwest",
  "rfd",
+ "ring",
  "rodio",
  "rust-embed",
  "serde",
@@ -7266,6 +7268,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winres",
  "winsplit",
+ "zeroize",
 ]
 
 [[package]]

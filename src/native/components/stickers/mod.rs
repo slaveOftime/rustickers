@@ -1,12 +1,15 @@
-use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, Size};
+use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, Size, Window};
 
 use crate::model::sticker::StickerColor;
 
 pub mod command;
+mod content_lock;
 pub mod file;
 pub mod markdown;
 pub mod paint;
 pub mod timer;
+
+pub(crate) use content_lock::FOCUS_LOSS_RELOCK_DELAY;
 
 pub trait Sticker: Sized {
     fn id(&self) -> i64;
@@ -24,6 +27,20 @@ pub trait Sticker: Sized {
     }
 
     fn disable_color_picker(&self) -> bool {
+        false
+    }
+
+    fn suppress_window_escape(&self) -> bool {
+        false
+    }
+
+    fn protected_content_visible(&self) -> bool {
+        false
+    }
+
+    fn relock_protected_content(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
+    fn handle_lock_shortcut(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
         false
     }
 
@@ -47,6 +64,10 @@ pub trait StickerView {
     fn set_color(&mut self, cx: &mut App, color: StickerColor);
     fn use_default_bg(&self, cx: &App) -> bool;
     fn disable_color_picker(&self, cx: &App) -> bool;
+    fn suppress_window_escape(&self, cx: &App) -> bool;
+    fn protected_content_visible(&self, cx: &App) -> bool;
+    fn relock_protected_content(&self, window: &mut Window, cx: &mut App);
+    fn handle_lock_shortcut(&self, window: &mut Window, cx: &mut App) -> bool;
     fn header_extension(&self, cx: &mut App) -> Option<AnyElement>;
     fn footer_extension(&self, cx: &mut App) -> Option<AnyElement>;
     fn is_footer_absoute(&self, cx: &App) -> bool;
@@ -91,6 +112,25 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
 
     fn disable_color_picker(&self, cx: &App) -> bool {
         self.entity.read(cx).disable_color_picker()
+    }
+
+    fn suppress_window_escape(&self, cx: &App) -> bool {
+        self.entity.read(cx).suppress_window_escape()
+    }
+
+    fn protected_content_visible(&self, cx: &App) -> bool {
+        self.entity.read(cx).protected_content_visible()
+    }
+
+    fn relock_protected_content(&self, window: &mut Window, cx: &mut App) {
+        let _ = self.entity.update(cx, |this, cx| {
+            this.relock_protected_content(window, cx);
+        });
+    }
+
+    fn handle_lock_shortcut(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.entity
+            .update(cx, |this, cx| this.handle_lock_shortcut(window, cx))
     }
 
     fn header_extension(&self, cx: &mut App) -> Option<AnyElement> {

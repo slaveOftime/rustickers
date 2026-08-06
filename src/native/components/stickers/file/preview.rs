@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use crate::native::components::webview::SimpleWebView;
 
+use super::super::content_lock::LockedContent;
+
 const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 25; // 25 MB
 
 pub(super) enum FilePreview {
@@ -26,6 +28,10 @@ pub(super) enum FilePreview {
         content: String,
         language: String,
         editable: bool,
+    },
+    LockedText {
+        source_path: PathBuf,
+        content: LockedContent,
     },
     Image(Arc<Image>),
     WebView(Entity<SimpleWebView>),
@@ -95,44 +101,56 @@ impl FilePreview {
 
         if crate::utils::file::is_markdown_ext(ext) {
             let (content_result, editable) = read_text_for_preview(path);
-            return content_result
-                .map(|content| {
-                    content.map(|content| FilePreview::Markdown {
-                        source_path: path.to_path_buf(),
-                        content,
-                        editable,
-                    })
-                })
-                .map_err(|err| format!("Failed to read markdown preview: {err}"));
+            let content =
+                content_result.map_err(|err| format!("Failed to read markdown preview: {err}"))?;
+            return match content {
+                Some(content) => preview_text(path, content, editable, true).map(Some),
+                None => Ok(None),
+            };
         }
 
         if crate::utils::file::is_code_ext(ext) {
             let language = crate::utils::file::markdown_language_for_ext(ext);
             return crate::utils::file::read_text_full(path)
-                .map(|content| FilePreview::Code {
-                    source_path: path.to_path_buf(),
-                    content,
-                    language: language.to_string(),
-                    editable: true,
-                })
-                .map(Some)
-                .map_err(|err| format!("Failed to read code preview: {err}"));
+                .map_err(|err| format!("Failed to read code preview: {err}"))
+                .and_then(|content| {
+                    if let Some(locked) = LockedContent::parse(&content)? {
+                        return Ok(Some(FilePreview::LockedText {
+                            source_path: path.to_path_buf(),
+                            content: locked,
+                        }));
+                    }
+
+                    Ok(Some(FilePreview::Code {
+                        source_path: path.to_path_buf(),
+                        content,
+                        language: language.to_string(),
+                        editable: true,
+                    }))
+                });
         }
 
         let (content_result, editable) = read_text_for_preview(path);
-        content_result
-            .map(|content| {
-                content.map(|content| {
-                    let preview_content =
-                        crate::utils::file::format_terminal_output_for_preview(&content);
-                    FilePreview::Text {
+        let content =
+            content_result.map_err(|err| format!("Failed to read text preview: {err}"))?;
+        match content {
+            Some(content) => {
+                if let Some(locked) = LockedContent::parse(&content)? {
+                    return Ok(Some(FilePreview::LockedText {
                         source_path: path.to_path_buf(),
-                        content: preview_content.clone(),
-                        editable: editable && preview_content == content,
-                    }
-                })
-            })
-            .map_err(|err| format!("Failed to read text preview: {err}"))
+                        content: locked,
+                    }));
+                }
+                let preview_content =
+                    crate::utils::file::format_terminal_output_for_preview(&content);
+                Ok(Some(FilePreview::Text {
+                    source_path: path.to_path_buf(),
+                    content: preview_content.clone(),
+                    editable: editable && preview_content == content,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     pub(super) fn editable_source(&self) -> Option<&Path> {
@@ -192,6 +210,101 @@ impl FilePreview {
             _ => {}
         }
     }
+
+    pub(super) fn lockable_content(&self) -> Option<(&Path, &str)> {
+        match self {
+            Self::Markdown {
+                source_path,
+                content,
+                editable: true,
+            }
+            | Self::Text {
+                source_path,
+                content,
+                editable: true,
+            }
+            | Self::Code {
+                source_path,
+                content,
+                editable: true,
+                ..
+            } => Some((source_path.as_path(), content.as_str())),
+            _ => None,
+        }
+    }
+
+    pub(super) fn locked_content(&self) -> Option<(&Path, &LockedContent)> {
+        match self {
+            Self::LockedText {
+                source_path,
+                content,
+            } => Some((source_path.as_path(), content)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn unlocked_text(source_path: PathBuf, content: String) -> Self {
+        let ext = source_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if crate::utils::file::is_markdown_ext(&ext) {
+            Self::Markdown {
+                source_path,
+                content,
+                editable: true,
+            }
+        } else if crate::utils::file::is_code_ext(&ext) {
+            let language = crate::utils::file::markdown_language_for_ext(&ext).to_string();
+            Self::Code {
+                source_path,
+                content,
+                language,
+                editable: true,
+            }
+        } else {
+            Self::Text {
+                source_path,
+                content,
+                editable: true,
+            }
+        }
+    }
+
+    pub(super) fn locked_text(source_path: PathBuf, content: LockedContent) -> Self {
+        Self::LockedText {
+            source_path,
+            content,
+        }
+    }
+}
+
+fn preview_text(
+    path: &Path,
+    content: String,
+    editable: bool,
+    markdown: bool,
+) -> Result<FilePreview, String> {
+    if let Some(locked) = LockedContent::parse(&content)? {
+        return Ok(FilePreview::LockedText {
+            source_path: path.to_path_buf(),
+            content: locked,
+        });
+    }
+    if markdown {
+        Ok(FilePreview::Markdown {
+            source_path: path.to_path_buf(),
+            content,
+            editable,
+        })
+    } else {
+        Ok(FilePreview::Text {
+            source_path: path.to_path_buf(),
+            content,
+            editable,
+        })
+    }
 }
 
 impl super::FileSticker {
@@ -214,8 +327,29 @@ impl super::FileSticker {
                     };
                     match FilePreview::new(source.as_str(), bg, window, cx) {
                         Ok(preview) => {
-                            this.preview = preview;
                             this.preview_editor = None;
+                            if let Some((source_path, locked)) = preview
+                                .as_ref()
+                                .and_then(FilePreview::locked_content)
+                                .map(|(path, locked)| (path.to_path_buf(), locked.clone()))
+                            {
+                                let keep_unlocked = this.content_visible
+                                    && this.locked_content.as_ref() == Some(&locked);
+                                this.locked_content = Some(locked.clone());
+                                this.locked_path = Some(source_path.clone());
+                                if !keep_unlocked {
+                                    this.preview = preview;
+                                    this.content_visible = false;
+                                    this.lock_form.set_title(locked.title, window, cx);
+                                    this.lock_form.clear_passwords(window, cx);
+                                    this.lock_form.focus_password(window, cx);
+                                }
+                            } else {
+                                this.preview = preview;
+                                this.locked_content = None;
+                                this.locked_path = None;
+                                this.content_visible = true;
+                            }
                             if let Some(FilePreview::Audio { source_path, .. }) =
                                 this.preview.as_ref()
                             {
@@ -240,7 +374,7 @@ impl super::FileSticker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.click_count >= 2 {
+        if event.click_count >= 2 && self.locked_content.is_none() {
             self.start_edit(window, cx);
         }
     }
@@ -325,6 +459,7 @@ impl super::FileSticker {
                     .scrollable(true),
                 )
                 .into_any_element(),
+            Some(FilePreview::LockedText { .. }) => div().size_full().into_any_element(),
             Some(FilePreview::Image(image)) => div()
                 .size_full()
                 .child(
@@ -370,4 +505,45 @@ fn read_text_for_preview(path: &Path) -> (std::io::Result<Option<String>>, bool)
         })
     };
     (content, is_small_text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FilePreview;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn editable_code_is_lockable() {
+        let preview = FilePreview::Code {
+            source_path: PathBuf::from("example.rs"),
+            content: "fn main() {}".to_string(),
+            language: "rust".to_string(),
+            editable: true,
+        };
+
+        let (path, content) = preview.lockable_content().expect("code should be lockable");
+
+        assert_eq!(path, Path::new("example.rs"));
+        assert_eq!(content, "fn main() {}");
+    }
+
+    #[test]
+    fn unlocked_code_restores_code_preview() {
+        let preview =
+            FilePreview::unlocked_text(PathBuf::from("example.rs"), "fn main() {}".to_string());
+
+        match preview {
+            FilePreview::Code {
+                content,
+                language,
+                editable,
+                ..
+            } => {
+                assert_eq!(content, "fn main() {}");
+                assert_eq!(language, "rust");
+                assert!(editable);
+            }
+            _ => panic!("unlocked Rust source should remain a code preview"),
+        }
+    }
 }

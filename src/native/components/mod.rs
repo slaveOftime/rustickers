@@ -61,6 +61,8 @@ pub enum IconName {
     CircleX,
     Pin,
     Loop,
+    LockClosed,
+    LockOpen,
 }
 
 impl IconNamed for IconName {
@@ -95,6 +97,8 @@ impl IconNamed for IconName {
             IconName::CircleX => "icons/circle-x.svg".into(),
             IconName::Pin => "icons/pin.svg".into(),
             IconName::Loop => "icons/loop.svg".into(),
+            IconName::LockClosed => "icons/lock-closed.svg".into(),
+            IconName::LockOpen => "icons/lock-open.svg".into(),
         }
     }
 }

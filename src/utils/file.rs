@@ -79,8 +79,7 @@ pub fn format_terminal_output_for_preview(content: &str) -> String {
             }
             '\r' => {
                 if matches!(chars.peek(), Some('\n')) {
-                    formatted.push('\n');
-                    chars.next();
+                    formatted.push('\r');
                 } else {
                     formatted.push_str("<CR>");
                 }
@@ -473,6 +472,13 @@ mod tests {
             format_terminal_output_for_preview(content),
             "Downloading 10%<CR>Downloading 100%\nnext"
         );
+    }
+
+    #[test]
+    fn preserves_windows_line_endings() {
+        let content = "first line\r\nsecond line\r\n";
+
+        assert_eq!(format_terminal_output_for_preview(content), content);
     }
 
     #[test]

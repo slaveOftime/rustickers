@@ -42,6 +42,9 @@ ui = [
 	"dep:raw-window-handle",
 	"dep:core-foundation",
 	"dep:core-graphics",
+	"dep:base64",
+	"dep:ring",
+	"dep:zeroize",
 ]
 cli = [
 	"dep:clap",
@@ -80,6 +83,9 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "reg
 sqlx = { version = "0.9.0", features = ["runtime-async-std", "sqlite", "macros"], optional = true }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
+base64 = { version = "0.22.1", optional = true }
+ring = { version = "0.17.14", optional = true }
+zeroize = { version = "1.8.2", optional = true }
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
 cron = { version = "0.17.0", optional = true }
 interprocess = "2.2.1"

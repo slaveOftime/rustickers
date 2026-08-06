@@ -6,6 +6,9 @@ use super::preview::FilePreview;
 
 impl super::FileSticker {
     pub(super) fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked_content.is_some() {
+            return;
+        }
         let initial_content = match self
             .preview
             .as_ref()
