@@ -157,6 +157,18 @@ pub fn clamp_into_work_area(
     )
 }
 
+/// Decide whether re-applying a window rectangle is still worth a try.
+///
+/// Moving a window onto a monitor with a different DPI makes Windows send `WM_DPICHANGED` while
+/// `SetWindowPos` is still running, and GPUI answers it by re-positioning the window with the
+/// rectangle the system *suggests* — our size multiplied by the DPI ratio. Applying the same
+/// rectangle a second time succeeds because the window is already on the target monitor, so no
+/// further DPI change happens. Give up once the window sits where it was asked to, or once it
+/// stops reacting at all (a size below the window's minimum can never be satisfied).
+pub fn rect_settled(target: NativeRect, actual: NativeRect, previous: Option<NativeRect>) -> bool {
+    actual == target || previous == Some(actual)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +386,51 @@ mod tests {
             clamp_into_work_area((2307, -1217), (3000, 2000), PRIMARY_AREA),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn a_window_that_reached_the_requested_rect_is_settled() {
+        let target = NativeRect {
+            left: 549,
+            top: -1138,
+            width: 380,
+            height: 272,
+        };
+        assert!(rect_settled(target, target, None));
+    }
+
+    #[test]
+    fn a_dpi_halved_first_pass_is_not_settled() {
+        let target = NativeRect {
+            left: 549,
+            top: -1138,
+            width: 380,
+            height: 272,
+        };
+        let halved = NativeRect {
+            width: 190,
+            height: 136,
+            ..target
+        };
+        assert!(!rect_settled(target, halved, None));
+    }
+
+    #[test]
+    fn a_window_that_stopped_reacting_is_settled() {
+        let target = NativeRect {
+            left: 549,
+            top: -1138,
+            width: 120,
+            height: 60,
+        };
+        // The requested size is below the window's minimum, so Windows keeps returning the same
+        // clamped rect. Retrying forever would never converge.
+        let clamped = NativeRect {
+            width: 226,
+            height: 136,
+            ..target
+        };
+        assert!(!rect_settled(target, clamped, None));
+        assert!(rect_settled(target, clamped, Some(clamped)));
     }
 }

@@ -38,8 +38,10 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 #[cfg(target_os = "windows")]
 use windows::{
     Win32::{
-        Foundation::{HWND, RECT},
-        Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
+        Foundation::{HWND, LPARAM, RECT, WPARAM},
+        Graphics::Gdi::{
+            GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        },
         System::Com::{CLSCTX_ALL, CoCreateInstance},
         UI::{
             HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
@@ -47,8 +49,8 @@ use windows::{
             WindowsAndMessaging::{
                 GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_NOTOPMOST,
                 HWND_TOPMOST, IsWindowVisible, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, USER_DEFAULT_SCREEN_DPI,
-                WS_EX_TOOLWINDOW, WS_SYSMENU,
+                SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+                USER_DEFAULT_SCREEN_DPI, WM_DPICHANGED, WS_EX_TOOLWINDOW, WS_SYSMENU,
             },
         },
     },
@@ -71,6 +73,8 @@ use crate::native::components::{
     },
 };
 use crate::native::file_manager;
+#[cfg(target_os = "windows")]
+use crate::native::windows::placement::rect_settled;
 use crate::native::windows::{
     EscapeDismissTarget, StickerWindowEvent,
     placement::{DisplayEntry, NativeRect, ResolvedPlacement, resolve_placement},
@@ -91,6 +95,64 @@ static NEXT_SELECTION_RUN_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 /// windows around itself during a dock or undock, and those moves must not be mistaken for the
 /// user deliberately choosing a new monitor.
 const DISPLAY_TRANSITION_GRACE: Duration = Duration::from_millis(1000);
+
+/// How many times a placement is re-applied before giving up. Crossing a DPI boundary costs one
+/// extra pass, see [`rect_settled`] for why.
+#[cfg(target_os = "windows")]
+const MAX_PLACEMENT_PASSES: usize = 3;
+
+/// How long after opening a sticker its restored placement keeps being re-asserted. Windows may
+/// answer a cross-monitor move asynchronously, and GPUI applies the placement of a window opened
+/// hidden only once it is shown, both of which land after the deferred restore has run.
+#[cfg(target_os = "windows")]
+const RESTORE_SETTLE: Duration = Duration::from_millis(1000);
+
+/// A pending correction of the scale factor GPUI believes a sticker window has.
+///
+/// GPUI caches the scale factor and only refreshes it while handling `WM_DPICHANGED`, which
+/// Windows does not reliably raise when a monitor disappears and the window is herded onto
+/// another one. The window then keeps its correct size and position but draws its contents at
+/// the scale of the monitor it left, until something else forces a relayout — which is why
+/// clicking the sticker used to fix it.
+///
+/// Raising the message ourselves puts GPUI back in sync, but it has to happen *between* entity
+/// updates: GPUI answers the resize by calling back into the window, and that call is silently
+/// dropped while the window is already mutably borrowed.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct ScaleResync {
+    hwnd: isize,
+    dpi: u32,
+    rect: NativeRect,
+}
+
+impl ScaleResync {
+    #[cfg(target_os = "windows")]
+    fn apply(self) {
+        let hwnd = HWND(self.hwnd as *mut _);
+        // GPUI reads the scale factor from the message and then moves the window to the rectangle
+        // it carries. Ask for a slightly shorter window so that move really produces a `WM_SIZE`,
+        // the only thing that makes GPUI adopt the new scale factor, then restore the exact size.
+        let mut suggested = RECT {
+            left: self.rect.left,
+            top: self.rect.top,
+            right: self.rect.left + self.rect.width,
+            bottom: self.rect.top + self.rect.height - 1,
+        };
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM(((self.dpi << 16) | self.dpi) as usize)),
+                Some(LPARAM(&mut suggested as *mut RECT as isize)),
+            );
+        }
+        StickerWindow::apply_native_rect(hwnd, self.rect);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn apply(self) {}
+}
 
 #[derive(PartialEq, Clone, Debug)]
 struct WindowState {
@@ -223,6 +285,9 @@ pub struct StickerWindow {
     /// The rect this app last forced onto the window. Seeing exactly this rect means the move was
     /// ours, so it must not be recorded as the user choosing a monitor.
     programmatic_rect: Option<NativeRect>,
+    /// The placement the window is still being nudged towards right after it opened, together with
+    /// the moment that stops. See [`RESTORE_SETTLE`].
+    pending_restore: Option<(NativeRect, Instant)>,
     selection_run: bool,
     closing: bool,
     transient_topmost: TransientTopmost,
@@ -346,15 +411,7 @@ impl StickerWindow {
 
     #[cfg(target_os = "windows")]
     fn native_rect(window: &Window) -> Option<NativeRect> {
-        let hwnd = Self::native_hwnd(window)?;
-        let mut rect = RECT::default();
-        unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
-        Some(NativeRect {
-            left: rect.left,
-            top: rect.top,
-            width: rect.right - rect.left,
-            height: rect.bottom - rect.top,
-        })
+        Self::hwnd_rect(Self::native_hwnd(window)?)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -422,21 +479,67 @@ impl StickerWindow {
         )
     }
 
+    /// Put the window exactly where it is asked to go, even across a DPI boundary.
+    ///
+    /// GPUI creates every window on the primary monitor, so restoring a sticker that lives
+    /// elsewhere means moving it between monitors. When their DPI differs Windows raises
+    /// `WM_DPICHANGED` while this very `SetWindowPos` is running and GPUI answers it by applying
+    /// the rectangle the system suggests, which is our size multiplied by the DPI ratio. Applying
+    /// the same rectangle again fixes it: by then the window already sits on the target monitor,
+    /// so no further DPI change is raised.
     #[cfg(target_os = "windows")]
     fn apply_native_rect(hwnd: HWND, rect: NativeRect) {
-        if let Err(err) = unsafe {
-            SetWindowPos(
-                hwnd,
-                None,
-                rect.left,
-                rect.top,
-                rect.width,
-                rect.height,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-        } {
-            tracing::warn!(?rect, error = ?err, "Failed to apply native sticker placement");
+        let mut previous = None;
+        for pass in 0..MAX_PLACEMENT_PASSES {
+            if let Err(err) = unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.width,
+                    rect.height,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            } {
+                tracing::warn!(?rect, error = ?err, "Failed to apply native sticker placement");
+                return;
+            }
+
+            let Some(actual) = Self::hwnd_rect(hwnd) else {
+                return;
+            };
+            if rect_settled(rect, actual, previous) {
+                if pass > 0 {
+                    tracing::debug!(
+                        ?rect,
+                        ?actual,
+                        passes = pass + 1,
+                        "Re-applied sticker placement after a DPI change"
+                    );
+                }
+                return;
+            }
+            previous = Some(actual);
         }
+
+        tracing::warn!(
+            ?rect,
+            ?previous,
+            "Gave up applying the native sticker placement"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn hwnd_rect(hwnd: HWND) -> Option<NativeRect> {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
+        Some(NativeRect {
+            left: rect.left,
+            top: rect.top,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+        })
     }
 
     /// Restore the exact pixel placement the sticker had when it was last saved. GPUI recreates
@@ -1005,13 +1108,14 @@ impl StickerWindow {
             .spawn(cx, async move |cx| {
                 loop {
                     cx.background_executor().timer(BOUNDS_SAVE_DEBOUNCE).await;
-                    if bounds_entity
-                        .update_in(cx, |this, window, cx| {
-                            this.tick_bounds_state(window, cx);
-                        })
-                        .is_err()
+                    match bounds_entity
+                        .update_in(cx, |this, window, cx| this.tick_bounds_state(window, cx))
                     {
-                        break;
+                        Err(_) => break,
+                        // Applying this while the window was borrowed above would be ignored, so
+                        // it deliberately happens between updates. See [`ScaleResync`].
+                        Ok(Some(resync)) => resync.apply(),
+                        Ok(None) => {}
                     }
                 }
             })
@@ -1105,6 +1209,18 @@ impl StickerWindow {
                 }
             });
 
+        let displays = Self::display_snapshot(cx);
+        // `open_with_options` asks Windows to place the window right after it is created, but that
+        // move can still be undone afterwards: a DPI change may be answered asynchronously, and a
+        // window opened hidden only gets GPUI's own placement once it is shown. Keep the resolved
+        // rect around so the first ticks can re-assert it, and treat it as our own doing so a
+        // botched restore is never saved back as if the user had moved the sticker.
+        #[cfg(target_os = "windows")]
+        let pending_restore = Self::resolved_placement(&detail, &displays)
+            .map(|resolved| (resolved.rect, Instant::now() + RESTORE_SETTLE));
+        #[cfg(not(target_os = "windows"))]
+        let pending_restore: Option<(NativeRect, Instant)> = None;
+
         Self {
             open_id,
             store,
@@ -1113,9 +1229,10 @@ impl StickerWindow {
             view,
             last_bounds: None,
             last_bounds_change_at: None,
-            display_fingerprint: display_fingerprint(&Self::display_snapshot(cx)),
+            display_fingerprint: display_fingerprint(&displays),
             transition_until: None,
-            programmatic_rect: None,
+            programmatic_rect: pending_restore.map(|(rect, _)| rect),
+            pending_restore,
             selection_run,
             closing: false,
             error: None,
@@ -1189,6 +1306,10 @@ impl StickerWindow {
                             #[cfg(target_os = "macos")]
                             StickerWindow::configure_native_window(window, this.detail.top_most);
                             window.refresh();
+                            // GPUI holds back the placement of a window opened hidden and applies
+                            // it here, computed from the primary monitor's scale factor. Claim the
+                            // placement back once the window is really on screen.
+                            this.rearm_restore(cx);
                             window.activate_window();
                         }
                     },
@@ -1221,9 +1342,13 @@ impl StickerWindow {
         cx.notify();
     }
 
-    fn tick_bounds_state(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn tick_bounds_state(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ScaleResync> {
         if self.view.id(cx) <= 0 {
-            return;
+            return None;
         }
 
         let displays = Self::display_snapshot(cx);
@@ -1232,21 +1357,36 @@ impl StickerWindow {
             self.display_fingerprint = fingerprint;
             self.transition_until = Some(Instant::now() + DISPLAY_TRANSITION_GRACE);
             self.reconcile_placement(window, cx, &displays);
+            let resync = self.redraw_after_relocation(window, cx);
             self.reset_bounds_watch(window, cx);
-            return;
+            return resync;
         }
 
         if let Some(until) = self.transition_until {
             if Instant::now() < until {
                 // Windows is still shuffling windows around; anything we observe now is its doing.
                 self.reset_bounds_watch(window, cx);
-                return;
+                return None;
             }
             self.transition_until = None;
             // The layout has settled, so undo whatever Windows did to the window in the meantime.
             self.reconcile_placement(window, cx, &displays);
+            let resync = self.redraw_after_relocation(window, cx);
             self.reset_bounds_watch(window, cx);
-            return;
+            return resync;
+        }
+
+        if self.settle_restore(window, cx) {
+            return None;
+        }
+
+        // Cheap safety net: a monitor change Windows reported late would otherwise leave the
+        // sticker drawing itself at the wrong scale until the user clicks it.
+        if let Some(resync) = Self::scale_resync(window) {
+            window.refresh();
+            cx.notify();
+            self.reset_bounds_watch(window, cx);
+            return Some(resync);
         }
 
         let current = self.current_bounds(window, cx);
@@ -1259,7 +1399,7 @@ impl StickerWindow {
         if changed {
             self.last_bounds = Some(current);
             self.last_bounds_change_at = Some(Instant::now());
-            return;
+            return None;
         }
 
         if self
@@ -1269,6 +1409,58 @@ impl StickerWindow {
             self.last_bounds_change_at = None;
             self.change_bounds(window, cx);
         }
+        None
+    }
+
+    /// Redraw the sticker after it was moved between monitors.
+    ///
+    /// Relocating the window with `SetWindowPos` changes its size and, when the monitors differ in
+    /// DPI, its scale factor. GPUI does not repaint on its own for a move it did not make, so the
+    /// window would keep showing content laid out for the monitor the sticker just left.
+    fn redraw_after_relocation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ScaleResync> {
+        window.refresh();
+        cx.notify();
+        Self::scale_resync(window)
+    }
+
+    /// Tell GPUI about the DPI of the monitor the sticker now lives on.
+    ///
+    /// GPUI caches a window's scale factor and only refreshes it from `WM_DPICHANGED`. Windows
+    /// does not always raise that message when a monitor disappears and the window is herded onto
+    /// another one, which leaves GPUI laying the sticker out for the DPI of a monitor it left:
+    /// the window has the right size and position but its contents are drawn at the wrong scale.
+    /// Raising the message ourselves puts GPUI back in sync, and its handler re-applies the very
+    /// rectangle we pass in, so this does not fight the placement.
+    #[cfg(target_os = "windows")]
+    fn scale_resync(window: &mut Window) -> Option<ScaleResync> {
+        let hwnd = Self::native_hwnd(window)?;
+        let rect = Self::hwnd_rect(hwnd)?;
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let scale_factor = Self::monitor_scale_factor(monitor);
+        if (window.scale_factor() - scale_factor).abs() < f32::EPSILON {
+            return None;
+        }
+
+        tracing::debug!(
+            stale = window.scale_factor(),
+            scale_factor,
+            ?rect,
+            "Resynchronising the sticker's scale factor with its monitor"
+        );
+        Some(ScaleResync {
+            hwnd: hwnd.0 as isize,
+            dpi: (scale_factor * USER_DEFAULT_SCREEN_DPI as f32).round() as u32,
+            rect,
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn scale_resync(_window: &mut Window) -> Option<ScaleResync> {
+        None
     }
 
     /// Forget the pending debounce so the next tick compares against where the window is now.
@@ -1317,11 +1509,63 @@ impl StickerWindow {
     ) {
     }
 
-    fn try_tick(&mut self, window: &Window, cx: &mut Context<Self>) {
+    /// Hold the freshly opened window on its restored placement for a moment.
+    ///
+    /// Returns `true` while the placement is still being asserted, so the caller skips its usual
+    /// change detection and never persists a rectangle Windows or GPUI imposed on us.
+    #[cfg(target_os = "windows")]
+    fn settle_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some((rect, until)) = self.pending_restore else {
+            return false;
+        };
+        if Instant::now() >= until {
+            self.pending_restore = None;
+            return false;
+        }
+        let Some(hwnd) = Self::native_hwnd(window) else {
+            self.pending_restore = None;
+            return false;
+        };
+        // A window that is still hidden has not received GPUI's own placement yet, so keep waiting.
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return true;
+        }
+        if Self::hwnd_rect(hwnd) != Some(rect) {
+            tracing::debug!(?rect, "Re-asserting the restored sticker placement");
+            Self::apply_native_rect(hwnd, rect);
+            self.redraw_after_relocation(window, cx);
+        }
+        self.programmatic_rect = Some(rect);
+        self.reset_bounds_watch(window, cx);
+        true
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn settle_restore(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        false
+    }
+
+    /// Start asserting the sticker's placement again, for a window GPUI positions late.
+    #[cfg(target_os = "windows")]
+    fn rearm_restore(&mut self, cx: &mut Context<Self>) {
+        let displays = Self::display_snapshot(cx);
+        let Some(resolved) = Self::resolved_placement(&self.detail, &displays) else {
+            return;
+        };
+        self.pending_restore = Some((resolved.rect, Instant::now() + RESTORE_SETTLE));
+        self.programmatic_rect = Some(resolved.rect);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn rearm_restore(&mut self, _cx: &mut Context<Self>) {}
+
+    /// A resync raised here is dropped on purpose: rendering is the one moment the window must not
+    /// be resized. The polling timer picks the correction up on its next pass.
+    fn try_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.last_bounds.is_none() {
             self.last_bounds = Some(self.current_bounds(window, cx));
         }
-        self.tick_bounds_state(window, cx);
+        let _ = self.tick_bounds_state(window, cx);
     }
 
     fn current_bounds(&self, window: &Window, cx: &Context<Self>) -> WindowState {
