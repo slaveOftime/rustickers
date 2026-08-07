@@ -38,11 +38,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 #[cfg(target_os = "windows")]
 use windows::{
     Win32::{
-        Foundation::{HWND, POINT, RECT},
-        Graphics::Gdi::{
-            GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
-            MONITORINFO, MonitorFromPoint, MonitorFromRect,
-        },
+        Foundation::{HWND, RECT},
+        Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
         System::Com::{CLSCTX_ALL, CoCreateInstance},
         UI::{
             HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
@@ -59,7 +56,9 @@ use windows::{
 };
 
 use crate::model::content::{CommandContent, FileStickerContent};
-use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
+use crate::model::sticker::{
+    StickerBounds, StickerColor, StickerDetail, StickerPlacement, StickerState, StickerType,
+};
 use crate::native::components::{
     IconName,
     stickers::{
@@ -73,7 +72,9 @@ use crate::native::components::{
 };
 use crate::native::file_manager;
 use crate::native::windows::{
-    EscapeDismissTarget, StickerWindowEvent, set_escape_dismiss_target_active,
+    EscapeDismissTarget, StickerWindowEvent,
+    placement::{DisplayEntry, NativeRect, ResolvedPlacement, resolve_placement},
+    set_escape_dismiss_target_active,
     transient_topmost::TransientTopmost,
 };
 use crate::storage::ArcStickerStore;
@@ -86,29 +87,10 @@ static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new
 const SELECTION_RUN_OPEN_ID_MIN: i64 = i64::MAX / 2;
 static NEXT_SELECTION_RUN_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
-/// A window rectangle in native Windows virtual-screen (physical) pixels.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-struct NativeRect {
-    left: i32,
-    top: i32,
-    width: i32,
-    height: i32,
-}
-
-impl NativeRect {
-    /// Convert between monitors of differing DPI, keeping the window's apparent size.
-    fn scaled(self, from_scale_factor: f32, to_scale_factor: f32) -> Self {
-        if from_scale_factor <= 0.0 || to_scale_factor <= 0.0 {
-            return self;
-        }
-        let ratio = (to_scale_factor / from_scale_factor) as f64;
-        Self {
-            width: (self.width as f64 * ratio).round() as i32,
-            height: (self.height as f64 * ratio).round() as i32,
-            ..self
-        }
-    }
-}
+/// How long window moves are ignored after the set of connected monitors changes. Windows shoves
+/// windows around itself during a dock or undock, and those moves must not be mistaken for the
+/// user deliberately choosing a new monitor.
+const DISPLAY_TRANSITION_GRACE: Duration = Duration::from_millis(1000);
 
 #[derive(PartialEq, Clone, Debug)]
 struct WindowState {
@@ -126,6 +108,17 @@ struct WindowState {
     scale_factor: f32,
 }
 
+impl WindowState {
+    fn native_rect(&self) -> Option<NativeRect> {
+        Some(NativeRect {
+            left: self.native_left?,
+            top: self.native_top?,
+            width: self.native_width?,
+            height: self.native_height?,
+        })
+    }
+}
+
 /// Extra knobs used when opening a sticker window.
 #[derive(Default)]
 struct OpenOptions {
@@ -137,6 +130,72 @@ struct OpenOptions {
     open_in_settings: bool,
     /// Create the window without showing it, the sticker view can reveal it later.
     hidden: bool,
+}
+
+/// A stable key for a monitor. GPUI derives the UUID from the Windows display device name; the
+/// raw handle is only a last resort, it changes between sessions.
+#[cfg(target_os = "windows")]
+fn display_uuid_of(display: &dyn gpui::PlatformDisplay) -> String {
+    match display.uuid() {
+        Ok(uuid) => uuid.to_string(),
+        Err(err) => {
+            let raw = u64::from(display.id());
+            tracing::warn!(raw, error = ?err, "Monitor has no stable UUID, falling back to its handle");
+            format!("id:{raw}")
+        }
+    }
+}
+
+/// A value that changes whenever a monitor is added, removed, moved or rescaled.
+fn display_fingerprint(displays: &[DisplayEntry]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<&DisplayEntry> = displays.iter().collect();
+    entries.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for entry in entries {
+        entry.uuid.hash(&mut hasher);
+        entry.work_area.hash(&mut hasher);
+        entry.scale_factor.to_bits().hash(&mut hasher);
+        entry.is_primary.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// The per-monitor placements of a sticker, falling back to the single placement older stickers
+/// carry inline so they keep working before their first save.
+fn placements_of(detail: &StickerDetail) -> Vec<StickerPlacement> {
+    if !detail.placements.is_empty() {
+        return detail.placements.clone();
+    }
+
+    let (Some(display_uuid), Some(left), Some(top), Some(width), Some(height)) = (
+        detail.display_uuid.clone(),
+        detail.native_left,
+        detail.native_top,
+        detail.native_width,
+        detail.native_height,
+    ) else {
+        return Vec::new();
+    };
+
+    vec![StickerPlacement {
+        display_uuid,
+        display_id: detail.display_id,
+        native_left: left,
+        native_top: top,
+        native_width: width,
+        native_height: height,
+        // The logical size was captured next to the native one, so their ratio is the DPI scale
+        // of the monitor the rect came from, even once that monitor is gone.
+        scale_factor: if detail.width > 0 && width > 0 {
+            width as f32 / detail.width as f32
+        } else {
+            1.0
+        },
+        updated_at: detail.updated_at,
+    }]
 }
 
 fn command_content(detail: &StickerDetail) -> Option<CommandContent> {
@@ -157,6 +216,13 @@ pub struct StickerWindow {
 
     last_bounds: Option<WindowState>,
     last_bounds_change_at: Option<Instant>,
+    /// Identifies the monitor layout the sticker was last reconciled against.
+    display_fingerprint: u64,
+    /// While set, the monitor layout is still settling and window moves are not the user's doing.
+    transition_until: Option<Instant>,
+    /// The rect this app last forced onto the window. Seeing exactly this rect means the move was
+    /// ours, so it must not be recorded as the user choosing a monitor.
+    programmatic_rect: Option<NativeRect>,
     selection_run: bool,
     closing: bool,
     transient_topmost: TransientTopmost,
@@ -307,11 +373,6 @@ impl StickerWindow {
     }
 
     #[cfg(target_os = "windows")]
-    fn primary_monitor() -> HMONITOR {
-        unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }
-    }
-
-    #[cfg(target_os = "windows")]
     fn work_area(monitor: HMONITOR) -> Option<RECT> {
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -322,71 +383,44 @@ impl StickerWindow {
             .then_some(info.rcWork)
     }
 
-    /// Map a saved native rect onto a monitor that still exists. A rect whose monitor is gone is
-    /// re-scaled from the DPI it was captured at to the primary monitor's DPI, then clamped into
-    /// that monitor's work area so the sticker keeps its apparent size and stays fully visible.
+    /// The monitors that are connected right now, described the way the placement resolver needs
+    /// them: stable UUID, DPI scale and work area in native pixels.
     #[cfg(target_os = "windows")]
-    fn visible_native_rect(rect: NativeRect, source_scale_factor: f32) -> NativeRect {
-        let win_rect = RECT {
-            left: rect.left,
-            top: rect.top,
-            right: rect.left + rect.width,
-            bottom: rect.top + rect.height,
-        };
-        if !unsafe { MonitorFromRect(&win_rect, MONITOR_DEFAULTTONULL) }.is_invalid() {
-            return rect;
-        }
-
-        let monitor = Self::primary_monitor();
-        let Some(work_area) = Self::work_area(monitor) else {
-            return rect;
-        };
-        let scaled = rect.scaled(source_scale_factor, Self::monitor_scale_factor(monitor));
-        let (left, top) = clamp_into_work_area(
-            (scaled.left, scaled.top),
-            (scaled.width, scaled.height),
-            (
-                work_area.left,
-                work_area.top,
-                work_area.right,
-                work_area.bottom,
-            ),
-        );
-        NativeRect {
-            left,
-            top,
-            ..scaled
-        }
-    }
-
-    /// Pull a sticker back onto the primary monitor once its own monitor is unplugged. Windows
-    /// leaves tool windows at their old virtual-screen coordinates, which are no longer visible.
-    #[cfg(target_os = "windows")]
-    fn relocate_if_off_screen(window: &Window) {
-        let Some(hwnd) = Self::native_hwnd(window) else {
-            return;
-        };
-        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            return;
-        }
-        let Some(current) = Self::native_rect(window) else {
-            return;
-        };
-        let target = Self::visible_native_rect(current, window.scale_factor());
-        if target == current {
-            return;
-        }
-
-        tracing::debug!(
-            ?current,
-            ?target,
-            "Relocating sticker from a disconnected monitor"
-        );
-        Self::apply_native_rect(hwnd, target);
+    fn display_snapshot(cx: &App) -> Vec<DisplayEntry> {
+        let primary = cx.primary_display().map(|display| u64::from(display.id()));
+        cx.displays()
+            .into_iter()
+            .filter_map(|display| {
+                let raw = u64::from(display.id());
+                let monitor = HMONITOR(raw as _);
+                let area = Self::work_area(monitor)?;
+                Some(DisplayEntry {
+                    uuid: display_uuid_of(display.as_ref()),
+                    display_id: Some(raw as i64),
+                    scale_factor: Self::monitor_scale_factor(monitor),
+                    work_area: (area.left, area.top, area.right, area.bottom),
+                    is_primary: primary == Some(raw),
+                })
+            })
+            .collect()
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn relocate_if_off_screen(_window: &Window) {}
+    fn display_snapshot(_cx: &App) -> Vec<DisplayEntry> {
+        Vec::new()
+    }
+
+    /// Where this sticker belongs given the monitors that exist right now.
+    fn resolved_placement(
+        detail: &StickerDetail,
+        displays: &[DisplayEntry],
+    ) -> Option<ResolvedPlacement> {
+        resolve_placement(
+            &placements_of(detail),
+            detail.preferred_display_uuid.as_deref(),
+            displays,
+        )
+    }
 
     #[cfg(target_os = "windows")]
     fn apply_native_rect(hwnd: HWND, rect: NativeRect) {
@@ -409,11 +443,11 @@ impl StickerWindow {
     /// the window using logical coordinates, which loses precision across monitors of differing
     /// DPI, so both the origin and the size are re-applied natively.
     #[cfg(target_os = "windows")]
-    fn restore_native_placement(window: &Window, rect: NativeRect, source_scale_factor: f32) {
+    fn restore_native_placement(window: &Window, rect: NativeRect) {
         let Some(hwnd) = Self::native_hwnd(window) else {
             return;
         };
-        Self::apply_native_rect(hwnd, Self::visible_native_rect(rect, source_scale_factor));
+        Self::apply_native_rect(hwnd, rect);
     }
 
     #[cfg(target_os = "windows")]
@@ -606,6 +640,8 @@ impl StickerWindow {
             native_top: None,
             native_width: None,
             native_height: None,
+            preferred_display_uuid: None,
+            placements: Vec::new(),
         };
 
         Self::open_with_detail(cx, sticker_events_tx, store, detail, true)
@@ -807,37 +843,26 @@ impl StickerWindow {
             current_size.map(|x| px(x as f32)),
         );
 
+        // Pick the monitor the sticker belongs to: its preferred one when that is plugged in,
+        // otherwise the primary one, deriving a placement when there is no memory of the target.
+        let resolved = Self::resolved_placement(&detail, &Self::display_snapshot(cx));
         let displays = cx.displays();
-        let saved_display = detail
-            .display_uuid
-            .as_deref()
-            .and_then(|saved_uuid| {
-                displays.iter().find(|display| {
-                    display
-                        .uuid()
-                        .is_ok_and(|uuid| uuid.to_string() == saved_uuid)
-                })
-            })
-            .or_else(|| {
-                detail.display_id.and_then(|saved_id| {
-                    displays
-                        .iter()
-                        .find(|display| u64::from(display.id()) as i64 == saved_id)
-                })
-            });
-        let saved_monitor_missing = (detail.display_uuid.is_some() || detail.display_id.is_some())
-            && saved_display.is_none();
-        let display_id = saved_display
+        let target_display = resolved.as_ref().and_then(|resolved| {
+            displays
+                .iter()
+                .find(|display| display_uuid_of(display.as_ref()) == resolved.display_uuid)
+        });
+        let display_id = target_display
             .map(|display| display.id())
             .or_else(|| cx.primary_display().map(|display| display.id()));
-        let bounds = if saved_monitor_missing {
-            let display_bounds = cx
-                .primary_display()
-                .map(|display| display.visible_bounds())
-                .unwrap_or(bounds);
-            Bounds::new(display_bounds.origin, bounds.size)
-        } else {
-            bounds
+        // GPUI creates the window from logical coordinates, which cannot express a precise
+        // position across monitors of differing DPI. Aim at the right monitor here and let the
+        // native correction below place the window exactly.
+        let bounds = match (&resolved, target_display) {
+            (Some(resolved), Some(display)) if !resolved.exact => {
+                Bounds::new(display.visible_bounds().origin, bounds.size)
+            }
+            _ => bounds,
         };
 
         let top_most = detail.top_most;
@@ -845,25 +870,7 @@ impl StickerWindow {
         #[cfg(target_os = "windows")]
         let virtual_desktop_id = detail.virtual_desktop_id.clone();
         #[cfg(target_os = "windows")]
-        let restore_rect = NativeRect {
-            left: detail.native_left.unwrap_or(bounds.left().to_f64() as i32),
-            top: detail.native_top.unwrap_or(bounds.top().to_f64() as i32),
-            width: detail
-                .native_width
-                .unwrap_or(bounds.size.width.to_f64() as i32),
-            height: detail
-                .native_height
-                .unwrap_or(bounds.size.height.to_f64() as i32),
-        };
-        // The saved native rect was captured at the saved monitor's DPI. Derive that scale from
-        // the logical size stored alongside it so an unplugged monitor can still be compensated.
-        #[cfg(target_os = "windows")]
-        let restore_scale_factor = match (detail.native_width, detail.width) {
-            (Some(native_width), logical_width) if logical_width > 0 && native_width > 0 => {
-                native_width as f32 / logical_width as f32
-            }
-            _ => 1.0,
-        };
+        let restore_rect = resolved.as_ref().map(|resolved| resolved.rect);
 
         // There is issue which gpui does not restore exactly with the given bounds especially on other displays
         let handle = cx.open_window(
@@ -913,11 +920,9 @@ impl StickerWindow {
             move |cx| {
                 let _ = handle.update(cx, |_, window, _| {
                     StickerWindow::restore_virtual_desktop(window, virtual_desktop_id.as_deref());
-                    StickerWindow::restore_native_placement(
-                        window,
-                        restore_rect,
-                        restore_scale_factor,
-                    );
+                    if let Some(rect) = restore_rect {
+                        StickerWindow::restore_native_placement(window, rect);
+                    }
                 });
             }
         });
@@ -1108,6 +1113,9 @@ impl StickerWindow {
             view,
             last_bounds: None,
             last_bounds_change_at: None,
+            display_fingerprint: display_fingerprint(&Self::display_snapshot(cx)),
+            transition_until: None,
+            programmatic_rect: None,
             selection_run,
             closing: false,
             error: None,
@@ -1218,7 +1226,28 @@ impl StickerWindow {
             return;
         }
 
-        Self::relocate_if_off_screen(window);
+        let displays = Self::display_snapshot(cx);
+        let fingerprint = display_fingerprint(&displays);
+        if fingerprint != self.display_fingerprint {
+            self.display_fingerprint = fingerprint;
+            self.transition_until = Some(Instant::now() + DISPLAY_TRANSITION_GRACE);
+            self.reconcile_placement(window, cx, &displays);
+            self.reset_bounds_watch(window, cx);
+            return;
+        }
+
+        if let Some(until) = self.transition_until {
+            if Instant::now() < until {
+                // Windows is still shuffling windows around; anything we observe now is its doing.
+                self.reset_bounds_watch(window, cx);
+                return;
+            }
+            self.transition_until = None;
+            // The layout has settled, so undo whatever Windows did to the window in the meantime.
+            self.reconcile_placement(window, cx, &displays);
+            self.reset_bounds_watch(window, cx);
+            return;
+        }
 
         let current = self.current_bounds(window, cx);
         let changed = self
@@ -1242,6 +1271,52 @@ impl StickerWindow {
         }
     }
 
+    /// Forget the pending debounce so the next tick compares against where the window is now.
+    fn reset_bounds_watch(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.last_bounds = Some(self.current_bounds(window, cx));
+        self.last_bounds_change_at = Some(Instant::now());
+    }
+
+    /// Move the sticker to wherever the current monitor layout says it belongs: back onto its
+    /// preferred monitor when that is plugged in, otherwise onto the primary one.
+    #[cfg(target_os = "windows")]
+    fn reconcile_placement(
+        &mut self,
+        window: &Window,
+        _cx: &mut Context<Self>,
+        displays: &[DisplayEntry],
+    ) {
+        let Some(hwnd) = Self::native_hwnd(window) else {
+            return;
+        };
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return;
+        }
+        let Some(resolved) = Self::resolved_placement(&self.detail, displays) else {
+            return;
+        };
+
+        self.programmatic_rect = Some(resolved.rect);
+        if Self::native_rect(window) == Some(resolved.rect) {
+            return;
+        }
+
+        tracing::debug!(
+            ?resolved,
+            "Relocating sticker for the current monitor layout"
+        );
+        Self::apply_native_rect(hwnd, resolved.rect);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn reconcile_placement(
+        &mut self,
+        _window: &Window,
+        _cx: &mut Context<Self>,
+        _displays: &[DisplayEntry],
+    ) {
+    }
+
     fn try_tick(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.last_bounds.is_none() {
             self.last_bounds = Some(self.current_bounds(window, cx));
@@ -1253,6 +1328,13 @@ impl StickerWindow {
         let bounds = window.bounds();
         let display = window.display(cx);
         let display_id = display.as_ref().map(|x| u64::from(x.id()) as i64);
+        // Must match the key `display_snapshot` uses, or placements are saved under one name and
+        // looked up under another.
+        #[cfg(target_os = "windows")]
+        let display_uuid = display
+            .as_ref()
+            .map(|display| display_uuid_of(display.as_ref()));
+        #[cfg(not(target_os = "windows"))]
         let display_uuid = display
             .and_then(|display| display.uuid().ok())
             .map(|uuid| uuid.to_string());
@@ -1281,65 +1363,137 @@ impl StickerWindow {
     }
 
     fn change_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let bounds = self.current_bounds(window, cx);
-        if bounds.left != self.detail.left
-            || bounds.top != self.detail.top
-            || bounds.width != self.detail.width
-            || bounds.height != self.detail.height
-            || bounds.display_id != self.detail.display_id
-            || bounds.display_uuid != self.detail.display_uuid
-            || bounds.virtual_desktop_id != self.detail.virtual_desktop_id
-            || bounds.native_left != self.detail.native_left
-            || bounds.native_top != self.detail.native_top
-            || bounds.native_width != self.detail.native_width
-            || bounds.native_height != self.detail.native_height
+        let state = self.current_bounds(window, cx);
+        if state.left == self.detail.left
+            && state.top == self.detail.top
+            && state.width == self.detail.width
+            && state.height == self.detail.height
+            && state.display_id == self.detail.display_id
+            && state.display_uuid == self.detail.display_uuid
+            && state.virtual_desktop_id == self.detail.virtual_desktop_id
+            && state.native_left == self.detail.native_left
+            && state.native_top == self.detail.native_top
+            && state.native_width == self.detail.native_width
+            && state.native_height == self.detail.native_height
         {
-            self.last_bounds = Some(bounds.clone());
+            return;
+        }
 
-            let id = self.view.id(cx);
-            let store = self.store.clone();
+        self.last_bounds = Some(state.clone());
 
-            tracing::debug!("Save bounds state: {:?}", &bounds);
+        let native_rect = state.native_rect();
+        // A move we made ourselves keeps the window on screen but says nothing about which monitor
+        // the user wants, so it must not touch the per-monitor memory.
+        let programmatic = match (self.programmatic_rect, native_rect) {
+            (Some(expected), Some(actual)) => expected == actual,
+            _ => false,
+        };
+        if !programmatic {
+            self.programmatic_rect = None;
+        }
 
-            cx.spawn(async move |this, cx| {
-                if let Err(err) = store
-                    .update_sticker_bounds(
-                        id,
-                        bounds.left,
-                        bounds.top,
-                        bounds.width,
-                        bounds.height,
-                        bounds.display_id,
-                        bounds.display_uuid.clone(),
-                        bounds.virtual_desktop_id.clone(),
-                        bounds.native_left,
-                        bounds.native_top,
-                        bounds.native_width,
-                        bounds.native_height,
-                    )
-                    .await
-                {
+        let placement = match (&state.display_uuid, native_rect) {
+            (Some(display_uuid), Some(rect)) if !programmatic => Some(StickerPlacement {
+                display_uuid: display_uuid.clone(),
+                display_id: state.display_id,
+                native_left: rect.left,
+                native_top: rect.top,
+                native_width: rect.width,
+                native_height: rect.height,
+                scale_factor: state.scale_factor,
+                updated_at: crate::utils::time::now_unix_millis(),
+            }),
+            _ => None,
+        };
+        let primary_uuid = Self::display_snapshot(cx)
+            .into_iter()
+            .find(|display| display.is_primary)
+            .map(|display| display.uuid);
+
+        let id = self.view.id(cx);
+        let store = self.store.clone();
+        let bounds = StickerBounds {
+            left: state.left,
+            top: state.top,
+            width: state.width,
+            height: state.height,
+            display_id: state.display_id,
+            display_uuid: state.display_uuid.clone(),
+            virtual_desktop_id: state.virtual_desktop_id.clone(),
+            native_left: state.native_left,
+            native_top: state.native_top,
+            native_width: state.native_width,
+            native_height: state.native_height,
+        };
+
+        tracing::debug!(programmatic, "Save bounds state: {:?}", &state);
+
+        cx.spawn(async move |this, cx| {
+            let mut result = store.update_sticker_bounds(id, bounds).await;
+
+            if let (Ok(()), Some(placement)) = (&result, placement.clone()) {
+                let preferred = placement.display_uuid.clone();
+                result = store
+                    .upsert_sticker_placement(id, placement, primary_uuid.clone())
+                    .await;
+                if result.is_ok() {
+                    result = store
+                        .update_sticker_preferred_display(id, Some(preferred))
+                        .await;
+                }
+            }
+
+            match result {
+                Err(err) => {
                     let _ = this.update(cx, |this, cx| {
                         this.set_error(format!("Failed to save window bounds: {err}"), cx);
                     });
-                } else {
+                }
+                Ok(()) => {
                     let _ = this.update(cx, |this, _| {
-                        this.detail.left = bounds.left;
-                        this.detail.top = bounds.top;
-                        this.detail.width = bounds.width;
-                        this.detail.height = bounds.height;
-                        this.detail.display_id = bounds.display_id;
-                        this.detail.display_uuid = bounds.display_uuid;
-                        this.detail.virtual_desktop_id = bounds.virtual_desktop_id;
-                        this.detail.native_left = bounds.native_left;
-                        this.detail.native_top = bounds.native_top;
-                        this.detail.native_width = bounds.native_width;
-                        this.detail.native_height = bounds.native_height;
+                        this.detail.left = state.left;
+                        this.detail.top = state.top;
+                        this.detail.width = state.width;
+                        this.detail.height = state.height;
+                        this.detail.display_id = state.display_id;
+                        this.detail.display_uuid = state.display_uuid;
+                        this.detail.virtual_desktop_id = state.virtual_desktop_id;
+                        this.detail.native_left = state.native_left;
+                        this.detail.native_top = state.native_top;
+                        this.detail.native_width = state.native_width;
+                        this.detail.native_height = state.native_height;
+
+                        if let Some(placement) = placement {
+                            this.remember_placement(placement, primary_uuid.as_deref());
+                        }
                     });
                 }
-            })
-            .detach();
+            }
+        })
+        .detach();
+    }
+
+    /// Mirror a saved placement into the in-memory copy so the next monitor change resolves
+    /// against fresh data without another round trip to the database.
+    fn remember_placement(&mut self, placement: StickerPlacement, protect_uuid: Option<&str>) {
+        let mut placements = placements_of(&self.detail);
+        self.detail.preferred_display_uuid = Some(placement.display_uuid.clone());
+
+        match placements
+            .iter_mut()
+            .find(|existing| existing.display_uuid == placement.display_uuid)
+        {
+            Some(existing) => *existing = placement,
+            None => placements.push(placement),
         }
+
+        let stale = crate::model::sticker::prune_placements(
+            &placements,
+            protect_uuid,
+            crate::model::sticker::MAX_PLACEMENTS_PER_STICKER,
+        );
+        placements.retain(|placement| !stale.contains(&placement.display_uuid));
+        self.detail.placements = placements;
     }
 
     fn change_color(&mut self, theme: StickerColor, cx: &mut Context<Self>) {
@@ -1480,6 +1634,8 @@ impl StickerWindow {
             native_top: None,
             native_width: None,
             native_height: None,
+            preferred_display_uuid: None,
+            placements: Vec::new(),
         };
 
         let store = self.store.clone();
@@ -1701,23 +1857,6 @@ fn generate_consistence_minus_id(sources: &[String]) -> i64 {
     -hash.abs()
 }
 
-/// Move a window rect back inside a work area, keeping it fully visible when it fits.
-fn clamp_into_work_area(
-    position: (i32, i32),
-    size: (i32, i32),
-    work_area: (i32, i32, i32, i32),
-) -> (i32, i32) {
-    let (left, top) = position;
-    let (width, height) = size;
-    let (area_left, area_top, area_right, area_bottom) = work_area;
-    let max_left = (area_right - width).max(area_left);
-    let max_top = (area_bottom - height).max(area_top);
-    (
-        left.clamp(area_left, max_left),
-        top.clamp(area_top, max_top),
-    )
-}
-
 fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
     match sticker_type {
         StickerType::Markdown => IconName::DocumentText,
@@ -1725,97 +1864,5 @@ fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
         StickerType::Timer => IconName::Bell,
         StickerType::Paint => IconName::Paint,
         StickerType::File => IconName::DocumentText,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{NativeRect, clamp_into_work_area};
-
-    const PRIMARY: (i32, i32, i32, i32) = (0, 0, 1920, 1040);
-
-    #[test]
-    fn position_on_an_unplugged_right_monitor_moves_to_the_primary_edge() {
-        assert_eq!(
-            clamp_into_work_area((2307, 300), (210, 114), PRIMARY),
-            (1710, 300)
-        );
-    }
-
-    #[test]
-    fn position_above_the_primary_monitor_is_pulled_down() {
-        assert_eq!(
-            clamp_into_work_area((400, -1217), (210, 114), PRIMARY),
-            (400, 0)
-        );
-    }
-
-    #[test]
-    fn windows_larger_than_the_work_area_align_to_its_origin() {
-        assert_eq!(
-            clamp_into_work_area((2307, -1217), (3000, 2000), PRIMARY),
-            (0, 0)
-        );
-    }
-
-    #[test]
-    fn moving_to_a_higher_dpi_monitor_grows_the_pixel_size() {
-        let rect = NativeRect {
-            left: 100,
-            top: 200,
-            width: 210,
-            height: 114,
-        };
-        assert_eq!(
-            rect.scaled(1.0, 1.5),
-            NativeRect {
-                left: 100,
-                top: 200,
-                width: 315,
-                height: 171,
-            }
-        );
-    }
-
-    #[test]
-    fn moving_to_a_lower_dpi_monitor_shrinks_the_pixel_size() {
-        let rect = NativeRect {
-            left: 0,
-            top: 0,
-            width: 315,
-            height: 171,
-        };
-        assert_eq!(
-            rect.scaled(1.5, 1.0),
-            NativeRect {
-                left: 0,
-                top: 0,
-                width: 210,
-                height: 114,
-            }
-        );
-    }
-
-    #[test]
-    fn equal_dpi_monitors_keep_the_pixel_size() {
-        let rect = NativeRect {
-            left: 5,
-            top: 6,
-            width: 210,
-            height: 114,
-        };
-        assert_eq!(rect.scaled(1.25, 1.25), rect);
-    }
-
-    #[test]
-    fn invalid_scale_factors_leave_the_rect_untouched() {
-        let rect = NativeRect {
-            left: 5,
-            top: 6,
-            width: 210,
-            height: 114,
-        };
-        assert_eq!(rect.scaled(0.0, 1.5), rect);
-        assert_eq!(rect.scaled(1.5, 0.0), rect);
     }
 }

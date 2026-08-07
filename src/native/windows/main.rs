@@ -229,6 +229,8 @@ impl MainWindow {
             native_top: None,
             native_width: None,
             native_height: None,
+            preferred_display_uuid: None,
+            placements: Vec::new(),
         };
 
         let store = self.store.clone();

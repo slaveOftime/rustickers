@@ -44,6 +44,8 @@ pub fn run(
         native_top: None,
         native_width: None,
         native_height: None,
+        preferred_display_uuid: None,
+        placements: Vec::new(),
     }))?;
 
     println!("Created markdown sticker (id={id})");

@@ -15,20 +15,21 @@ pub trait StickerStore: Send + Sync {
 
     async fn update_sticker_color(&self, id: i64, color: String) -> anyhow::Result<()>;
     async fn update_sticker_title(&self, id: i64, title: String) -> anyhow::Result<()>;
-    async fn update_sticker_bounds(
+    async fn update_sticker_bounds(&self, id: i64, bounds: StickerBounds) -> anyhow::Result<()>;
+    /// The monitor the sticker returns to whenever it is connected.
+    async fn update_sticker_preferred_display(
         &self,
         id: i64,
-        left: i32,
-        top: i32,
-        width: i32,
-        height: i32,
-        display_id: Option<i64>,
         display_uuid: Option<String>,
-        virtual_desktop_id: Option<String>,
-        native_left: Option<i32>,
-        native_top: Option<i32>,
-        native_width: Option<i32>,
-        native_height: Option<i32>,
+    ) -> anyhow::Result<()>;
+    async fn get_sticker_placements(&self, id: i64) -> anyhow::Result<Vec<StickerPlacement>>;
+    /// Remember where the sticker sits on one monitor, dropping the least recently used records
+    /// beyond the cap. The record for `protect_display_uuid` is never dropped.
+    async fn upsert_sticker_placement(
+        &self,
+        id: i64,
+        placement: StickerPlacement,
+        protect_display_uuid: Option<String>,
     ) -> anyhow::Result<()>;
     async fn update_sticker_content(&self, id: i64, content: String) -> anyhow::Result<()>;
     async fn update_sticker_state(&self, id: i64, state: StickerState) -> anyhow::Result<()>;

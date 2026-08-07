@@ -2,6 +2,7 @@ use crate::model::sticker::StickerColor;
 use std::sync::RwLock;
 
 pub mod main;
+pub mod placement;
 pub mod selection;
 pub mod sticker;
 mod transient_topmost;

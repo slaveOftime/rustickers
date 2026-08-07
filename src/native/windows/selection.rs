@@ -720,6 +720,8 @@ mod tests {
             native_top: None,
             native_width: None,
             native_height: None,
+            preferred_display_uuid: None,
+            placements: Vec::new(),
         }
     }
 

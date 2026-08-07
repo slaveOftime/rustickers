@@ -93,6 +93,12 @@ impl super::StickerStore for SqliteStore {
 
     async fn delete_sticker(&self, id: i64) -> anyhow::Result<()> {
         tracing::debug!(id, "Delete sticker");
+        // Foreign keys are off by default in SQLite, so the placement rows are removed explicitly.
+        sqlx::query("DELETE FROM sticker_placements WHERE sticker_id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("delete sticker placements")?;
         sqlx::query("DELETE FROM stickers WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
@@ -103,13 +109,15 @@ impl super::StickerStore for SqliteStore {
 
     async fn get_sticker(&self, id: i64) -> anyhow::Result<StickerDetail> {
         tracing::debug!(id, "Get sticker detail");
-        let row = sqlx::query_as::<_, StickerDetail>(
-            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at, display_id, display_uuid, virtual_desktop_id, native_left, native_top, native_width, native_height FROM stickers WHERE id = ?1",
+        let mut row = sqlx::query_as::<_, StickerDetail>(
+            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at, display_id, display_uuid, virtual_desktop_id, native_left, native_top, native_width, native_height, preferred_display_uuid FROM stickers WHERE id = ?1",
         )
         .bind(id)
         .fetch_one(&self.pool)
         .await
         .context("get sticker")?;
+
+        row.placements = self.get_sticker_placements(id).await?;
 
         Ok(row)
     }
@@ -159,23 +167,10 @@ impl super::StickerStore for SqliteStore {
         Ok(())
     }
 
-    async fn update_sticker_bounds(
-        &self,
-        id: i64,
-        left: i32,
-        top: i32,
-        width: i32,
-        height: i32,
-        display_id: Option<i64>,
-        display_uuid: Option<String>,
-        virtual_desktop_id: Option<String>,
-        native_left: Option<i32>,
-        native_top: Option<i32>,
-        native_width: Option<i32>,
-        native_height: Option<i32>,
-    ) -> anyhow::Result<()> {
-        tracing::debug!(
-            id,
+    async fn update_sticker_bounds(&self, id: i64, bounds: StickerBounds) -> anyhow::Result<()> {
+        tracing::debug!(id, ?bounds, "Update sticker bounds");
+
+        let StickerBounds {
             left,
             top,
             width,
@@ -183,8 +178,11 @@ impl super::StickerStore for SqliteStore {
             display_id,
             display_uuid,
             virtual_desktop_id,
-            "Update sticker bounds"
-        );
+            native_left,
+            native_top,
+            native_width,
+            native_height,
+        } = bounds;
 
         let now = crate::utils::time::now_unix_millis();
 
@@ -222,6 +220,114 @@ impl super::StickerStore for SqliteStore {
         .execute(&self.pool)
         .await
         .context("update sticker bounds")?;
+
+        Ok(())
+    }
+
+    async fn update_sticker_preferred_display(
+        &self,
+        id: i64,
+        display_uuid: Option<String>,
+    ) -> anyhow::Result<()> {
+        tracing::debug!(id, display_uuid, "Update sticker preferred display");
+
+        sqlx::query("UPDATE stickers SET preferred_display_uuid = ?1 WHERE id = ?2")
+            .bind(display_uuid)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("update sticker preferred display")?;
+
+        Ok(())
+    }
+
+    async fn get_sticker_placements(&self, id: i64) -> anyhow::Result<Vec<StickerPlacement>> {
+        let rows = sqlx::query_as::<_, StickerPlacement>(
+            r#"
+            SELECT display_uuid, display_id, native_left, native_top, native_width, native_height,
+                   scale_factor, updated_at
+            FROM sticker_placements
+            WHERE sticker_id = ?1
+            ORDER BY updated_at DESC
+            "#,
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await
+        .context("get sticker placements")?;
+
+        Ok(rows)
+    }
+
+    async fn upsert_sticker_placement(
+        &self,
+        id: i64,
+        placement: StickerPlacement,
+        protect_display_uuid: Option<String>,
+    ) -> anyhow::Result<()> {
+        tracing::debug!(id, ?placement, "Upsert sticker placement");
+
+        let mut tx = self.pool.begin().await.context("begin placement upsert")?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO sticker_placements (
+                sticker_id, display_uuid, display_id,
+                native_left, native_top, native_width, native_height,
+                scale_factor, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(sticker_id, display_uuid) DO UPDATE SET
+                display_id = excluded.display_id,
+                native_left = excluded.native_left,
+                native_top = excluded.native_top,
+                native_width = excluded.native_width,
+                native_height = excluded.native_height,
+                scale_factor = excluded.scale_factor,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(&placement.display_uuid)
+        .bind(placement.display_id)
+        .bind(placement.native_left)
+        .bind(placement.native_top)
+        .bind(placement.native_width)
+        .bind(placement.native_height)
+        .bind(placement.scale_factor)
+        .bind(placement.updated_at)
+        .execute(&mut *tx)
+        .await
+        .context("upsert sticker placement")?;
+
+        let existing = sqlx::query_as::<_, StickerPlacement>(
+            r#"
+            SELECT display_uuid, display_id, native_left, native_top, native_width, native_height,
+                   scale_factor, updated_at
+            FROM sticker_placements
+            WHERE sticker_id = ?1
+            "#,
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .context("read sticker placements for pruning")?;
+
+        for stale in prune_placements(
+            &existing,
+            protect_display_uuid.as_deref(),
+            MAX_PLACEMENTS_PER_STICKER,
+        ) {
+            sqlx::query(
+                "DELETE FROM sticker_placements WHERE sticker_id = ?1 AND display_uuid = ?2",
+            )
+            .bind(id)
+            .bind(stale)
+            .execute(&mut *tx)
+            .await
+            .context("prune sticker placements")?;
+        }
+
+        tx.commit().await.context("commit placement upsert")?;
 
         Ok(())
     }
@@ -404,8 +510,8 @@ ON CONFLICT(sticker_id) DO UPDATE SET last_used_at = excluded.last_used_at"#,
     }
 
     async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>> {
-        let rows = sqlx::query_as::<_, StickerDetail>(
-            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at,             s.display_id, s.display_uuid, s.virtual_desktop_id,             s.native_left, s.native_top, s.native_width, s.native_height
+        let mut rows = sqlx::query_as::<_, StickerDetail>(
+            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at,             s.display_id, s.display_uuid, s.virtual_desktop_id,             s.native_left, s.native_top, s.native_width, s.native_height, s.preferred_display_uuid
 FROM stickers s
 LEFT JOIN selection_lru l ON s.id = l.sticker_id
 WHERE s.type = 'command'
@@ -416,6 +522,11 @@ ORDER BY l.last_used_at DESC NULLS LAST, s.updated_at DESC, s.id DESC"#
         .fetch_all(&self.pool)
         .await
         .context("query accept_selection stickers")?;
+
+        for row in rows.iter_mut() {
+            row.placements = self.get_sticker_placements(row.id).await?;
+        }
+
         Ok(rows)
     }
 }
