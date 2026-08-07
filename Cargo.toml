@@ -50,6 +50,11 @@ cli = [
 	"dep:clap",
 	"dep:futures",
 	"dep:sqlx",
+	# The CLI validates what it is about to store, so a broken sticker is reported
+	# at creation time instead of silently failing later inside the app.
+	"dep:cron",
+	"dep:which",
+	"dep:winsplit",
 ]
 
 [[bin]]

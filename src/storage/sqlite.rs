@@ -42,7 +42,8 @@ impl SqliteStore {
             .await
             .context("connect sqlite pool")?;
 
-        #[cfg(feature = "ui")]
+        // The CLI migrates too: it writes the same schema, and running it before the app has ever
+        // been launched should create a usable database rather than fail with "no such table".
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await

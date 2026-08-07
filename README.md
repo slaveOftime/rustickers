@@ -49,19 +49,65 @@ Outputs are written to `target/release/`.
 
 ## CLI commands
 
-`rusticker` supports:
+`rusticker` is the scripting surface for the app. It writes to the same database the app reads, so
+changes apply immediately when the app is running and on next launch when it is not.
 
-- `list [--state open|close|all] [--search <text>]`
-- `show <id>`
-- `open <id>` / `close <id>`
-- `view <path-or-url> [--width <px>] [--height <px>] [--color <color>]`
-- `markdown [-t <title>] [-c <content>] [--width <px>] [--height <px>] [--color <color>]`
-- `cmd <command> [--cron <expr>] [--run-now] [--env KEY=VALUE]... [--dir <path>] [--width <px>] [--height <px>] [--color <color>]`
+| Command | What it does |
+| --- | --- |
+| `list [--state open\|close\|all] [--type <t>] [-s <text>] [-n <limit>]` | Find stickers |
+| `show <id> [--content-only]` | Everything stored about one sticker |
+| `result <id>` | What a command sticker last produced |
+| `open <id>` / `close <id>` | Show or hide a sticker's window |
+| `delete <id> [-y]` | Remove a sticker permanently |
+| `view <path-or-url>` | Preview a file, folder or URL |
+| `markdown [-c <text>] [-f <file>]` | Create a note sticker |
+| `cmd <command> [...]` | Create a command sticker |
+| `skill [list\|show <name>\|run <name>]` | Worked examples |
 
-Width and height default to 400×300 for markdown and command stickers, and auto-detected for file/URL stickers.
-Color options: yellow, green, blue, pink, gray.
+All of them accept the shared appearance options `--width`, `--height`, `--left`, `--top`,
+`--color` (yellow, green, blue, pink, gray), `--top-most` and `--closed`. Markdown and command
+stickers default to 400×300; file and URL stickers are sized from their content.
 
-Tip: passing a single file path or URL is treated as `view <source>` automatically, and trailing options are forwarded.
+Passing a single file path or URL is treated as `view <source>` automatically, and trailing
+options are forwarded.
+
+### Command stickers
+
+`rusticker cmd` exposes everything a command sticker can do:
+
+```bash
+rusticker cmd "cargo test" --result text --dir .          # run and show plain output
+rusticker cmd "npm test 2>&1 | tail -20" --shell          # use a shell for pipes and redirection
+rusticker cmd "gh pr list" --cron "0 */5 * * * *"         # re-run every five minutes
+rusticker cmd "copilot -p {{RUSTICKERS_SELECTION}}" \
+  --accept-selection --result markdown --closed           # answer whatever text you have selected
+```
+
+Output can be rendered five ways with `--result`: `text`, `markdown`, `html` (an embedded browser
+view), `svg` (an image) or `source` (the output is one file path or URL to preview). Other useful
+flags are `--stream`, `--no-window`, `--auto-close`, `--padding`, `--env KEY=VALUE` and `--idle`.
+
+Two things are worth knowing. A command sticker does **not** run through a shell by default: the
+string is split with Windows argument rules and the program is looked up on `PATH`, so pipes and
+`&&` are literal text until you add `--shell`. And a sticker created without `--idle` is *armed*,
+meaning it runs when its window opens and again each time the app starts.
+
+### Machine-readable output
+
+Add `--json` to any command to get exactly one JSON object on stdout, with an `ok` field so
+success and failure parse the same way:
+
+```bash
+rusticker cmd "git status --short" --dir . --json   # -> {"ok":true,"id":42,...}
+rusticker result 42 --json                          # -> {"ok":true,"output":"...","has_run":true}
+```
+
+### Skills
+
+`rusticker skill list` is a catalogue of ready-made stickers — selection-driven AI prompts,
+scheduled watchers, HTML and SVG reports. `skill show <name>` explains one and prints the exact
+`rusticker` command it is equivalent to, and `skill run <name> --var key=value` creates it.
+`--dry-run` prints the command without creating anything.
 
 ## Data and logs
 

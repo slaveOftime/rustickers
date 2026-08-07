@@ -38,6 +38,14 @@ impl FileStickerContent {
 
 // ── Command sticker ──────────────────────────────────────────────────────────
 
+/// Written into a command sticker's arguments, and replaced with the captured text when the
+/// sticker is launched from a text selection. Only arguments are substituted, never the program.
+pub const SELECTION_PLACEHOLDER: &str = "{{RUSTICKERS_SELECTION}}";
+
+/// The captured text is also handed to every selection run through this environment variable, so
+/// a command can read the selection without using the placeholder at all.
+pub const SELECTION_ENV_VAR: &str = "RUSTICKERS_SELECTION";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandContent {
     pub command: String,

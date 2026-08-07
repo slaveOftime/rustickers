@@ -1,195 +1,205 @@
-mod close;
-mod cmd;
-mod console;
-mod list;
-mod markdown;
-mod open;
-mod show;
-pub mod view;
+//! The `rusticker` command line.
+//!
+//! The CLI is the scripting surface for the desktop app: it creates stickers, finds them, opens
+//! and closes them, and reads back what command stickers produced. Anything it changes goes into
+//! the same database the app reads, so it works whether or not the app is running — when it is,
+//! the change is also pushed over IPC and takes effect immediately.
+//!
+//! The module has two halves. [`commands`] holds one module per subcommand, each owning its own
+//! arguments as well as its behaviour. Everything else is shared machinery: [`output`] for the
+//! human/JSON split, [`runtime`] for the database and IPC, [`draft`] for the single sticker
+//! creation path, [`shell`] for validating command strings, and [`skills`] for the catalogue of
+//! worked examples.
 
-use clap::{Parser, Subcommand, ValueEnum};
+pub mod commands;
+mod draft;
+mod output;
+mod runtime;
+mod shell;
+mod skills;
+
+use clap::{CommandFactory as _, Parser, Subcommand};
 
 use crate::model::sticker::StickerColor;
 use crate::storage::paths::AppPaths;
 
-fn parse_color(s: &str) -> Result<StickerColor, String> {
-    s.parse::<StickerColor>().map_err(|_| {
-        format!(
-            "Invalid color '{s}'. Expected one of: {}",
-            StickerColor::ALL
-                .iter()
-                .map(|c| c.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })
+use output::Format;
+
+pub(crate) fn parse_color(s: &str) -> Result<StickerColor, String> {
+    let known = StickerColor::ALL.map(|c| c.as_str());
+    if known.contains(&s.trim().to_ascii_lowercase().as_str()) {
+        // `StickerColor::from_str` is infallible and quietly falls back to gray, so the membership
+        // test above is what actually rejects a typo.
+        s.parse::<StickerColor>()
+            .map_err(|_| format!("invalid color '{s}'"))
+    } else {
+        Err(format!(
+            "invalid color '{s}'; expected one of: {}",
+            known.join(", ")
+        ))
+    }
 }
 
+const AFTER_HELP: &str = "\
+Examples:
+  rusticker list --state all                       every sticker
+  rusticker markdown --file notes.md               pin a document
+  rusticker cmd \"git status --short\" --dir .       show command output
+  rusticker cmd \"npm test\" --shell                 use a shell for pipes and redirection
+  rusticker result 12                              print what sticker 12 last produced
+  rusticker skill list                             ready-made recipes worth copying
+
+Command stickers do not run through a shell: the command is split with Windows argument rules and
+the program is looked up on PATH. Pass --shell when you need pipes, redirection or `&&`.
+
+Add --json to any command to get one machine-readable object on stdout instead of a report.";
+
 #[derive(Parser)]
-#[command(name = "rustickers", about = "Rustickers sticker manager")]
+#[command(
+    name = "rusticker",
+    about = "Create and control Rustickers desktop stickers",
+    long_about = "Create and control Rustickers desktop stickers.\n\nStickers live in a local \
+                  database that the desktop app reads. Changes made here apply immediately when \
+                  the app is running, and on next launch when it is not.",
+    after_help = AFTER_HELP,
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Print one JSON object instead of a human-readable report
+    ///
+    /// The object always has an `ok` field, so success and failure parse the same way.
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Close an open sticker by ID
-    Close {
-        /// Sticker ID
-        id: i64,
-    },
+    /// List stickers
+    List(commands::list::ListArgs),
 
-    /// Open a closed sticker by ID
-    Open {
-        /// Sticker ID
-        id: i64,
-    },
+    /// Show everything stored about one sticker
+    Show(commands::show::ShowArgs),
 
-    /// List stickers (id, title, type, position, size)
-    List {
-        /// Filter by state (default: open)
-        #[arg(long, value_enum, default_value = "open")]
-        state: ListState,
+    /// Print what a command sticker last produced
+    Result(commands::result::ResultArgs),
 
-        /// Search in title and content
-        #[arg(long)]
-        search: Option<String>,
-    },
+    /// Open a sticker's window
+    Open(commands::window::WindowArgs),
 
-    /// Show full detail for a sticker by ID
-    Show {
-        /// Sticker ID
-        id: i64,
-    },
+    /// Close a sticker's window
+    Close(commands::window::WindowArgs),
 
-    /// Create and open a file/URL sticker
-    View {
-        /// File path or URL to display
-        source: String,
+    /// Delete a sticker permanently
+    Delete(commands::delete::DeleteArgs),
 
-        /// Sticker width in pixels (default: auto-detected)
-        #[arg(long)]
-        width: Option<i32>,
+    /// Preview a file, folder or URL
+    View(commands::view::ViewArgs),
 
-        /// Sticker height in pixels (default: auto-detected)
-        #[arg(long)]
-        height: Option<i32>,
+    /// Create a markdown note sticker
+    Markdown(commands::markdown::MarkdownArgs),
 
-        /// Sticker color (yellow, green, blue, pink, gray)
-        #[arg(long, value_parser = parse_color)]
-        color: Option<StickerColor>,
-    },
+    /// Create a command sticker
+    Cmd(commands::cmd::CmdArgs),
 
-    /// Create and open a markdown sticker
-    Markdown {
-        /// Title for the sticker (defaults to first non-empty line of content)
-        #[arg(long, short = 't')]
-        title: Option<String>,
-
-        /// Initial markdown content
-        #[arg(long, short = 'c')]
-        content: Option<String>,
-
-        /// Sticker width in pixels (default: 400)
-        #[arg(long)]
-        width: Option<i32>,
-
-        /// Sticker height in pixels (default: 300)
-        #[arg(long)]
-        height: Option<i32>,
-
-        /// Sticker color (yellow, green, blue, pink, gray)
-        #[arg(long, value_parser = parse_color)]
-        color: Option<StickerColor>,
-    },
-
-    /// Create and open a command sticker
-    Cmd {
-        /// Shell command to run
-        command: String,
-
-        /// Accept selected text from any app (passed as RUSTICKERS_SELECTION env var)
-        #[arg(long = "accept-selection", action = clap::ArgAction::SetTrue)]
-        accept_selection: bool,
-
-        /// Cron expression for scheduling (e.g. "0 */1 * * * *" to run every minute)
-        #[arg(long)]
-        cron: Option<String>,
-
-        /// Run command immediately on creation
-        #[arg(long = "run-now", action = clap::ArgAction::SetTrue)]
-        run_immediately: bool,
-
-        /// Environment variables as KEY=VALUE (repeatable)
-        #[arg(long, value_name = "KEY=VALUE")]
-        env: Vec<String>,
-
-        /// Working directory for the command
-        #[arg(long)]
-        dir: Option<String>,
-
-        /// Sticker width in pixels (default: 400)
-        #[arg(long)]
-        width: Option<i32>,
-
-        /// Sticker height in pixels (default: 300)
-        #[arg(long)]
-        height: Option<i32>,
-
-        /// Sticker color (yellow, green, blue, pink, gray)
-        #[arg(long, value_parser = parse_color)]
-        color: Option<StickerColor>,
-    },
+    /// Worked examples: selection commands, scheduled runs, rendered output
+    Skill(commands::skill::SkillArgs),
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ListState {
-    Open,
-    Close,
-    All,
+impl Cli {
+    pub fn format(&self) -> Format {
+        Format::new(self.json)
+    }
+}
+
+/// Every subcommand name, so the file-path shorthand in the binary entry point cannot fall out of
+/// date when a subcommand is added.
+pub fn subcommand_names() -> Vec<String> {
+    Cli::command()
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_owned())
+        .collect()
 }
 
 pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
+    let format = cli.format();
+
     match cli.command {
-        Commands::Close { id } => close::run(id),
-        Commands::Open { id } => open::run(id),
-        Commands::List { state, search } => list::run(app_paths, state, search),
-        Commands::Show { id } => show::run(app_paths, id),
-        Commands::View {
-            source,
-            width,
-            height,
-            color,
-        } => view::run(source, width, height, color),
-        Commands::Markdown {
-            content,
-            title,
-            width,
-            height,
-            color,
-        } => markdown::run(app_paths, content, title, width, height, color),
-        Commands::Cmd {
-            command,
-            accept_selection,
-            cron,
-            run_immediately,
-            env,
-            dir,
-            width,
-            height,
-            color,
-        } => cmd::run(
-            app_paths,
-            command,
-            accept_selection,
-            cron,
-            run_immediately,
-            env,
-            dir,
-            width,
-            height,
-            color,
-        ),
+        Commands::List(args) => commands::list::run(app_paths, args, format),
+        Commands::Show(args) => commands::show::run(app_paths, args, format),
+        Commands::Result(args) => commands::result::run(app_paths, args, format),
+        Commands::Open(args) => commands::window::open(app_paths, args, format),
+        Commands::Close(args) => commands::window::close(app_paths, args, format),
+        Commands::Delete(args) => commands::delete::run(app_paths, args, format),
+        Commands::View(args) => commands::view::run(args, format),
+        Commands::Markdown(args) => commands::markdown::run(app_paths, args, format),
+        Commands::Cmd(args) => commands::cmd::run(app_paths, args, format),
+        Commands::Skill(args) => commands::skill::run(app_paths, args, format),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_argument_definitions_are_internally_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn the_subcommand_list_includes_every_command() {
+        let names = subcommand_names();
+        for expected in [
+            "list", "show", "result", "open", "close", "delete", "view", "markdown", "cmd", "skill",
+        ] {
+            assert!(names.contains(&expected.to_owned()), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn json_is_accepted_before_and_after_the_subcommand() {
+        assert!(
+            Cli::parse_from(["rusticker", "--json", "list"])
+                .format()
+                .is_json()
+        );
+        assert!(
+            Cli::parse_from(["rusticker", "list", "--json"])
+                .format()
+                .is_json()
+        );
+        assert!(!Cli::parse_from(["rusticker", "list"]).format().is_json());
+    }
+
+    #[test]
+    fn colors_are_validated_against_the_real_palette() {
+        assert!(parse_color("blue").is_ok());
+        assert!(parse_color("  BLUE ").is_ok());
+        let err = parse_color("chartreuse").unwrap_err();
+        assert!(err.contains("expected one of"), "{err}");
+    }
+
+    #[test]
+    fn every_skill_expands_to_arguments_the_parser_accepts() {
+        // A skill is only trustworthy if the command it claims to run actually parses.
+        for skill in skills::SKILLS {
+            let vars = skill
+                .vars
+                .iter()
+                .map(|var| {
+                    (
+                        var.name.to_owned(),
+                        var.default.unwrap_or("placeholder").to_owned(),
+                    )
+                })
+                .collect();
+            let mut argv = vec!["rusticker".to_owned()];
+            argv.extend(skill.expand(&vars));
+            Cli::try_parse_from(&argv)
+                .unwrap_or_else(|err| panic!("skill '{}' does not parse: {err}", skill.name));
+        }
     }
 }

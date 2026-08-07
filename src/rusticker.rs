@@ -1,5 +1,4 @@
-//! This is the entry file for the CLI application.
-//! It parses command-line arguments and dispatches commands accordingly.
+//! Entry point for the `rusticker` command line binary.
 
 use clap::Parser as _;
 use std::ffi::OsString;
@@ -9,47 +8,42 @@ use rustickers::cli;
 use rustickers::storage::paths::AppPaths;
 
 fn main() {
-    let app_paths = AppPaths::new().expect("App paths should initialize");
+    let app_paths = match AppPaths::new() {
+        Ok(paths) => paths,
+        Err(err) => {
+            eprintln!("error: could not locate the Rustickers data directory: {err:#}");
+            std::process::exit(1);
+        }
+    };
 
-    let cli = cli::Cli::parse_from(normalize_argv_for_view_alias());
+    let cli = cli::Cli::parse_from(expand_view_shorthand(std::env::args_os().collect()));
+    let format = cli.format();
 
     if let Err(err) = cli::run(cli, &app_paths) {
-        eprintln!("error: {err:#}");
+        format.emit_error(&err);
         std::process::exit(1);
     }
 }
 
-fn normalize_argv_for_view_alias() -> Vec<OsString> {
-    let args: Vec<OsString> = std::env::args_os().collect();
+/// Let `rusticker <file-or-url>` mean `rusticker view <file-or-url>`.
+///
+/// The shorthand only applies when the first argument is unambiguous — an existing path or a URL,
+/// and not the name of a subcommand. The subcommand list comes from the parser itself, so adding
+/// a subcommand can never be shadowed by a file that happens to share its name.
+fn expand_view_shorthand(args: Vec<OsString>) -> Vec<OsString> {
+    let Some(first) = args.get(1).and_then(|arg| arg.to_str()) else {
+        return args;
+    };
 
-    if args.len() < 2 {
+    if first.starts_with('-') || cli::subcommand_names().iter().any(|name| name == first) {
         return args;
     }
 
-    let source = args[1].clone();
-
-    // Don't alias if the first positional arg is a known subcommand or help flag.
-    let known_commands = [
-        "view", "markdown", "cmd", "list", "show", "open", "close", "help",
-    ];
-    if source.to_str().is_some_and(|s| known_commands.contains(&s)) {
+    if !(Path::new(first).exists() || rustickers::utils::url::is_url(first)) {
         return args;
     }
 
-    // Don't alias flags (e.g. --help, --version).
-    if source.to_str().is_some_and(|s| s.starts_with('-')) {
-        return args;
-    }
-
-    let source_path = Path::new(&source);
-    let is_existing_path = source_path.is_file() || source_path.is_dir();
-    let is_url = source.to_str().is_some_and(rustickers::utils::url::is_url);
-
-    if is_existing_path || is_url {
-        let mut result = vec![args[0].clone(), OsString::from("view"), source];
-        result.extend(args.into_iter().skip(2));
-        result
-    } else {
-        args
-    }
+    let mut expanded = vec![args[0].clone(), OsString::from("view")];
+    expanded.extend(args.into_iter().skip(1));
+    expanded
 }

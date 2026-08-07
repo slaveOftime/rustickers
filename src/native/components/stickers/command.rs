@@ -41,7 +41,7 @@ use crate::model::sticker::StickerColor;
 use crate::storage::ArcStickerStore;
 
 const MAX_SLEEP_CHUNK_MS: u64 = 250;
-const SELECTION_PLACEHOLDER: &str = "{{RUSTICKERS_SELECTION}}";
+use crate::model::content::{SELECTION_ENV_VAR, SELECTION_PLACEHOLDER};
 
 fn replace_selection_args(args: &mut [String], selection: Option<&str>) {
     let Some(selection) = selection else {
@@ -534,7 +534,7 @@ impl CommandSticker {
         }
 
         if let Some(selection) = &self.selection {
-            cmd.env("RUSTICKERS_SELECTION", selection);
+            cmd.env(SELECTION_ENV_VAR, selection);
         }
 
         let process = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {

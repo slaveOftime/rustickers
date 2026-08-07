@@ -418,34 +418,64 @@ Reqwest wrapped for GPUI's `HttpClient` trait.
 
 ### CLI Module (`src/cli/`)
 
-#### Commands
+The module has two halves: one file per subcommand under `commands/`, and shared infrastructure
+alongside it. A command module owns both its arguments and its behaviour, so adding a subcommand
+touches one new file plus two lines in `mod.rs`.
+
+#### Commands (`src/cli/commands/`)
 
 | Command | File | Description |
 |---------|------|-------------|
-| `list` | `list.rs` | List stickers with filters |
-| `show` | `show.rs` | Show full sticker details |
-| `open` | `open.rs` | Open closed sticker |
-| `close` | `close.rs` | Close open sticker |
-| `view` | `view.rs` | Create file/URL preview sticker |
-| `markdown` | `markdown.rs` | Create markdown note sticker |
-| `cmd` | `cmd.rs` | Create command sticker |
+| `list` | `list.rs` | Find stickers by state, type or text |
+| `show` | `show.rs` | Everything stored about one sticker |
+| `result` | `result.rs` | What a command sticker last produced |
+| `open` / `close` | `window.rs` | Show or hide a sticker's window |
+| `delete` | `delete.rs` | Remove a sticker permanently |
+| `view` | `view.rs` | Create a file/URL preview sticker |
+| `markdown` | `markdown.rs` | Create a markdown note sticker |
+| `cmd` | `cmd.rs` | Create a command sticker |
+| `skill` | `skill.rs` | Catalogue of worked examples |
+
+#### Shared infrastructure
+
+| File | Responsibility |
+|------|----------------|
+| `output.rs` | The human/JSON split. `Format` renders a report or emits one JSON object with an `ok` field. Also the table and truncation helpers. |
+| `runtime.rs` | Opening the store and talking to the running app. `Delivery` distinguishes "sent over IPC" from "the app is not running". |
+| `draft.rs` | The single sticker-creation path: the shared `--width/--height/--left/--top/--color/--top-most/--closed` group, insertion, and the "created" report. |
+| `shell.rs` | `--shell` wrapping and fail-fast validation of a command string, its program and its cron expression. |
+| `skills.rs` | The static skill catalogue and the expansion of a skill into real `rusticker` arguments. |
 
 #### CLI Flow
 
 ```rust
 pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
+    let format = cli.format(); // --json is a global flag, accepted anywhere
+
     match cli.command {
-        Commands::Close { id } => close::run(id),
-        Commands::Open { id } => open::run(id),
-        Commands::List { state, search } => list::run(app_paths, state, search),
-        Commands::Show { id } => show::run(app_paths, id),
-        Commands::View { source, width, height, color } => view::run(source, width, height, color),
-        Commands::Markdown { content, title, width, height, color } =>
-            markdown::run(app_paths, content, title, width, height, color),
-        Commands::Cmd { .. } => cmd::run(app_paths, command, cron, run_immediately, env, dir, width, height, color),
+        Commands::List(args) => commands::list::run(app_paths, args, format),
+        Commands::Result(args) => commands::result::run(app_paths, args, format),
+        Commands::Cmd(args) => commands::cmd::run(app_paths, args, format),
+        // ...one arm per module, each taking its own Args struct
     }
 }
 ```
+
+`skill run` expands a catalogue entry into an argument vector, re-parses it through
+`Cli::try_parse_from` and recurses into `run`. That is what keeps `skill show`'s "equivalent
+command" honest: it is the command that actually executes, and a unit test asserts every skill in
+the catalogue parses.
+
+#### Two behaviours worth remembering
+
+*A command sticker does not use a shell.* The stored string is split with Windows argv rules and
+the program is resolved on `PATH`. `--shell` wraps it in `pwsh -NoProfile -Command …` — not
+`cmd /c`, because the string is later re-escaped by `std::process::Command` and `cmd.exe` cannot
+recover an embedded `"`, silently mis-splitting something like `git log --format="%h %s"`.
+
+*`started_at` is what arms a command sticker.* Without it the window opens and sits idle. The CLI
+sets it on creation unless `--idle` or `--accept-selection` is given — a selection sticker is
+triggered by the hotkey, which sets its own start time.
 
 ---
 
@@ -718,25 +748,34 @@ Sticker content stored as JSON strings, allowing type-specific data without sche
 
 ### Adding a New CLI Command
 
-1. **Add to Commands enum** in `src/cli/mod.rs`:
+1. **Create the module** `src/cli/commands/new_command.rs`. It owns its arguments as well as its
+   behaviour, and must handle both output modes:
    ```rust
-   NewCommand {
-       #[arg(long)]
-       option: String,
+   #[derive(clap::Args, Debug)]
+   pub struct NewCommandArgs {
+       /// Doc comments become the help text, so write them for a reader
+       #[arg(long, value_name = "TEXT")]
+       pub option: String,
+
+       // Creating a sticker? Flatten the shared appearance group instead of re-declaring it.
+       #[command(flatten)]
+       pub geometry: Geometry,
+   }
+
+   pub fn run(app_paths: &AppPaths, args: NewCommandArgs, format: Format) -> anyhow::Result<()> {
+       format.emit(json!({ "option": args.option }), |_| {
+           println!("did the thing");
+       })
    }
    ```
 
-2. **Create module** `src/cli/new_command.rs`:
-   ```rust
-   pub fn run(app_paths: &AppPaths, option: String) -> anyhow::Result<()> {
-       // implementation
-   }
-   ```
+2. **Declare it** in `src/cli/commands/mod.rs`, and add a variant plus a dispatch arm in
+   `src/cli/mod.rs`. Nothing else needs updating: the `rusticker <file>` shorthand and the help
+   text both read the subcommand list from the parser.
 
-3. **Dispatch in run()**:
-   ```rust
-   Commands::NewCommand { option } => new_command::run(app_paths, option),
-   ```
+3. **Consider a skill.** If the command has a use worth demonstrating, add an entry to
+   `SKILLS` in `src/cli/skills.rs`. The catalogue tests will check the template declares every
+   variable it uses and expands to something the parser accepts.
 
 ### Debugging
 
