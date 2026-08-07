@@ -298,7 +298,7 @@ impl LockForm {
                     .items_center()
                     .child(Input::new(&self.title).w_full())
                     .child(Input::new(&self.password).w_full())
-                    .when(self.password.read(cx).value().is_empty(), |view| {
+                    .when(!self.password.read(cx).value().is_empty(), |view| {
                         view.child(
                             h_flex()
                                 .gap_2()
