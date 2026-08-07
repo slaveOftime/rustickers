@@ -1,7 +1,10 @@
 use std::{num::NonZeroU32, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-use gpui::{AnyElement, Context, Entity, Focusable, KeyDownEvent, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, Entity, Focusable, KeyDownEvent, Window, WindowControlArea, div,
+    prelude::*, px,
+};
 use gpui_component::{
     Disableable, StyledExt,
     button::Button,
@@ -206,29 +209,49 @@ impl LockForm {
                 }
             }))
             .child(
-                self.lock_panel(
-                    heading,
-                    error,
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new(format!("{id_prefix}-cancel-lock"))
-                                .label("Cancel")
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    on_cancel(this, window, cx);
-                                })),
+                v_flex()
+                    .w_full()
+                    .max_w(px(360.0))
+                    .gap_2()
+                    .items_center()
+                    .child(div().text_lg().font_bold().child(heading))
+                    .child(Input::new(&self.title).w_full())
+                    .child(Input::new(&self.password).w_full())
+                    .child(Input::new(&self.confirm).w_full())
+                    .when_some(error, |view, error| {
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_center()
+                                .text_color(gpui::red())
+                                .child(error.to_string()),
                         )
-                        .child(
-                            Button::new(format!("{id_prefix}-confirm-lock"))
-                                .label("Lock")
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    on_confirm(this, window, cx);
-                                })),
-                        )
-                        .into_any_element(),
-                ),
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new(format!("{id_prefix}-cancel-lock"))
+                                    .label("Cancel")
+                                    .disabled(busy)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        on_cancel(this, window, cx);
+                                    })),
+                            )
+                            .when(
+                                error.is_none() && !self.password.read(cx).value().is_empty(),
+                                |view| {
+                                    view.child(
+                                        Button::new(format!("{id_prefix}-confirm-lock"))
+                                            .label("Lock")
+                                            .disabled(busy)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                on_confirm(this, window, cx);
+                                            })),
+                                    )
+                                },
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -249,6 +272,7 @@ impl LockForm {
             .items_center()
             .justify_center()
             .p_4()
+            .window_control_area(WindowControlArea::Drag)
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let handled = match event.keystroke.key.as_str() {
                     "enter" if password.read(cx).focus_handle(cx).is_focused(window) => {
@@ -267,79 +291,48 @@ impl LockForm {
                 }
             }))
             .child(
-                self.unlock_panel(
-                    error,
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new(format!("{id_prefix}-unlock"))
-                                .label("Unlock")
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    on_unlock(this, window, cx);
-                                })),
+                v_flex()
+                    .w_full()
+                    .max_w(px(340.0))
+                    .gap_2()
+                    .items_center()
+                    .child(Input::new(&self.title).w_full())
+                    .child(Input::new(&self.password).w_full())
+                    .when(self.password.read(cx).value().is_empty(), |view| {
+                        view.child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new(format!("{id_prefix}-unlock"))
+                                        .label("Unlock")
+                                        .disabled(busy)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            on_unlock(this, window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new(format!("{id_prefix}-unlock-forever"))
+                                        .label("Unlock forever")
+                                        .tooltip(
+                                            "Remove password protection and save as plain text",
+                                        )
+                                        .disabled(busy)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            on_unlock_forever(this, window, cx);
+                                        })),
+                                ),
                         )
-                        .child(
-                            Button::new(format!("{id_prefix}-unlock-forever"))
-                                .label("Unlock forever")
-                                .tooltip("Remove password protection and save as plain text")
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    on_unlock_forever(this, window, cx);
-                                })),
+                    })
+                    .when_some(error, |view, error| {
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_center()
+                                .text_color(gpui::red())
+                                .child(error.to_string()),
                         )
-                        .into_any_element(),
-                ),
+                    }),
             )
-            .into_any_element()
-    }
-
-    fn lock_panel(
-        &self,
-        heading: &'static str,
-        error: Option<&str>,
-        actions: AnyElement,
-    ) -> AnyElement {
-        v_flex()
-            .w_full()
-            .max_w(px(360.0))
-            .gap_2()
-            .items_center()
-            .child(div().text_lg().font_bold().child(heading))
-            .child(Input::new(&self.title).w_full())
-            .child(Input::new(&self.password).w_full())
-            .child(Input::new(&self.confirm).w_full())
-            .when_some(error, |view, error| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .text_center()
-                        .text_color(gpui::red())
-                        .child(error.to_string()),
-                )
-            })
-            .child(actions)
-            .into_any_element()
-    }
-
-    fn unlock_panel(&self, error: Option<&str>, actions: AnyElement) -> AnyElement {
-        v_flex()
-            .w_full()
-            .max_w(px(340.0))
-            .gap_2()
-            .items_center()
-            .child(Input::new(&self.title).w_full())
-            .child(Input::new(&self.password).w_full())
-            .child(actions)
-            .when_some(error, |view, error| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .text_center()
-                        .text_color(gpui::red())
-                        .child(error.to_string()),
-                )
-            })
             .into_any_element()
     }
 }

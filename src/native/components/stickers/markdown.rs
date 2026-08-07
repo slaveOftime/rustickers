@@ -435,6 +435,12 @@ impl MarkdownSticker {
                 created_at: 0,
                 updated_at: 0,
                 display_id: md_detail.display_id,
+                display_uuid: md_detail.display_uuid.clone(),
+                virtual_desktop_id: md_detail.virtual_desktop_id.clone(),
+                native_left: None,
+                native_top: None,
+                native_width: None,
+                native_height: None,
             };
 
             // Insert the new file sticker.

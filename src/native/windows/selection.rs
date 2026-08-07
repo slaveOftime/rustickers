@@ -714,6 +714,12 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             display_id: None,
+            display_uuid: None,
+            virtual_desktop_id: None,
+            native_left: None,
+            native_top: None,
+            native_width: None,
+            native_height: None,
         }
     }
 

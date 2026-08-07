@@ -70,8 +70,20 @@ pub struct StickerDetail {
     pub content: String,
     pub created_at: i64,
     pub updated_at: i64,
-    /// The display this sticker was last on (as the raw u32 platform display ID).
-    pub display_id: Option<u32>,
+    /// The display this sticker was last on (as the raw platform display ID).
+    pub display_id: Option<i64>,
+    /// Stable platform identifier for the physical monitor.
+    pub display_uuid: Option<String>,
+    /// Windows virtual desktop GUID. `None` on other platforms.
+    pub virtual_desktop_id: Option<String>,
+    /// Native Windows virtual-screen X coordinate, unaffected by monitor DPI.
+    pub native_left: Option<i32>,
+    /// Native Windows virtual-screen Y coordinate, unaffected by monitor DPI.
+    pub native_top: Option<i32>,
+    /// Native Windows window width in physical pixels.
+    pub native_width: Option<i32>,
+    /// Native Windows window height in physical pixels.
+    pub native_height: Option<i32>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

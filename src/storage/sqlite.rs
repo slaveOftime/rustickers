@@ -104,7 +104,7 @@ impl super::StickerStore for SqliteStore {
     async fn get_sticker(&self, id: i64) -> anyhow::Result<StickerDetail> {
         tracing::debug!(id, "Get sticker detail");
         let row = sqlx::query_as::<_, StickerDetail>(
-            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at, display_id FROM stickers WHERE id = ?1",
+            "SELECT id, title, state, left, top, width, height, top_most, color, type, content, created_at, updated_at, display_id, display_uuid, virtual_desktop_id, native_left, native_top, native_width, native_height FROM stickers WHERE id = ?1",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -166,7 +166,13 @@ impl super::StickerStore for SqliteStore {
         top: i32,
         width: i32,
         height: i32,
-        display_id: Option<u32>,
+        display_id: Option<i64>,
+        display_uuid: Option<String>,
+        virtual_desktop_id: Option<String>,
+        native_left: Option<i32>,
+        native_top: Option<i32>,
+        native_width: Option<i32>,
+        native_height: Option<i32>,
     ) -> anyhow::Result<()> {
         tracing::debug!(
             id,
@@ -175,6 +181,8 @@ impl super::StickerStore for SqliteStore {
             width,
             height,
             display_id,
+            display_uuid,
+            virtual_desktop_id,
             "Update sticker bounds"
         );
 
@@ -188,8 +196,14 @@ impl super::StickerStore for SqliteStore {
                 width = ?3,
                 height = ?4,
                 display_id = ?5,
-                updated_at = ?6
-            WHERE id = ?7
+                display_uuid = ?6,
+                virtual_desktop_id = ?7,
+                native_left = ?8,
+                native_top = ?9,
+                native_width = ?10,
+                native_height = ?11,
+                updated_at = ?12
+            WHERE id = ?13
             "#,
         )
         .bind(left)
@@ -197,6 +211,12 @@ impl super::StickerStore for SqliteStore {
         .bind(width)
         .bind(height)
         .bind(display_id)
+        .bind(display_uuid)
+        .bind(virtual_desktop_id)
+        .bind(native_left)
+        .bind(native_top)
+        .bind(native_width)
+        .bind(native_height)
         .bind(now)
         .bind(id)
         .execute(&self.pool)
@@ -385,7 +405,7 @@ ON CONFLICT(sticker_id) DO UPDATE SET last_used_at = excluded.last_used_at"#,
 
     async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>> {
         let rows = sqlx::query_as::<_, StickerDetail>(
-            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at, s.display_id
+            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at,             s.display_id, s.display_uuid, s.virtual_desktop_id,             s.native_left, s.native_top, s.native_width, s.native_height
 FROM stickers s
 LEFT JOIN selection_lru l ON s.id = l.sticker_id
 WHERE s.type = 'command'

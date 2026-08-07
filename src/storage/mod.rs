@@ -22,7 +22,13 @@ pub trait StickerStore: Send + Sync {
         top: i32,
         width: i32,
         height: i32,
-        display_id: Option<u32>,
+        display_id: Option<i64>,
+        display_uuid: Option<String>,
+        virtual_desktop_id: Option<String>,
+        native_left: Option<i32>,
+        native_top: Option<i32>,
+        native_width: Option<i32>,
+        native_height: Option<i32>,
     ) -> anyhow::Result<()>;
     async fn update_sticker_content(&self, id: i64, content: String) -> anyhow::Result<()>;
     async fn update_sticker_state(&self, id: i64, state: StickerState) -> anyhow::Result<()>;
