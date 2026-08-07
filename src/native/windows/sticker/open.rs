@@ -1,8 +1,12 @@
 //! Opening, finding and closing sticker windows.
 //!
 //! Every live sticker window is tracked in [`OPEN_STICKERS`] under an *open id*: the sticker's
-//! database id for saved stickers, a negative id for unsaved ones, and a large positive id for
-//! the throwaway window a selection run opens.
+//! database id for a saved sticker, a hash of the previewed sources for an unsaved file preview,
+//! and a large positive id for the throwaway window a selection run opens.
+//!
+//! Opening an id that already has a window raises that window rather than making a second one.
+//! Previews therefore stack up freely — each distinct set of files gets its own window, and
+//! asking for the same files twice is idempotent.
 
 use std::{
     path::PathBuf,
@@ -14,8 +18,9 @@ use std::{
 };
 
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Size, Styled, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, px, size, transparent_black,
+    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, Styled,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
+    transparent_black,
 };
 use gpui_component::Root;
 use url::Url;
@@ -75,12 +80,7 @@ impl StickerWindow {
         id: i64,
         open_in_settings: bool,
     ) -> anyhow::Result<()> {
-        if let Some(handle) = find_open_window(id) {
-            cx.update(|cx| {
-                handle.update(cx, |_, window, _| {
-                    window.activate_window();
-                })
-            })?;
+        if cx.update(|cx| activate_open_window(id, cx))? {
             return Ok(());
         }
 
@@ -152,6 +152,13 @@ impl StickerWindow {
         height: Option<i32>,
         color: Option<StickerColor>,
     ) -> anyhow::Result<()> {
+        // Previews are keyed by the sources they show, so asking for the same ones again raises
+        // the window that already has them instead of opening a duplicate.
+        let open_id = preview_open_id(&sources);
+        if activate_open_window(open_id, cx)? {
+            return Ok(());
+        }
+
         let default_size = FileSticker::default_window_size_for_sources(
             &sources.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );
@@ -165,17 +172,14 @@ impl StickerWindow {
         let width = width.unwrap_or(default_size.width);
         let height = height.unwrap_or(default_size.height);
 
-        let screen_size = cx
-            .primary_display()
-            .map(|d| d.bounds().size.map(|p| p.to_f64() as i32))
-            .unwrap_or(size(1920, 1080));
+        let origin = free_preview_origin(cx, size(width, height));
 
         let detail = StickerDetail {
-            id: generate_consistence_minus_id(&sources),
+            id: open_id,
             title,
             state: StickerState::Open,
-            left: (screen_size.width - width) / 2,
-            top: (screen_size.height - height) / 2,
+            left: origin.x,
+            top: origin.y,
             width,
             height,
             top_most: true,
@@ -195,7 +199,7 @@ impl StickerWindow {
             placements: Vec::new(),
         };
 
-        Self::open_with_detail(cx, sticker_events_tx, store, detail, true)
+        Self::open_with_detail_and_options(cx, sticker_events_tx, store, detail, true, false)
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {
@@ -237,16 +241,6 @@ impl StickerWindow {
                 .update(cx, |_, window, cx| window.dispatch_keystroke(escape, cx))
                 .unwrap_or(false)
         })
-    }
-
-    pub fn open_with_detail(
-        cx: &mut App,
-        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
-        store: ArcStickerStore,
-        detail: StickerDetail,
-        focus: bool,
-    ) -> anyhow::Result<()> {
-        Self::open_with_detail_and_options(cx, sticker_events_tx, store, detail, focus, false)
     }
 
     pub fn open_with_detail_and_options(
@@ -337,14 +331,7 @@ impl StickerWindow {
             ..
         } = options;
 
-        // Unsaved stickers share a single window, so opening one closes any other unsaved sticker.
-        if !selection_run && open_id <= 0 {
-            close_other_unsaved_window(open_id, cx);
-        }
-        if let Some(handle) = find_open_window(open_id) {
-            handle.update(cx, |_, window, _| {
-                window.activate_window();
-            })?;
+        if activate_open_window(open_id, cx)? {
             return Ok(());
         }
 
@@ -454,21 +441,86 @@ fn find_open_window(open_id: i64) -> Option<AnyWindowHandle> {
     })
 }
 
-/// Close the window of any other unsaved sticker; they all share one slot.
-fn close_other_unsaved_window(open_id: i64, cx: &mut App) {
-    let Some((existing_id, handle)) = OPEN_STICKERS.write().ok().and_then(|mut open_stickers| {
-        let pos = open_stickers
-            .iter()
-            .position(|(existing_id, _)| *existing_id < 0 && *existing_id != open_id)?;
-        Some(open_stickers.remove(pos))
-    }) else {
-        return;
+/// Raise the window a sticker already has. Returns whether there was one.
+fn activate_open_window(open_id: i64, cx: &mut App) -> anyhow::Result<bool> {
+    let Some(handle) = find_open_window(open_id) else {
+        return Ok(false);
     };
+    handle.update(cx, |_, window, _| window.activate_window())?;
+    Ok(true)
+}
 
-    set_escape_dismiss_target_active(EscapeDismissTarget::Sticker(existing_id), false);
-    let _ = handle.update(cx, |_, window, _| {
-        window.remove_window();
-    });
+/// How far each additional preview window is nudged away from the one it would otherwise cover.
+const PREVIEW_CASCADE_STEP: i32 = 32;
+
+/// How many times a preview is nudged before it gives up and overlaps an existing window.
+const PREVIEW_CASCADE_ATTEMPTS: i32 = 12;
+
+/// Where to put a new preview window of `window_size`: centred on the primary display, then
+/// cascaded down and to the right until it no longer lands on top of an open sticker.
+///
+/// Previews of the same kind of file get the same default size, so without this the second one
+/// would open exactly behind the first and look as if nothing had happened.
+fn free_preview_origin(cx: &mut App, window_size: Size<i32>) -> Point<i32> {
+    let screen_size = primary_display_size(cx);
+    let centered = point(
+        (screen_size.width - window_size.width) / 2,
+        (screen_size.height - window_size.height) / 2,
+    );
+    let bottom_right_limit = point(
+        (screen_size.width - window_size.width).max(centered.x),
+        (screen_size.height - window_size.height).max(centered.y),
+    );
+
+    cascade(centered, bottom_right_limit, &open_window_origins(cx))
+}
+
+/// Offset `origin` diagonally, without passing `limit`, until it clears every corner in `taken`.
+///
+/// Falls back to `origin` once the cascade runs out of room, since overlapping is better than
+/// pushing every further preview into the same corner of the screen.
+fn cascade(origin: Point<i32>, limit: Point<i32>, taken: &[Point<i32>]) -> Point<i32> {
+    (0..PREVIEW_CASCADE_ATTEMPTS)
+        .map(|attempt| {
+            let offset = attempt * PREVIEW_CASCADE_STEP;
+            point(
+                (origin.x + offset).min(limit.x),
+                (origin.y + offset).min(limit.y),
+            )
+        })
+        .find(|candidate| {
+            !taken.iter().any(|taken| {
+                (taken.x - candidate.x).abs() < PREVIEW_CASCADE_STEP
+                    && (taken.y - candidate.y).abs() < PREVIEW_CASCADE_STEP
+            })
+        })
+        .unwrap_or(origin)
+}
+
+/// The top-left corner of every sticker window that is open right now.
+fn open_window_origins(cx: &mut App) -> Vec<Point<i32>> {
+    let handles: Vec<AnyWindowHandle> = OPEN_STICKERS
+        .read()
+        .map(|open_stickers| open_stickers.iter().map(|(_, handle)| *handle).collect())
+        .unwrap_or_default();
+
+    handles
+        .into_iter()
+        .filter_map(|handle| {
+            handle
+                .update(cx, |_, window, _| {
+                    let bounds = window.bounds();
+                    point(bounds.left().to_f64() as i32, bounds.top().to_f64() as i32)
+                })
+                .ok()
+        })
+        .collect()
+}
+
+fn primary_display_size(cx: &App) -> Size<i32> {
+    cx.primary_display()
+        .map(|display| display.bounds().size.map(|pixels| pixels.to_f64() as i32))
+        .unwrap_or(size(1920, 1080))
 }
 
 fn min_window_size(sticker_type: StickerType) -> Size<i32> {
@@ -548,12 +600,74 @@ fn clipboard_preview_source() -> Option<String> {
     PathBuf::from(&normalized).exists().then_some(normalized)
 }
 
-/// A stable negative id for an unsaved preview, so reopening the same files reuses its window.
-fn generate_consistence_minus_id(sources: &[String]) -> i64 {
+/// The open id of the preview for `sources`.
+///
+/// Previews are never saved, so they have no database id to be keyed by. Hashing their sources
+/// instead gives every distinct set of files its own window while asking for the same files twice
+/// lands on the window that already shows them.
+fn preview_open_id(sources: &[String]) -> i64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
     sources.hash(&mut hasher);
-    -(hasher.finish() as i64).abs()
+    // Shifting rather than negating keeps this in range: `-i64::MIN` would overflow.
+    -1 - (hasher.finish() >> 1) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sources(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|path| path.to_string()).collect()
+    }
+
+    #[test]
+    fn preview_ids_are_stable_negative_and_source_specific() {
+        let one = preview_open_id(&sources(&["a.md"]));
+        let again = preview_open_id(&sources(&["a.md"]));
+        let other = preview_open_id(&sources(&["b.md"]));
+
+        assert_eq!(one, again, "the same sources must reuse one window");
+        assert_ne!(one, other, "different sources must get their own window");
+        assert!(one < 0 && other < 0, "previews must not claim database ids");
+    }
+
+    #[test]
+    fn preview_id_never_overflows_on_an_extreme_hash() {
+        // Guards the `-1 - (hash >> 1)` form: negating `i64::MIN` directly would panic.
+        for sources in [sources(&[]), sources(&[""]), sources(&["a", "b", "c"])] {
+            assert!(preview_open_id(&sources) < 0);
+        }
+    }
+
+    #[test]
+    fn cascade_keeps_the_first_window_centered() {
+        let origin = point(100, 100);
+        assert_eq!(cascade(origin, point(900, 900), &[]), origin);
+    }
+
+    #[test]
+    fn cascade_steps_past_windows_that_are_already_there() {
+        let origin = point(100, 100);
+        let taken = vec![origin, point(132, 132)];
+
+        assert_eq!(cascade(origin, point(900, 900), &taken), point(164, 164));
+    }
+
+    #[test]
+    fn cascade_ignores_windows_that_are_out_of_the_way() {
+        let origin = point(100, 100);
+        let taken = vec![point(600, 100), point(100, 600)];
+
+        assert_eq!(cascade(origin, point(900, 900), &taken), origin);
+    }
+
+    #[test]
+    fn cascade_falls_back_to_the_origin_once_it_runs_out_of_room() {
+        let origin = point(100, 100);
+        // A limit equal to the origin pins every candidate onto the taken spot.
+        assert_eq!(cascade(origin, origin, &[origin]), origin);
+    }
 }

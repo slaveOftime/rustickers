@@ -354,6 +354,14 @@ pub fn run_native(
 - Title editing with Enter to save
 - Type-specific view component
 
+Every live window is tracked in `OPEN_STICKERS` (`sticker/open.rs`) under an *open id*: the database
+id for a saved sticker, a hash of the previewed sources for an unsaved file preview, and a large
+positive id for the throwaway window a selection run opens. Opening an id that already has a window
+raises that window instead of creating a second one, so any number of previews of *different* files
+can be open at once while previewing the *same* files twice is idempotent. New previews are centred
+on the primary display and then cascaded 32px at a time until they no longer sit exactly on top of
+an open sticker.
+
 #### Components Module (`src/native/components/`)
 
 **Embedded Assets:**

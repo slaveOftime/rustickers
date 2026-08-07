@@ -11,7 +11,7 @@ Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), 
 - **Markdown notes**: quick editing, preview mode, and **Ctrl+S** save.
 - **Timers**: countdown timers with an audible alert on completion.
 - **Command stickers**: pin command output, with optional cron scheduling, env vars, and working directory.
-- **File / URL preview**: preview files, folders, or URLs and pin them as stickers.
+- **File / URL preview**: preview files, folders, or URLs and pin them as stickers. Any number of previews can be open side by side; asking for the same files again raises the window that already shows them.
 - **Paint stickers**: freehand drawing space for quick sketches.
 
 ## Global hotkeys
