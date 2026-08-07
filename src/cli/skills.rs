@@ -244,7 +244,11 @@ A always-on dashboard tile. The command runs on a cron schedule and `--stream` c
 output and fills the sticker line by line as the new run produces it.
 
 Schedules are Quartz-style and start with a seconds field, so every five minutes is
-'0 */5 * * * *' rather than '*/5 * * * *'.",
+'0 */5 * * * *' rather than '*/5 * * * *'.
+
+The schedule is not tied to the window. Close the sticker and it keeps ticking in the background,
+so `rusticker result <id>` always returns the most recent run. Add --no-window to build a schedule
+that never puts anything on screen at all, and watch the sticker list for the running indicator.",
         vars: &[
             Var {
                 name: "command",

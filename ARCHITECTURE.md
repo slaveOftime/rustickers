@@ -380,9 +380,18 @@ pub struct Assets;
 |---------|------|----------|
 | Markdown | `markdown.rs` | Edit/preview modes, syntax highlighting, Ctrl+S save |
 | Timer | `timer.rs` | Countdown, audible alert, pause/reset |
-| Command | `command.rs` | Shell execution, cron scheduling, env vars, streaming output |
+| Command | `command/mod.rs` | Process execution, cron scheduling, env vars, streaming output |
 | Paint | `paint.rs` | Freehand drawing, eraser, color selection |
 | File | `file/mod.rs` | Multi-file preview, file watching, type-specific renderers |
+
+**Command Sticker Sub-components:**
+- `runner.rs` - Resolving, spawning and reaping the child process. No GPUI, so the headless half reuses it
+- `schedule.rs` - Cron parsing, next fire time, cancellation token. No GPUI
+- `activity.rs` - Process-wide registry of which command stickers are running or scheduled
+- `background.rs` - Supervisor that runs armed schedules while their windows are closed
+- `execution.rs` - The window's own run/schedule/stop behaviour and output streaming
+- `form.rs` - Settings form
+- `output.rs` - Result rendering, footer controls and the running overlay
 
 **File Sticker Sub-components:**
 - `preview.rs` - File type detection and routing
@@ -484,6 +493,19 @@ recover an embedded `"`, silently mis-splitting something like `git log --format
 *`started_at` is what arms a command sticker.* Without it the window opens and sits idle. The CLI
 sets it on creation unless `--idle` or `--accept-selection` is given — a selection sticker is
 triggered by the hotkey, which sets its own start time.
+
+*An armed cron schedule keeps running with the sticker closed.* `command/background.rs` polls the
+store for stickers that are armed and have a cron expression, fires the ones that are due, and
+writes the output back into the sticker's content. It does not care about `StickerState`, which is
+what makes a closed sticker keep ticking; `rusticker result <id>` then reads the latest run.
+
+The open window still drives its own schedule, because only it can stream output into the view. The
+two are kept apart by `command/activity.rs`: a sticker window claims its sticker for as long as it
+lives, and the supervisor skips anything claimed. The claim is released when the sticker entity is
+dropped, so the schedule loop holds a **weak** handle — a strong one would outlive the window and
+lock the supervisor out permanently. The same registry is what the main window's list reads to draw
+a spinner on a running sticker and the next fire time on a scheduled one; it polls a generation
+counter on the event pump it already runs rather than taking another channel.
 
 ---
 
@@ -636,7 +658,7 @@ ALTER TABLE stickers ADD COLUMN display_id INTEGER;
 ### Command Sticker
 
 - **Content**: `CommandContent` JSON
-- **Features**: Shell execution, cron scheduling, environment variables, working directory, streaming output
+- **Features**: Process execution, cron scheduling (also while closed), environment variables, working directory, streaming output
 - **Default Size**: 400x300
 
 ### Paint Sticker

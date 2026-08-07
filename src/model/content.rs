@@ -79,6 +79,34 @@ pub enum CommandResult {
     Source(Option<String>),
 }
 
+impl CommandResult {
+    /// The rendered payload, whatever shape the output is rendered in.
+    pub fn value(&self) -> Option<&String> {
+        match self {
+            Self::Text(value)
+            | Self::Html(value)
+            | Self::Svg(value)
+            | Self::Markdown(value)
+            | Self::Source(value) => value.as_ref(),
+        }
+    }
+
+    /// Replace the payload, keeping the render mode the user chose.
+    pub fn set(&mut self, payload: Option<String>) {
+        match self {
+            Self::Text(value)
+            | Self::Html(value)
+            | Self::Svg(value)
+            | Self::Markdown(value)
+            | Self::Source(value) => *value = payload,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.set(None);
+    }
+}
+
 impl Default for CommandContent {
     fn default() -> Self {
         Self {

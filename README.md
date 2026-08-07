@@ -10,7 +10,7 @@ Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), 
 
 - **Markdown notes**: quick editing, preview mode, and **Ctrl+S** save.
 - **Timers**: countdown timers with an audible alert on completion.
-- **Command stickers**: pin command output, with optional cron scheduling, env vars, and working directory.
+- **Command stickers**: pin command output, with optional cron scheduling, env vars, and working directory. A scheduled sticker keeps running in the background even when its window is closed, and the sticker list shows which ones are running or waiting on their next tick.
 - **File / URL preview**: preview files, folders, or URLs and pin them as stickers. Any number of previews can be open side by side; asking for the same files again raises the window that already shows them.
 - **Paint stickers**: freehand drawing space for quick sketches.
 
@@ -91,6 +91,12 @@ Two things are worth knowing. A command sticker does **not** run through a shell
 string is split with Windows argument rules and the program is looked up on `PATH`, so pipes and
 `&&` are literal text until you add `--shell`. And a sticker created without `--idle` is *armed*,
 meaning it runs when its window opens and again each time the app starts.
+
+An armed sticker with `--cron` also keeps running with its window **closed**, for as long as the
+app is running, so `rusticker result <id>` always has the latest output waiting. Combine it with
+`--no-window` for a schedule that never puts anything on screen. In the sticker list, a spinner
+marks a command that is running right now and a loop icon marks one waiting for its next tick.
+Press Stop in the sticker to disarm it, or delete the sticker to stop it for good.
 
 ### Machine-readable output
 

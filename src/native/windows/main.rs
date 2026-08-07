@@ -19,6 +19,7 @@ use crate::model::sticker::*;
 use crate::native::components::IconName;
 use crate::native::components::stickers::Sticker;
 use crate::native::components::stickers::command::CommandSticker;
+use crate::native::components::stickers::command::activity as command_activity;
 use crate::native::components::stickers::file::FileSticker;
 use crate::native::components::stickers::markdown::MarkdownSticker;
 use crate::native::components::stickers::paint::PaintSticker;
@@ -117,6 +118,8 @@ impl MainWindow {
         sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
         cx: &mut AsyncApp,
     ) {
+        let mut last_activity = command_activity::generation();
+
         loop {
             cx.background_executor()
                 .timer(STICKER_EVENT_PUMP_INTERVAL)
@@ -127,12 +130,19 @@ impl MainWindow {
                 events.push(ev);
             }
 
-            if events.is_empty() {
+            // Command runs are tracked in a process-wide registry rather than pushed as events,
+            // because the background scheduler has no channel into this window. Polling its
+            // generation counter on the pump that already exists keeps the indicators live.
+            let activity = command_activity::generation();
+            let activity_changed = activity != last_activity;
+            last_activity = activity;
+
+            if events.is_empty() && !activity_changed {
                 continue;
             }
 
             let updated = this.update(cx, |this, cx| {
-                let mut changed = false;
+                let mut changed = activity_changed;
                 for ev in events {
                     changed |= this.apply_event(ev, cx);
                 }
@@ -461,6 +471,21 @@ impl MainWindow {
         let title = sticker.title.clone();
         let updated = crate::utils::time::format_unix_millis(sticker.updated_at);
 
+        // A command sticker can be busy, or waiting on a schedule, even while it is closed. That is
+        // otherwise invisible from the list.
+        let activity = if sticker.sticker_type == StickerType::Command {
+            CardActivity::of_command(
+                command_activity::is_running(id),
+                command_activity::next_run(id),
+            )
+        } else {
+            CardActivity::Idle
+        };
+
+        let running = matches!(activity, CardActivity::Running);
+        let next_run = activity.next_run();
+        let status = activity.status_line(&updated);
+
         let main = div()
             .flex_shrink_0()
             .flex()
@@ -475,6 +500,20 @@ impl MainWindow {
                     .child(div().text_color(sticker.color.swatch()).child(
                         Icon::new(sticker_type_icon(&sticker.sticker_type)).with_size(px(14.)),
                     ))
+                    .when(running, |row| {
+                        row.child(
+                            div()
+                                .text_color(yellow_500())
+                                .child(Spinner::new().with_size(px(12.))),
+                        )
+                    })
+                    .when(next_run.is_some(), |row| {
+                        row.child(
+                            div()
+                                .opacity(0.7)
+                                .child(Icon::new(IconName::Loop).with_size(px(12.))),
+                        )
+                    })
                     .child(
                         div()
                             .text_sm()
@@ -494,7 +533,8 @@ impl MainWindow {
                     .text_xs()
                     .opacity(0.75)
                     .text_right()
-                    .child(format!("Updated: {updated}")),
+                    .when(running, |view| view.text_color(yellow_500()))
+                    .child(status),
             );
 
         div()
@@ -632,6 +672,44 @@ impl Render for MainWindow {
     }
 }
 
+/// What a card tells the user about a command sticker's schedule.
+///
+/// Only command stickers can be anything but [`CardActivity::Idle`]; every other type simply shows
+/// when it was last updated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CardActivity {
+    Idle,
+    Running,
+    Scheduled(String),
+}
+
+impl CardActivity {
+    fn of_command(running: bool, next_run: Option<String>) -> Self {
+        // Running wins: while a command is going, its next fire time is the less interesting fact,
+        // and showing both would make the card jitter between two lines of text.
+        match (running, next_run) {
+            (true, _) => Self::Running,
+            (false, Some(next_run)) => Self::Scheduled(next_run),
+            (false, None) => Self::Idle,
+        }
+    }
+
+    fn next_run(&self) -> Option<&str> {
+        match self {
+            Self::Scheduled(next_run) => Some(next_run.as_str()),
+            _ => None,
+        }
+    }
+
+    fn status_line(&self, updated: &str) -> String {
+        match self {
+            Self::Running => "Running...".to_string(),
+            Self::Scheduled(next_run) => format!("Next run: {next_run}"),
+            Self::Idle => format!("Updated: {updated}"),
+        }
+    }
+}
+
 fn sticker_type_icon(sticker_type: &StickerType) -> IconName {
     match sticker_type {
         StickerType::Markdown => IconName::DocumentText,
@@ -648,5 +726,47 @@ fn order_label(order_by: StickerOrderBy) -> &'static str {
         StickerOrderBy::CreatedAsc => "Created ↑",
         StickerOrderBy::UpdatedDesc => "Updated ↓",
         StickerOrderBy::UpdatedAsc => "Updated ↑",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plain_sticker_card_shows_when_it_was_updated() {
+        let activity = CardActivity::Idle;
+
+        assert_eq!(activity.next_run(), None);
+        assert_eq!(activity.status_line("yesterday"), "Updated: yesterday");
+    }
+
+    #[test]
+    fn a_scheduled_command_card_shows_its_next_run() {
+        let activity = CardActivity::of_command(false, Some("2030-01-01 00:00:00".to_string()));
+
+        assert_eq!(activity.next_run(), Some("2030-01-01 00:00:00"));
+        assert_eq!(
+            activity.status_line("yesterday"),
+            "Next run: 2030-01-01 00:00:00"
+        );
+    }
+
+    #[test]
+    fn a_running_command_card_hides_the_next_run() {
+        let activity = CardActivity::of_command(true, Some("2030-01-01 00:00:00".to_string()));
+
+        assert_eq!(activity, CardActivity::Running);
+        assert_eq!(
+            activity.next_run(),
+            None,
+            "no clock icon while the spinner is up"
+        );
+        assert_eq!(activity.status_line("yesterday"), "Running...");
+    }
+
+    #[test]
+    fn an_unscheduled_command_card_is_indistinguishable_from_any_other() {
+        assert_eq!(CardActivity::of_command(false, None), CardActivity::Idle);
     }
 }

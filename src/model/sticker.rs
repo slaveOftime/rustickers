@@ -40,6 +40,17 @@ pub enum StickerColor {
     Gray,
 }
 
+/// A command sticker that a cron expression has armed, as the background scheduler sees it.
+///
+/// Only what a headless run needs: no geometry, no placements, no colour. The scheduler never
+/// opens a window, so loading those would be wasted work on every refresh.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ScheduledCommand {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StickerBrief {

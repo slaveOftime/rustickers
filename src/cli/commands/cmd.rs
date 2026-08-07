@@ -96,6 +96,9 @@ pub struct CmdArgs {
     ///
     /// Fields are: second minute hour day-of-month month day-of-week. "0 */5 * * * *" is every
     /// five minutes.
+    ///
+    /// The schedule keeps running for as long as the app is, whether or not the sticker's window
+    /// is open, so `rusticker result` always has the latest run waiting.
     #[arg(long, value_name = "EXPR", help_heading = "Behaviour")]
     pub cron: Option<String>,
 
@@ -251,8 +254,8 @@ fn collect_warnings(
     }
     if cron.is_some() && (args.auto_close || args.no_window) {
         warnings.push(
-            "a scheduled sticker is never closed automatically, because closing it would stop the \
-             schedule."
+            "a scheduled sticker's window is never closed automatically while it is armed; close \
+             it yourself and the schedule carries on in the background."
                 .to_owned(),
         );
     }

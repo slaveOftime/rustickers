@@ -56,6 +56,11 @@ pub trait StickerStore: Send + Sync {
 
     /// Get command stickers with accept_selection=true, ordered by LRU (most recently used first).
     async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>>;
+
+    /// Command stickers armed with a cron expression, whether their window is open or not.
+    ///
+    /// This is what lets a schedule keep ticking after the sticker has been closed.
+    async fn get_scheduled_command_stickers(&self) -> anyhow::Result<Vec<ScheduledCommand>>;
 }
 
 pub type ArcStickerStore = Arc<dyn StickerStore>;

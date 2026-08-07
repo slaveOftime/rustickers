@@ -178,6 +178,13 @@ pub fn run_native(
 
             tracing::info!("Sticker store opened");
 
+            // Armed cron stickers have to keep ticking whether or not their window is open, so the
+            // scheduler starts before any window is restored.
+            let scheduler_store = store.clone();
+            cx.update(move |cx| {
+                components::stickers::command::background::start(cx, scheduler_store);
+            });
+
             match store.get_open_sticker_ids().await {
                 Ok(sticker_ids) => {
                     tracing::debug!(count = sticker_ids.len(), "Restoring open stickers");

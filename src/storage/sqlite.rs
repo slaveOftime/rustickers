@@ -530,4 +530,22 @@ ORDER BY l.last_used_at DESC NULLS LAST, s.updated_at DESC, s.id DESC"#
 
         Ok(rows)
     }
+
+    async fn get_scheduled_command_stickers(&self) -> anyhow::Result<Vec<ScheduledCommand>> {
+        // `started_at` is the arming flag and `scheduler.Cron` the expression; a sticker needs
+        // both to be due for a background run. `state` is deliberately not filtered on, that is
+        // the whole point: a closed sticker keeps its schedule.
+        sqlx::query_as::<_, ScheduledCommand>(
+            r#"SELECT id, title, content
+FROM stickers
+WHERE type = 'command'
+  AND json_valid(content)
+  AND json_extract(content, '$.started_at') IS NOT NULL
+  AND COALESCE(json_extract(content, '$.scheduler.Cron'), '') <> ''
+ORDER BY id"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("query scheduled command stickers")
+    }
 }
