@@ -179,33 +179,6 @@ Uses PowerShell, so it is Windows-only as written.",
         ],
     },
     Skill {
-        name: "to-clipboard",
-        summary: "Transform the selected text and put the result straight on the clipboard",
-        detail: "\
-A sticker that never shows a window. `--no-window` runs the command hidden and throws the window
-away when it succeeds; you only ever see it if something goes wrong, and then it appears with the
-error. That makes it the right shape for anything whose result is a side effect rather than
-something to read.
-
-Change `transform` to any PowerShell pipeline: `ConvertTo-Json`, a regex replace, a formatter.
-Uses PowerShell, so it is Windows-only as written.",
-        vars: &[Var {
-            name: "transform",
-            description: "PowerShell pipeline applied to the selection",
-            default: Some("ForEach-Object { $_.ToUpper() }"),
-        }],
-        template: &[
-            "cmd",
-            "powershell -NoProfile -Command \"$env:RUSTICKERS_SELECTION | ${transform} | \
-             Set-Clipboard\"",
-            "--accept-selection",
-            "--no-window",
-            "--title",
-            "Selection to clipboard",
-            "--closed",
-        ],
-    },
-    Skill {
         name: "format-json",
         summary: "Pretty-print the selected JSON",
         detail: "\
