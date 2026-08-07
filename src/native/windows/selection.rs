@@ -324,7 +324,7 @@ impl SelectionPopup {
                     this.resolving = false;
                     match target {
                         Ok(SelectionCommandTarget::Single(sticker)) => {
-                            this.show_stickers(text, vec![sticker], window, cx);
+                            this.show_stickers(text, vec![*sticker], window, cx);
                             this.open_selected(cx);
                         }
                         Ok(SelectionCommandTarget::Choose(stickers)) => {
@@ -695,9 +695,11 @@ mod tests {
     use crate::model::sticker::{StickerColor, StickerState, StickerType};
 
     fn command_sticker(id: i64, title: &str, command: &str) -> StickerDetail {
-        let mut content = CommandContent::default();
-        content.command = command.to_string();
-        content.accept_selection = true;
+        let content = CommandContent {
+            command: command.to_string(),
+            accept_selection: true,
+            ..Default::default()
+        };
 
         StickerDetail {
             id,

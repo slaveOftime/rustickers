@@ -20,7 +20,7 @@ use crate::native::components::{
     IconName,
     stickers::{
         StickerView, StickerViewEntity,
-        command::{CommandSticker, CommandStickerWindowRequest},
+        command::{CommandSticker, CommandStickerInit, CommandStickerWindowRequest},
         file::FileSticker,
         markdown::MarkdownSticker,
         paint::PaintSticker,
@@ -102,21 +102,18 @@ impl StickerWindow {
                 MarkdownSticker::new(id, color, store, content, window, cx, sticker_events_tx)
             }))),
             StickerType::Command => {
-                let entity = cx.new(|cx| {
-                    CommandSticker::new(
-                        id,
-                        color,
-                        store,
-                        detail.title.as_str(),
-                        content,
-                        window,
-                        cx,
-                        sticker_events_tx,
-                        options.selection.clone(),
-                        options.open_in_settings,
-                        options.hidden,
-                    )
-                });
+                let init = CommandStickerInit {
+                    id,
+                    color,
+                    store,
+                    title: detail.title.clone(),
+                    content: detail.content.clone(),
+                    sticker_events_tx,
+                    selection: options.selection.clone(),
+                    open_in_settings: options.open_in_settings,
+                    window_hidden: options.hidden,
+                };
+                let entity = cx.new(|cx| CommandSticker::new(init, window, cx));
 
                 cx.subscribe_in(
                     &entity,

@@ -106,21 +106,37 @@ pub enum CommandStickerWindowRequest {
 
 impl gpui::EventEmitter<CommandStickerWindowRequest> for CommandSticker {}
 
+/// Everything a command sticker needs to know about itself when its window opens.
+pub struct CommandStickerInit {
+    pub id: i64,
+    pub color: StickerColor,
+    pub store: ArcStickerStore,
+    pub title: String,
+    pub content: String,
+    pub sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
+    /// The text the user had selected when the sticker was launched from the selection hotkey.
+    pub selection: Option<String>,
+    /// Start in the settings view instead of running or restoring the previous result.
+    pub open_in_settings: bool,
+    /// The host window was created hidden and only shows itself when the sticker asks for it.
+    pub window_hidden: bool,
+}
+
 impl CommandSticker {
-    pub fn new(
-        id: i64,
-        color: StickerColor,
-        store: ArcStickerStore,
-        title: &str,
-        content: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
-        selection: Option<String>,
-        open_in_settings: bool,
-        window_hidden: bool,
-    ) -> Self {
-        let cmd = serde_json::from_str::<CommandContent>(content).unwrap_or_default();
+    pub fn new(init: CommandStickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let CommandStickerInit {
+            id,
+            color,
+            store,
+            title,
+            content,
+            sticker_events_tx,
+            selection,
+            open_in_settings,
+            window_hidden,
+        } = init;
+
+        let cmd = serde_json::from_str::<CommandContent>(&content).unwrap_or_default();
         let open_in_settings = open_in_settings && (cmd.auto_close || cmd.run_without_window);
         let command_value = cmd.command;
         let envs_value = cmd.environments;
@@ -188,11 +204,10 @@ impl CommandSticker {
                 .step(1.0)
         });
 
-        cx.subscribe(&cron_entity, |this, v, evt, cx| match evt {
-            InputEvent::Change => {
+        cx.subscribe(&cron_entity, |this, v, evt, cx| {
+            if let InputEvent::Change = evt {
                 this.scheduler = Some(Scheduler::Cron(v.read(cx).value().trim().to_string()));
             }
-            _ => {}
         })
         .detach();
 
@@ -411,13 +426,12 @@ impl CommandSticker {
                             let now = chrono::Local::now();
                             let next = schedule.upcoming(chrono::Local).next();
                             let Some(next) = next else {
-                                let _ =
-                                    window.update_entity(&entity, |this, _| this.stop_schedule());
+                                window.update_entity(&entity, |this, _| this.stop_schedule());
                                 break;
                             };
 
                             let next_str = next.format("%Y-%m-%d %H:%M:%S").to_string();
-                            let _ = window.update_entity(&entity, |this, cx| {
+                            window.update_entity(&entity, |this, cx| {
                                 this.next_scheduled_at = Some(next_str);
                                 cx.notify();
                             });
@@ -554,7 +568,7 @@ impl CommandSticker {
             let out_handle = thread::spawn(move || {
                 if let Some(stdout) = stdout {
                     let reader = std::io::BufReader::new(stdout);
-                    for line in std::io::BufRead::lines(reader).flatten() {
+                    for line in std::io::BufRead::lines(reader).map_while(Result::ok) {
                         let _ = out_tx.send(CmdEvent::Output(line));
                     }
                 }
@@ -564,7 +578,7 @@ impl CommandSticker {
             let err_handle = thread::spawn(move || {
                 if let Some(stderr) = stderr {
                     let reader = std::io::BufReader::new(stderr);
-                    for line in std::io::BufRead::lines(reader).flatten() {
+                    for line in std::io::BufRead::lines(reader).map_while(Result::ok) {
                         let _ = err_tx.send(CmdEvent::Error(line));
                     }
                 }
@@ -638,7 +652,7 @@ impl CommandSticker {
                     match rx.try_recv() {
                         Ok(event) => match event {
                             CmdEvent::Output(line) | CmdEvent::Error(line) => {
-                                let _ = window.update_entity(
+                                window.update_entity(
                                     &entity,
                                     move |this: &mut CommandSticker, cx| {
                                         match this.result {
@@ -667,7 +681,7 @@ impl CommandSticker {
                             }
                             CmdEvent::Done { success } => {
                                 succeeded = success;
-                                let _ = window.update_entity(
+                                window.update_entity(
                                     &entity,
                                     move |this: &mut CommandSticker, cx| match this.result {
                                         CommandResult::Text(ref mut result)
@@ -806,7 +820,7 @@ impl CommandSticker {
             | CommandResult::Source(None) => false,
         };
 
-        return self.process.is_none() && !has_result && !self.is_schedule_active();
+        self.process.is_none() && !has_result && !self.is_schedule_active()
     }
 
     fn form(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -822,13 +836,9 @@ impl CommandSticker {
                             Button::new("text")
                                 .label("text")
                                 .small()
-                                .when(
-                                    match self.result {
-                                        CommandResult::Text(_) => true,
-                                        _ => false,
-                                    },
-                                    |v| v.primary(),
-                                )
+                                .when(matches!(self.result, CommandResult::Text(_)), |v| {
+                                    v.primary()
+                                })
                                 .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Text(None)
@@ -838,13 +848,9 @@ impl CommandSticker {
                             Button::new("markdown")
                                 .label("markdown")
                                 .small()
-                                .when(
-                                    match self.result {
-                                        CommandResult::Markdown(_) => true,
-                                        _ => false,
-                                    },
-                                    |v| v.primary(),
-                                )
+                                .when(matches!(self.result, CommandResult::Markdown(_)), |v| {
+                                    v.primary()
+                                })
                                 .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Markdown(None)
@@ -854,13 +860,9 @@ impl CommandSticker {
                             Button::new("html")
                                 .label("html")
                                 .small()
-                                .when(
-                                    match self.result {
-                                        CommandResult::Html(_) => true,
-                                        _ => false,
-                                    },
-                                    |v| v.primary(),
-                                )
+                                .when(matches!(self.result, CommandResult::Html(_)), |v| {
+                                    v.primary()
+                                })
                                 .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Html(None)
@@ -870,13 +872,9 @@ impl CommandSticker {
                             Button::new("svg")
                                 .label("svg")
                                 .small()
-                                .when(
-                                    match self.result {
-                                        CommandResult::Svg(_) => true,
-                                        _ => false,
-                                    },
-                                    |v| v.primary(),
-                                )
+                                .when(matches!(self.result, CommandResult::Svg(_)), |v| {
+                                    v.primary()
+                                })
                                 .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Svg(None)
@@ -886,13 +884,9 @@ impl CommandSticker {
                             Button::new("source")
                                 .label("file/url")
                                 .small()
-                                .when(
-                                    match self.result {
-                                        CommandResult::Source(_) => true,
-                                        _ => false,
-                                    },
-                                    |v| v.primary(),
-                                )
+                                .when(matches!(self.result, CommandResult::Source(_)), |v| {
+                                    v.primary()
+                                })
                                 .occlude()
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.result = CommandResult::Source(None)
@@ -1225,6 +1219,28 @@ impl Render for CommandSticker {
     }
 }
 
+fn kill_process(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        // `Child::kill()` only terminates the direct process. If the child spawns
+        // subprocesses that inherit stdout/stderr handles, the pipes can remain
+        // open and we keep receiving output. `taskkill /T` kills the whole tree.
+        let pid = child.id();
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+
+        if status.is_err() {
+            let _ = child.kill();
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = child.kill();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,27 +1268,5 @@ mod tests {
         replace_selection_args(&mut args, None);
 
         assert_eq!(args, [SELECTION_PLACEHOLDER]);
-    }
-}
-
-fn kill_process(child: &mut std::process::Child) {
-    #[cfg(windows)]
-    {
-        // `Child::kill()` only terminates the direct process. If the child spawns
-        // subprocesses that inherit stdout/stderr handles, the pipes can remain
-        // open and we keep receiving output. `taskkill /T` kills the whole tree.
-        let pid = child.id();
-        let status = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status();
-
-        if status.is_err() {
-            let _ = child.kill();
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = child.kill();
     }
 }

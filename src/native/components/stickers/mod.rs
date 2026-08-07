@@ -94,14 +94,14 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
 
     fn save_on_close(&self, cx: &mut App) -> bool {
         let mut is_success = false;
-        let _ = self.entity.update(cx, |this, cx| {
+        self.entity.update(cx, |this, cx| {
             is_success = this.save_on_close(cx);
         });
         is_success
     }
 
     fn set_color(&mut self, cx: &mut App, color: StickerColor) {
-        let _ = self.entity.update(cx, |this, _cx| {
+        self.entity.update(cx, |this, _cx| {
             this.set_color(color);
         });
     }
@@ -123,7 +123,7 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
     }
 
     fn relock_protected_content(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.entity.update(cx, |this, cx| {
+        self.entity.update(cx, |this, cx| {
             this.relock_protected_content(window, cx);
         });
     }

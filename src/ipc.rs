@@ -113,7 +113,7 @@ impl SingleInstance {
                     let mut buffer = String::new();
 
                     // Read a line (blocking until \n is received or connection closes)
-                    if let Ok(_) = reader.read_line(&mut buffer) {
+                    if reader.read_line(&mut buffer).is_ok() {
                         tracing::debug!(cmd = %buffer.trim(), "Received IPC command");
                         // Check protocol
                         if buffer.trim() == "SHOW" {

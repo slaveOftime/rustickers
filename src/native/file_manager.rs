@@ -37,7 +37,7 @@ use windows::{
 pub fn selected_files_from_active_manager() -> anyhow::Result<Vec<PathBuf>> {
     #[cfg(target_os = "windows")]
     {
-        return selected_files_windows();
+        selected_files_windows()
     }
 
     #[cfg(target_os = "macos")]
@@ -192,10 +192,10 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
                 return Ok(current_paths);
             }
 
-            if let Some(shell_browser_window) = get_shell_browser_window(&browser) {
-                if shell_browser_window == active_tab {
-                    return Ok(current_paths);
-                }
+            if let Some(shell_browser_window) = get_shell_browser_window(&browser)
+                && shell_browser_window == active_tab
+            {
+                return Ok(current_paths);
             }
 
             if foreground_fallback_paths.is_empty() {

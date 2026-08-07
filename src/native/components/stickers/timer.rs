@@ -35,21 +35,11 @@ struct TimerStartInfo {
     state: TimerState,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TimerContent {
     title: Option<String>,
     duration_secs: i32,
     start_info: Option<TimerStartInfo>,
-}
-
-impl Default for TimerContent {
-    fn default() -> Self {
-        Self {
-            title: None,
-            duration_secs: 0,
-            start_info: None,
-        }
-    }
 }
 
 pub struct TimerSticker {
@@ -242,7 +232,7 @@ impl TimerSticker {
     }
 
     fn change_state(&mut self, cx: &mut Context<Self>, state: TimerState) {
-        let remaining_secs = effective_remaining_secs(&self.timer) as i32;
+        let remaining_secs = effective_remaining_secs(&self.timer);
         if let Some(start_info) = &mut self.timer.start_info {
             match (&start_info.state, state) {
                 (TimerState::Paused, TimerState::Running) => {

@@ -28,7 +28,9 @@ pub fn source_name_for_display(source: &str) -> String {
     if crate::utils::url::is_url(source)
         && let Ok(url) = Url::parse(source)
     {
-        if let Some(last_segment) = url.path_segments().and_then(|segments| segments.last())
+        if let Some(last_segment) = url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
             && !last_segment.is_empty()
         {
             return last_segment.to_string();

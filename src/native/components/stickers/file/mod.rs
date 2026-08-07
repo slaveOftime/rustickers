@@ -26,7 +26,7 @@ use crate::native::windows::StickerWindowEvent;
 use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
-use super::content_lock::{LockForm, LockedContent};
+use super::content_lock::{LockActions, LockForm, LockedContent, UnlockActions};
 
 pub struct FileSticker {
     id: i64,
@@ -285,7 +285,7 @@ impl FileSticker {
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| {
                 if let Some(FilePreview::WebView(web)) = &this.preview {
-                    let _ = web.update(cx, |web, cx| web.reload(cx));
+                    web.update(cx, |web, cx| web.reload(cx));
                     this.spawn_refresh_summaries(window, cx);
                     return;
                 }
@@ -599,9 +599,11 @@ impl Render for FileSticker {
                 "Lock file",
                 self.error.as_deref(),
                 self.lock_busy,
+                LockActions {
+                    cancel: Self::cancel_lock,
+                    confirm: Self::lock_new_content,
+                },
                 cx,
-                Self::cancel_lock,
-                Self::lock_new_content,
             );
         }
 
@@ -610,10 +612,12 @@ impl Render for FileSticker {
                 "file",
                 self.error.as_deref(),
                 self.lock_busy,
+                UnlockActions {
+                    cancel: Self::cancel_unlock,
+                    unlock: Self::unlock,
+                    unlock_forever: Self::unlock_forever,
+                },
                 cx,
-                Self::cancel_unlock,
-                Self::unlock,
-                Self::unlock_forever,
             );
         }
 

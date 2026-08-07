@@ -17,10 +17,10 @@ impl FileStickerContent {
     }
 
     pub fn from_json_or_raw(content: &str) -> Self {
-        if let Ok(data) = serde_json::from_str::<Self>(content) {
-            if !data.files.is_empty() {
-                return data;
-            }
+        if let Ok(data) = serde_json::from_str::<Self>(content)
+            && !data.files.is_empty()
+        {
+            return data;
         }
         if content.trim().is_empty() {
             Self { files: Vec::new() }

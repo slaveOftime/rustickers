@@ -181,10 +181,13 @@ impl LockForm {
         heading: &'static str,
         error: Option<&str>,
         busy: bool,
+        actions: LockActions<T>,
         cx: &mut Context<T>,
-        on_cancel: fn(&mut T, &mut Window, &mut Context<T>),
-        on_confirm: fn(&mut T, &mut Window, &mut Context<T>),
     ) -> AnyElement {
+        let LockActions {
+            cancel: on_cancel,
+            confirm: on_confirm,
+        } = actions;
         let confirm = self.confirm.clone();
         v_flex()
             .size_full()
@@ -261,11 +264,14 @@ impl LockForm {
         id_prefix: &'static str,
         error: Option<&str>,
         busy: bool,
+        actions: UnlockActions<T>,
         cx: &mut Context<T>,
-        on_cancel: fn(&mut T, &mut Window, &mut Context<T>),
-        on_unlock: fn(&mut T, &mut Window, &mut Context<T>),
-        on_unlock_forever: fn(&mut T, &mut Window, &mut Context<T>),
     ) -> AnyElement {
+        let UnlockActions {
+            cancel: on_cancel,
+            unlock: on_unlock,
+            unlock_forever: on_unlock_forever,
+        } = actions;
         let password = self.password.clone();
         v_flex()
             .size_full()
@@ -337,6 +343,19 @@ impl LockForm {
     }
 }
 
+/// What the "lock this sticker" form can do to the sticker hosting it.
+pub(super) struct LockActions<T: 'static> {
+    pub(super) cancel: fn(&mut T, &mut Window, &mut Context<T>),
+    pub(super) confirm: fn(&mut T, &mut Window, &mut Context<T>),
+}
+
+/// What the password prompt of a locked sticker can do to the sticker hosting it.
+pub(super) struct UnlockActions<T: 'static> {
+    pub(super) cancel: fn(&mut T, &mut Window, &mut Context<T>),
+    pub(super) unlock: fn(&mut T, &mut Window, &mut Context<T>),
+    pub(super) unlock_forever: fn(&mut T, &mut Window, &mut Context<T>),
+}
+
 fn prepare_lock(title: &str, password: &str, content: &str) -> Result<PreparedLock, String> {
     let locked = LockedContent::encrypt(title, password, content)?;
     let serialized = locked.serialize()?;
@@ -406,7 +425,7 @@ impl LockedContent {
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce),
                 Aad::from(aad(&self.title, &self.salt, self.iterations).as_bytes()),
-                &mut *ciphertext,
+                &mut ciphertext,
             )
             .map_err(|_| "Incorrect password or damaged locked content".to_string())?;
         String::from_utf8(plaintext.to_vec())

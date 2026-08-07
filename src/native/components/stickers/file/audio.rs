@@ -77,22 +77,12 @@ struct AudioFrameMetrics {
     high: f32,
 }
 
+#[derive(Default)]
 struct AudioMetadata {
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
     cover: Option<Arc<Image>>,
-}
-
-impl Default for AudioMetadata {
-    fn default() -> Self {
-        Self {
-            title: None,
-            artist: None,
-            album: None,
-            cover: None,
-        }
-    }
 }
 
 pub(super) struct AudioState {
@@ -286,13 +276,8 @@ impl super::FileSticker {
                 return;
             };
 
-            loop {
-                let recv_result = match state.event_rx.as_ref() {
-                    Some(rx) => rx.try_recv(),
-                    None => break,
-                };
-
-                match recv_result {
+            while let Some(rx) = state.event_rx.as_ref() {
+                match rx.try_recv() {
                     Ok(AudioEvent::Ended) => playback_ended = true,
                     Ok(AudioEvent::Frame(frame)) => latest_frame = Some(frame),
                     Err(TryRecvError::Empty) => break,
@@ -756,7 +741,7 @@ fn build_handle(initial_path: PathBuf) -> AudioHandle {
                 return;
             }
         };
-        let player = rodio::Player::connect_new(&device_sink.mixer());
+        let player = rodio::Player::connect_new(device_sink.mixer());
         load_file(&player, &initial_path);
         let mut analyzer = AudioAnalyzer::from_path(&initial_path);
         let mut was_empty = player.empty();

@@ -92,11 +92,10 @@ impl MainWindow {
         })
         .detach();
 
-        cx.subscribe(&query, |this, _, event: &InputEvent, cx| match event {
-            InputEvent::PressEnter { .. } => {
+        cx.subscribe(&query, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { .. } = event {
                 this.spawn_load_stickers(cx);
             }
-            _ => {}
         })
         .detach();
 
@@ -330,13 +329,13 @@ impl MainWindow {
                                 let entity = entity.clone();
                                 cx.spawn(async move |cx| match store.delete_sticker(id).await {
                                     Ok(()) => {
-                                        let _ = entity.update(cx, |this, cx| {
+                                        entity.update(cx, |this, cx| {
                                             StickerWindow::try_close(id, cx);
                                             this.stickers.retain(|s| s.id != id);
                                         });
                                     }
                                     Err(err) => {
-                                        let _ = entity.update(cx, |this, cx| {
+                                        entity.update(cx, |this, cx| {
                                             this.error =
                                                 Some(format!("Failed to delete sticker: {err:#}"));
                                             cx.notify();

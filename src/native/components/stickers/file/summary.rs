@@ -105,7 +105,7 @@ impl super::FileSticker {
                         (Some(file_count), Some(folder_count)) => {
                             Some(format!("{file_count} files, {folder_count} folders"))
                         }
-                        _ => Some(format!("{UNKNOWN_TEXT}")),
+                        _ => Some(UNKNOWN_TEXT.to_string()),
                     }
                 } else {
                     None
@@ -146,7 +146,7 @@ impl super::FileSticker {
                                     .opacity(0.8)
                                     .gap_3()
                                     .flex_wrap()
-                                    .child(format!("{size_text}"))
+                                    .child(size_text.to_string())
                                     .when_some(size_share_text, |view, text| view.child(text))
                                     .when_some(items_text, |view, text| view.child(text))
                                     .child(format!("Modified: {modified_text}")),

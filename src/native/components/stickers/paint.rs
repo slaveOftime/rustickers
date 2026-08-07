@@ -69,7 +69,7 @@ impl PaintPoint {
         }
     }
 
-    fn to_gpui(&self) -> Point<Pixels> {
+    fn to_gpui(self) -> Point<Pixels> {
         point(px(self.x as f32), px(self.y as f32))
     }
 
@@ -126,10 +126,10 @@ impl PaintStrokeState {
         let min_distance = min_point_distance_for_width(self.stroke.width);
         let min_distance_sq = min_distance * min_distance;
 
-        if let Some(last) = self.stroke.points.last() {
-            if point.distance_sq_to(last) < min_distance_sq {
-                return false;
-            }
+        if let Some(last) = self.stroke.points.last()
+            && point.distance_sq_to(last) < min_distance_sq
+        {
+            return false;
         }
 
         self.stroke.points.push(point);
@@ -247,16 +247,11 @@ pub struct PaintSticker {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PaintTool {
+    #[default]
     Pen,
     Eraser,
-}
-
-impl Default for PaintTool {
-    fn default() -> Self {
-        Self::Pen
-    }
 }
 
 impl PaintSticker {
@@ -618,10 +613,10 @@ impl PaintSticker {
                     PaintTool::Pen => {
                         let mut strokes = this.strokes_write();
 
-                        if let Some(stroke) = strokes.last_mut() {
-                            if !stroke.append_point(PaintPoint::from(ev.position)) {
-                                return;
-                            }
+                        if let Some(stroke) = strokes.last_mut()
+                            && !stroke.append_point(PaintPoint::from(ev.position))
+                        {
+                            return;
                         }
                     }
                     PaintTool::Eraser => {

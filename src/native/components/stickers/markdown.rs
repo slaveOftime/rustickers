@@ -17,7 +17,7 @@ use crate::native::windows::StickerWindowEvent;
 use crate::native::windows::sticker::StickerWindow;
 use crate::storage::ArcStickerStore;
 
-use super::content_lock::{LockForm, LockedContent};
+use super::content_lock::{LockActions, LockForm, LockedContent, UnlockActions};
 
 pub struct MarkdownSticker {
     id: i64,
@@ -476,7 +476,7 @@ impl MarkdownSticker {
             let _ = sticker_events_tx.send(StickerWindowEvent::Created { id: new_id });
 
             // Close this markdown window.
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 StickerWindow::try_close(id, cx);
             });
         })
@@ -640,7 +640,7 @@ impl super::Sticker for MarkdownSticker {
             );
         }
 
-        return Some(controls.into_any_element());
+        Some(controls.into_any_element())
     }
 }
 
@@ -655,9 +655,11 @@ impl Render for MarkdownSticker {
                 "Lock sticker",
                 self.error.as_deref(),
                 self.lock_busy,
+                LockActions {
+                    cancel: Self::cancel_lock,
+                    confirm: Self::lock_new_content,
+                },
                 cx,
-                Self::cancel_lock,
-                Self::lock_new_content,
             );
         }
 
@@ -667,10 +669,12 @@ impl Render for MarkdownSticker {
                 "markdown",
                 self.error.as_deref(),
                 self.lock_busy,
+                UnlockActions {
+                    cancel: Self::cancel_unlock,
+                    unlock: Self::unlock,
+                    unlock_forever: Self::unlock_forever,
+                },
                 cx,
-                Self::cancel_unlock,
-                Self::unlock,
-                Self::unlock_forever,
             );
         }
 

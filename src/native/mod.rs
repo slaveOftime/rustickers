@@ -71,7 +71,7 @@ pub fn run_native(
                             }
                         }
                         crate::ipc::IpcEvent::DismissEscapeTarget => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 crate::native::windows::close_active_escape_target(cx);
                             });
                         }
@@ -111,7 +111,7 @@ pub fn run_native(
                                 {
                                     tracing::error!(id, error = %err, "Error closing sticker from IPC");
                                 }
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     StickerWindow::try_close(id, cx);
                                 });
                             }
@@ -144,7 +144,7 @@ pub fn run_native(
                                     // of falling back to whatever is in the clipboard.
                                     None => {
                                         tracing::info!("No text selection captured, asking for manual input");
-                                        let _ = cx.update(|cx| {
+                                        cx.update(|cx| {
                                             if let Err(err) = crate::native::windows::selection::SelectionPopup::open_for_input(
                                                 cx,
                                                 tx,
@@ -198,10 +198,10 @@ pub fn run_native(
                 }
             }
 
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 match MainWindow::open(cx, sticker_events_rx, sticker_events_tx.clone(), store) {
                     Ok(window) => {
-                        let _ = main_window_handle_clone.set(window.clone());
+                        let _ = main_window_handle_clone.set(window);
                         tracing::info!("Main window opened");
                     }
                     Err(err) => {
@@ -217,7 +217,7 @@ pub fn run_native(
 /// What to do with the command stickers eligible for a selection.
 pub(crate) enum SelectionCommandTarget {
     /// Only one sticker is eligible, it can be run right away.
-    Single(crate::model::sticker::StickerDetail),
+    Single(Box<crate::model::sticker::StickerDetail>),
     /// Several stickers are eligible, the user has to pick one.
     Choose(Vec<crate::model::sticker::StickerDetail>),
 }
@@ -234,7 +234,7 @@ pub(crate) async fn resolve_selection_command(
     }
 
     Ok(if stickers.len() == 1 {
-        SelectionCommandTarget::Single(stickers.remove(0))
+        SelectionCommandTarget::Single(Box::new(stickers.remove(0)))
     } else {
         SelectionCommandTarget::Choose(stickers)
     })
@@ -265,7 +265,7 @@ async fn open_selection_command(
                     cx,
                     sticker_events_tx,
                     store,
-                    sticker,
+                    *sticker,
                     selection.to_owned(),
                 )
             })?;
