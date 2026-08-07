@@ -1,8 +1,8 @@
 //! Opening, finding and closing sticker windows.
 //!
-//! Every live sticker window is tracked in [`OPEN_STICKERS`] under an *open id*: the sticker's
-//! database id for a saved sticker, a hash of the previewed sources for an unsaved file preview,
-//! and a large positive id for the throwaway window a selection run opens.
+//! Persisted sticker windows and file previews are tracked in [`OPEN_STICKERS`] under an *open id*:
+//! the sticker's database id for a saved sticker, or a hash of the previewed sources for an unsaved
+//! file preview. Throwaway selection runs are deliberately not tracked, so several can stay open.
 //!
 //! Opening an id that already has a window raises that window rather than making a second one.
 //! Previews therefore stack up freely — each distinct set of files gets its own window, and
@@ -43,8 +43,6 @@ use super::platform;
 
 static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new());
 
-/// Open ids at or above this belong to selection runs, which never touch the database.
-const SELECTION_RUN_OPEN_ID_MIN: i64 = i64::MAX / 2;
 static NEXT_SELECTION_RUN_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
 /// Extra knobs used when opening a sticker window.
@@ -265,8 +263,7 @@ impl StickerWindow {
         Self::open_with_options(cx, sticker_events_tx, store, detail, options)
     }
 
-    /// Open the throwaway window that runs a command against the current text selection. Only one
-    /// of these exists at a time, so an older one is closed first.
+    /// Open a throwaway window that runs a command against the current text selection.
     pub(crate) fn open_with_selection(
         cx: &mut App,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -283,24 +280,6 @@ impl StickerWindow {
             selection_len = selection.len(),
             "Opening selection command sticker"
         );
-        let existing_open_id = OPEN_STICKERS.read().ok().and_then(|open_stickers| {
-            open_stickers
-                .iter()
-                .find(|(open_id, _)| *open_id >= SELECTION_RUN_OPEN_ID_MIN)
-                .map(|(open_id, _)| *open_id)
-        });
-        if let Some(existing_open_id) = existing_open_id {
-            Self::try_close(existing_open_id, cx);
-            cx.defer(move |cx| {
-                if let Err(err) =
-                    Self::open_with_selection(cx, sticker_events_tx, store, detail, selection)
-                {
-                    tracing::warn!(error = ?err, "Failed to replace selection command window");
-                }
-            });
-            return Ok(());
-        }
-
         detail.top_most = true;
         // "Run without window" commands run in a hidden window, it only shows itself when the
         // command failed.
@@ -331,7 +310,7 @@ impl StickerWindow {
             ..
         } = options;
 
-        if activate_open_window(open_id, cx)? {
+        if !selection_run && activate_open_window(open_id, cx)? {
             return Ok(());
         }
 
@@ -424,7 +403,7 @@ impl StickerWindow {
             });
         }
 
-        if let Ok(mut open_stickers) = OPEN_STICKERS.write() {
+        if !selection_run && let Ok(mut open_stickers) = OPEN_STICKERS.write() {
             open_stickers.push((open_id, handle.into()));
         }
 

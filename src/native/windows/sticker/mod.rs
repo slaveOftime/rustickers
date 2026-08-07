@@ -31,7 +31,6 @@ use bounds::{BOUNDS_SAVE_DEBOUNCE, display_fingerprint};
 use open::OpenOptions;
 
 pub struct StickerWindow {
-    open_id: i64,
     store: ArcStickerStore,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     detail: StickerDetail,
@@ -93,7 +92,8 @@ impl StickerWindow {
         Self::watch_bounds(window, cx);
         Self::watch_close_request(open_id, window, cx);
         Self::watch_dismiss_keystrokes(window, cx);
-        let window_activation_subscription = Self::watch_activation(open_id, window, cx);
+        let window_activation_subscription =
+            Self::watch_activation(open_id, selection_run, window, cx);
 
         let displays = platform::display_snapshot(cx);
         // Treat the placement we are about to assert as our own doing, so a botched restore is
@@ -101,7 +101,6 @@ impl StickerWindow {
         let pending_restore = bounds::pending_restore(&detail, &displays);
 
         Self {
-            open_id,
             store,
             detail,
             sticker_events_tx,
@@ -230,7 +229,12 @@ impl StickerWindow {
     }
 
     /// Re-lock protected content and drop the always-on-top behaviour once focus is lost.
-    fn watch_activation(open_id: i64, window: &mut Window, cx: &mut Context<Self>) -> Subscription {
+    fn watch_activation(
+        open_id: i64,
+        selection_run: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
         let escape_target = EscapeDismissTarget::Sticker(open_id);
         cx.observe_window_activation(window, move |this, window, cx| {
             let active = window.is_window_active();
@@ -238,8 +242,8 @@ impl StickerWindow {
             if !active && this.view.protected_content_visible(cx) {
                 this.relock_protected_content_later(window, cx);
             }
-            let closes_on_escape = this.selection_run || this.view.id(cx) <= 0;
-            set_escape_dismiss_target_active(escape_target, closes_on_escape && active);
+            let globally_dismissible = !selection_run && this.view.id(cx) <= 0;
+            set_escape_dismiss_target_active(escape_target, globally_dismissible && active);
             if this.transient_topmost.update_activation(active) {
                 platform::configure_window(window, false);
             }
@@ -300,7 +304,7 @@ impl StickerWindow {
     }
 
     /// Ask the sticker view to save, then mark the sticker closed and remove its window.
-    fn close(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
@@ -308,10 +312,7 @@ impl StickerWindow {
         // A selection run has nothing to persist, its sticker only exists in memory.
         if self.selection_run {
             self.closing = true;
-            let open_id = self.open_id;
-            cx.defer(move |cx| {
-                Self::try_close(open_id, cx);
-            });
+            window.remove_window();
             return;
         }
 
