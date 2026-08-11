@@ -583,7 +583,14 @@ impl super::Sticker for FileSticker {
             );
         }
 
-        self.audio_footer_extension(cx)
+        None
+    }
+
+    fn is_footer_absoute(&self) -> bool {
+        match self.preview.as_ref() {
+            Some(FilePreview::WebView { .. }) => false,
+            _ => true,
+        }
     }
 }
 

@@ -178,7 +178,12 @@ impl StickerWindow {
     }
 
     fn footer_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let is_absoulte = self.view.is_footer_absoute(cx);
         let extension = self.view.footer_extension(cx);
+        let bg_color = Rgba {
+            a: 0.85,
+            ..self.detail.color.bg()
+        };
         let color_options = h_flex()
             .p_2()
             .gap_1()
@@ -200,9 +205,8 @@ impl StickerWindow {
             }));
 
         h_flex()
-            .when(self.view.is_footer_absoute(cx), |v| {
-                v.absolute().bottom_0().left_0().right_0()
-            })
+            .when(is_absoulte, |v| v.absolute().bottom_0().left_0().right_0())
+            .when(!is_absoulte, |v| v.bg(bg_color))
             .justify_end()
             .gap_2()
             .items_center()

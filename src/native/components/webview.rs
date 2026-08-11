@@ -101,7 +101,7 @@ impl SimpleWebView {
             (color.r * 255.0) as u8,
             (color.g * 255.0) as u8,
             (color.b * 255.0) as u8,
-            (color.a * 255.0) as u8,
+            0,
         );
         let _ = self
             .webview

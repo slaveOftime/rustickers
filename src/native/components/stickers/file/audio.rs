@@ -1,6 +1,6 @@
 use gpui::{
-    Context, Image, ImageFormat, ImageSource, ObjectFit, Rgba, Window, div, img, prelude::*, px,
-    relative, rgba,
+    Context, Image, ImageFormat, ImageSource, ObjectFit, Rgba, Window, WindowControlArea, div, img,
+    prelude::*, px, relative, rgba,
 };
 use gpui_component::{button::Button, h_flex, v_flex};
 use lofty::prelude::*;
@@ -526,10 +526,7 @@ impl super::FileSticker {
         self.spawn_anim_tick(cx);
     }
 
-    pub(super) fn audio_footer_extension(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    fn audio_controller(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(super::preview::FilePreview::Audio { state, .. }) = &self.preview else {
             return None;
         };
@@ -664,12 +661,16 @@ impl super::FileSticker {
                             .text_ellipsis()
                             .child(album),
                     )
+                })
+                .when_some(self.audio_controller(cx), |v, controller| {
+                    v.child(controller)
                 }),
         );
 
         div()
             .size_full()
             .relative()
+            .window_control_area(WindowControlArea::Drag)
             .when_some(cover, |row, cover_img| {
                 row.child(
                     img(ImageSource::Image(cover_img))
