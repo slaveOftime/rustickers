@@ -6,7 +6,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
     h_flex,
-    input::Input,
+    input::{Input, Textarea},
     slider::Slider,
     switch::Switch,
     v_flex,
@@ -35,7 +35,7 @@ impl CommandSticker {
     pub(super) fn form(&mut self, cx: &mut Context<Self>) -> AnyElement {
         v_form()
             .child(field().label("Title").child(Input::new(&self.title)))
-            .child(field().label("Command").child(Input::new(&self.command)))
+            .child(field().label("Command").child(Textarea::new(&self.command)))
             .child(
                 field()
                     .label("Render output as")
@@ -105,7 +105,7 @@ impl CommandSticker {
             .child(
                 field()
                     .label("Environments")
-                    .child(Input::new(&self.environments)),
+                    .child(Textarea::new(&self.environments)),
             )
             .child(
                 field()

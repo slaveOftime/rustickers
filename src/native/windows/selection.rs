@@ -10,7 +10,7 @@ use gpui_component::{
     Icon, Root,
     button::Button,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     scroll::ScrollableElement,
     v_flex,
 };
@@ -65,7 +65,7 @@ pub struct SelectionPopup {
     selected: usize,
     selection: Arc<str>,
     query: Entity<InputState>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     view: SelectionView,
     input_error: Option<String>,
     resolving: bool,
@@ -178,8 +178,7 @@ impl SelectionPopup {
 
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers ..."));
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .submit_on_enter(true)
                 .placeholder("Type the text to send to a command sticker ...")
         });
@@ -572,7 +571,7 @@ impl SelectionPopup {
             )
             .child(
                 div().flex_1().min_h_0().child(
-                    Input::new(&self.input)
+                    Textarea::new(&self.input)
                         .size_full()
                         .p_2()
                         .bordered(false)

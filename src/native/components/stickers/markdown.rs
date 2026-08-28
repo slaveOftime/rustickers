@@ -6,7 +6,7 @@ use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, Disableable, h_flex};
 use gpui_component::{
     button::Button,
-    input::{Input, InputState},
+    input::{Textarea, TextareaState},
     v_flex,
 };
 
@@ -24,7 +24,7 @@ pub struct MarkdownSticker {
     color: StickerColor,
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
-    editor: Entity<InputState>,
+    editor: Entity<TextareaState>,
     editing: bool,
     edit_snapshot: Option<String>,
     error: Option<String>,
@@ -57,8 +57,7 @@ impl MarkdownSticker {
             .map(|locked| locked.title.clone())
             .unwrap_or_else(|| derive_title(&initial_content));
         let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .searchable(true)
                 .placeholder("Input text/markdown, ctrl+s to save and preview it")
                 .default_value(initial_content)
@@ -697,7 +696,7 @@ impl Render for MarkdownSticker {
                         }
                     }))
                     .child(
-                        Input::new(&self.editor)
+                        Textarea::new(&self.editor)
                             .size_full()
                             .bordered(false)
                             .bg(rgba(0x000000)),

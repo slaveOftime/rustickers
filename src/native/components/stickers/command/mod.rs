@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{Context, Entity, Window, prelude::*};
 use gpui_component::{
-    input::{InputEvent, InputState},
+    input::{InputEvent, InputState, TextareaState},
     slider::SliderState,
 };
 
@@ -43,8 +43,8 @@ pub struct CommandSticker {
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
 
     title: Entity<InputState>,
-    command: Entity<InputState>,
-    environments: Entity<InputState>,
+    command: Entity<TextareaState>,
+    environments: Entity<TextareaState>,
     working_dir: Entity<InputState>,
     scheduler: Option<Scheduler>,
     scheduler_cron_input: Entity<InputState>,
@@ -127,16 +127,14 @@ impl CommandSticker {
         });
 
         let command = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .default_value(cmd.command)
-                .multi_line(true)
                 .auto_grow(1, 5)
                 .placeholder("command with args")
         });
 
         let environments = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(1, 5)
                 .default_value(cmd.environments)
                 .placeholder("KEY=VALUE per line")

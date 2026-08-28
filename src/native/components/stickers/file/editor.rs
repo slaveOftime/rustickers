@@ -1,5 +1,5 @@
 use gpui::{Context, Window, prelude::*};
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
 use std::path::Path;
 
 use super::preview::FilePreview;
@@ -24,13 +24,11 @@ impl super::FileSticker {
             .map(|language| language.to_string());
 
         self.preview_editor = Some(cx.new(move |cx| {
-            let mut state = InputState::new(window, cx)
-                .multi_line(true)
-                .searchable(true)
+            let mut state = EditorState::new(window, cx)
                 .placeholder("Edit file content, ctrl+s to save")
                 .default_value(initial_content);
             if let Some(language) = code_language.as_ref() {
-                state = state.code_editor(language);
+                state = state.language(language);
             }
             state.focus(window, cx);
             state

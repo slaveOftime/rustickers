@@ -2,7 +2,7 @@ use gpui::{
     Context, Entity, Image, ImageSource, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit,
     Rgba, Window, div, img, prelude::*,
 };
-use gpui_component::{input::Input, scroll::ScrollableElement, text::TextView, v_flex};
+use gpui_component::{input::Editor, scroll::ScrollableElement, text::TextView, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -402,7 +402,7 @@ impl super::FileSticker {
                     }
                 }))
                 .child(
-                    Input::new(editor)
+                    Editor::new(editor)
                         .size_full()
                         .bordered(false)
                         .bg(gpui::rgba(0x000000)),

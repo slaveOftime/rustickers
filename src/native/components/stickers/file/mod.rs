@@ -36,7 +36,7 @@ pub struct FileSticker {
     source_paths: Vec<String>,
     summaries: Vec<FileSummary>,
     preview: Option<FilePreview>,
-    preview_editor: Option<Entity<gpui_component::input::InputState>>,
+    preview_editor: Option<Entity<gpui_component::input::EditorState>>,
     refreshing: bool,
     pining: bool,
     error: Option<String>,
