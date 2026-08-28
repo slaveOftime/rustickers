@@ -7,7 +7,7 @@ use gpui::{
     transparent_black,
 };
 use gpui_component::{
-    Icon, Root,
+    FocusableExt, Icon, Root,
     button::Button,
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
@@ -505,6 +505,8 @@ impl SelectionPopup {
                                 .border_0()
                                 .w(px(200.0))
                                 .tab_index(0)
+                                .focus_ring(false)
+                                .bg(rgba(0x00000000))
                                 .prefix(Icon::new(IconName::Search)),
                         ),
                     )
@@ -573,7 +575,8 @@ impl SelectionPopup {
                 div().flex_1().min_h_0().child(
                     Textarea::new(&self.input)
                         .size_full()
-                        .p_2()
+                        .mx_neg_0p5()
+                        .my_neg_1()
                         .bordered(false)
                         .bg(rgba(0x00000000)),
                 ),

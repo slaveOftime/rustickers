@@ -606,6 +606,8 @@ impl MainWindow {
                             .border_0()
                             .w(px(160.0))
                             .tab_index(0)
+                            .focus_ring(false)
+                            .bg(rgba(0x00000000))
                             .prefix(Icon::new(IconName::Search)),
                     )
                     .child(self.sort_button(cx)),
