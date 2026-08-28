@@ -259,7 +259,7 @@ impl StickerWindow {
             id: 0,
             title: format!("New {} Sticker", sticker_type_label(sticker_type)),
             content: String::new(),
-            color: StickerColor::Yellow,
+            color: StickerColor::Gray,
             sticker_type,
             state: StickerState::Open,
             left: 100,

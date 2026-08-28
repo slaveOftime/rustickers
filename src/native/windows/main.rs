@@ -221,7 +221,7 @@ impl MainWindow {
             id: 0,
             title: title.to_string(),
             content: "".to_string(),
-            color: StickerColor::Yellow,
+            color: StickerColor::Gray,
             sticker_type: *sticker_type,
             state: StickerState::Open,
             left: 100,

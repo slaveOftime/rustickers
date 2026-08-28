@@ -181,7 +181,7 @@ impl StickerWindow {
             width,
             height,
             top_most: true,
-            color: color.unwrap_or(StickerColor::Yellow),
+            color: color.unwrap_or(StickerColor::Gray),
             sticker_type: StickerType::File,
             content: FileStickerContent::from_sources(&sources).to_json(),
             created_at: 0,
