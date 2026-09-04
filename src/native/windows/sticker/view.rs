@@ -1,10 +1,10 @@
 //! What a sticker window draws: the shared chrome around whichever sticker view it hosts.
 
-use std::sync::mpsc;
+use std::{sync::mpsc, time::Duration};
 
 use gpui::{
-    AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window, WindowControlArea, div,
-    prelude::*, px, rgba,
+    Animation, AnimationExt, AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window,
+    WindowControlArea, div, prelude::*, px, rgba,
 };
 use gpui_component::{
     ActiveTheme,
@@ -64,6 +64,14 @@ impl Render for StickerWindow {
                     a: 0.85,
                     ..self.detail.color.bg()
                 })
+            })
+            .when(self.flash && self.view.use_default_bg(cx), |view| {
+                let swatch = self.detail.color.swatch();
+                view.child(div().absolute().inset_0().bg(swatch).with_animation(
+                    "flash",
+                    Animation::new(Duration::from_millis(800)).repeat(),
+                    |view, delta| view.opacity(0.3 + 0.6 * delta),
+                ))
             })
             .when_some(self.error.as_ref(), |view, msg| {
                 view.child(

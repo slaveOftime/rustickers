@@ -25,6 +25,8 @@ pub struct PreviewFileRequest {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub color: Option<StickerColor>,
+    #[serde(default)]
+    pub flash: bool,
 }
 
 pub enum IpcEvent {

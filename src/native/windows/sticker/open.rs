@@ -45,6 +45,16 @@ static OPEN_STICKERS: RwLock<Vec<(i64, AnyWindowHandle)>> = RwLock::new(Vec::new
 
 static NEXT_SELECTION_RUN_OPEN_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
+/// Optional tweaks for a file preview window.
+#[derive(Default)]
+pub struct PreviewOptions {
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub color: Option<StickerColor>,
+    /// Flash the window background in the sticker color.
+    pub flash: bool,
+}
+
 /// Extra knobs used when opening a sticker window.
 #[derive(Default)]
 pub(super) struct OpenOptions {
@@ -56,6 +66,8 @@ pub(super) struct OpenOptions {
     pub(super) open_in_settings: bool,
     /// Create the window without showing it, the sticker view can reveal it later.
     pub(super) hidden: bool,
+    /// Flash the window background in the sticker color.
+    pub(super) flash: bool,
 }
 
 impl StickerWindow {
@@ -135,9 +147,7 @@ impl StickerWindow {
             sticker_events_tx,
             store,
             sources,
-            None,
-            None,
-            None,
+            PreviewOptions::default(),
         )
     }
 
@@ -146,9 +156,7 @@ impl StickerWindow {
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
         sources: Vec<String>,
-        width: Option<i32>,
-        height: Option<i32>,
-        color: Option<StickerColor>,
+        options: PreviewOptions,
     ) -> anyhow::Result<()> {
         // Previews are keyed by the sources they show, so asking for the same ones again raises
         // the window that already has them instead of opening a duplicate.
@@ -167,8 +175,8 @@ impl StickerWindow {
             format!("{} files", sources.len())
         };
 
-        let width = width.unwrap_or(default_size.width);
-        let height = height.unwrap_or(default_size.height);
+        let width = options.width.unwrap_or(default_size.width);
+        let height = options.height.unwrap_or(default_size.height);
 
         let origin = free_preview_origin(cx, size(width, height));
 
@@ -181,7 +189,7 @@ impl StickerWindow {
             width,
             height,
             top_most: true,
-            color: color.unwrap_or(StickerColor::Gray),
+            color: options.color.unwrap_or(StickerColor::Gray),
             sticker_type: StickerType::File,
             content: FileStickerContent::from_sources(&sources).to_json(),
             created_at: 0,
@@ -197,7 +205,13 @@ impl StickerWindow {
             placements: Vec::new(),
         };
 
-        Self::open_with_detail_and_options(cx, sticker_events_tx, store, detail, true, false)
+        let open_options = OpenOptions {
+            focus: true,
+            open_id: detail.id,
+            flash: options.flash,
+            ..Default::default()
+        };
+        Self::open_with_options(cx, sticker_events_tx, store, detail, open_options)
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {
@@ -291,6 +305,7 @@ impl StickerWindow {
             selection_run: true,
             open_in_settings: false,
             hidden,
+            flash: false,
         };
         Self::open_with_options(cx, sticker_events_tx, store, detail, options)
     }

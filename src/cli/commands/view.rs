@@ -31,6 +31,10 @@ pub struct ViewArgs {
     /// Sticker color: yellow, green, blue, pink or gray
     #[arg(long, value_parser = crate::cli::parse_color)]
     pub color: Option<StickerColor>,
+
+    /// Flash the background in the sticker color
+    #[arg(long)]
+    pub flash: bool,
 }
 
 /// The app has its own working directory, so a relative path has to be resolved here or it would
@@ -59,6 +63,7 @@ pub fn run(args: ViewArgs, format: Format) -> anyhow::Result<()> {
         width: args.width,
         height: args.height,
         color: args.color,
+        flash: args.flash,
     };
 
     let delivery = runtime::send(&format!(

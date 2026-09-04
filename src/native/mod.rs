@@ -94,9 +94,12 @@ pub fn run_native(
                                         sticker_events_tx_for_ipc.clone(),
                                         store.clone(),
                                         vec![request.source],
-                                        request.width,
-                                        request.height,
-                                        request.color,
+                                        crate::native::windows::sticker::PreviewOptions {
+                                            width: request.width,
+                                            height: request.height,
+                                            color: request.color,
+                                            flash: request.flash,
+                                        },
                                     ) {
                                         tracing::warn!(error = ?err, "Failed to open file preview from IPC");
                                     }

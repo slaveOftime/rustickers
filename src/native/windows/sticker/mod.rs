@@ -30,6 +30,8 @@ use crate::storage::ArcStickerStore;
 use bounds::{BOUNDS_SAVE_DEBOUNCE, display_fingerprint};
 use open::OpenOptions;
 
+pub use open::PreviewOptions;
+
 pub struct StickerWindow {
     store: ArcStickerStore,
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
@@ -52,6 +54,8 @@ pub struct StickerWindow {
     pending_restore: Option<(NativeRect, Instant)>,
     selection_run: bool,
     closing: bool,
+    /// Flash the window background in the sticker color.
+    flash: bool,
     transient_topmost: TransientTopmost,
     protected_relock_generation: u64,
     _window_activation_subscription: Subscription,
@@ -70,6 +74,7 @@ impl StickerWindow {
             open_id,
             selection_run,
             hidden,
+            flash,
             ..
         } = options;
 
@@ -113,6 +118,7 @@ impl StickerWindow {
             pending_restore,
             selection_run,
             closing: false,
+            flash,
             error: None,
             transient_topmost,
             protected_relock_generation: 0,
