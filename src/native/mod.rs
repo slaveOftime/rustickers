@@ -16,6 +16,7 @@ pub mod components;
 pub mod file_manager;
 pub mod hotkey;
 pub mod http;
+pub mod power_guard;
 pub mod selection;
 pub mod windows;
 
@@ -28,6 +29,10 @@ pub fn run_native(
     let app = Application::with_platform(gpui_platform::current_platform(false))
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
+
+    // Must run after the platform (and its hidden message window) exists,
+    // but before the event loop starts dispatching messages.
+    power_guard::install();
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
     let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());
