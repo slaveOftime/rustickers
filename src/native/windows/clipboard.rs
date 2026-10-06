@@ -408,6 +408,13 @@ impl ClipboardChooserWidget {
         };
         this.refresh(window, cx);
         cx.spawn_in(window, async move |entity, cx| {
+            // Reconciliation cadence for cross-process changes (CLI rewrites,
+            // external vault edits). Local watcher events drain their own
+            // signal queue and trigger a near-instant refresh on the next
+            // tick; this loop only guarantees we catch up after the watcher
+            // misses a write -- once every five seconds is enough.
+            const RECONCILE_EVERY: u32 = 5;
+            let mut ticks_since_refresh: u32 = 0;
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(1))
@@ -415,7 +422,18 @@ impl ClipboardChooserWidget {
                 if entity
                     .update_in(cx, |this, window, cx| {
                         this.capture_status = crate::native::clipboard::watcher::capture_status();
-                        if !this.busy && this.prompt.is_none() && !this.editor_open {
+                        let drained = crate::native::clipboard::watcher::drain_watcher_signals();
+                        let signal_pushed_refresh = !drained.is_empty();
+                        ticks_since_refresh = ticks_since_refresh.saturating_add(1);
+                        let due_for_reconcile = ticks_since_refresh >= RECONCILE_EVERY;
+                        if !this.busy
+                            && this.prompt.is_none()
+                            && !this.editor_open
+                            && (signal_pushed_refresh || due_for_reconcile)
+                        {
+                            if signal_pushed_refresh {
+                                ticks_since_refresh = 0;
+                            }
                             this.refresh(window, cx);
                         }
                         cx.notify();

@@ -232,8 +232,7 @@ pub fn run_native(
                     let _ = clipboard_filter_for_open.set(filter.clone());
                     let _ = clipboard_vault_for_open.set(vault.clone());
                     let (watcher, _stop) = crate::native::clipboard::watcher::WatcherHandle::new(Duration::from_millis(250));
-                    let (events, _receiver) = mpsc::channel();
-                    watcher.spawn(filter.clone(), clipboard_store.clone(), events);
+                    watcher.spawn(filter.clone(), clipboard_store.clone());
                     crate::native::windows::clipboard::set_global_store(clipboard_store);
                     cx.update(move |_cx| {
                         crate::native::windows::clipboard::set_global_capture_filter(filter);

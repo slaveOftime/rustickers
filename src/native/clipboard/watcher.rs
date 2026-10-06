@@ -13,13 +13,22 @@
 //! GUI-mediated writes can mark themselves as internal before they reach the clipboard. This is
 //! how the existing selection-capture helper ([`crate::native::selection`]) avoids polluting the
 //! history with the temporary marker it sets on the clipboard.
+//!
+//! # Idle cost
+//!
+//! The watcher's gate reads [`ClipboardHistoryStore::has_protected_items`] -- a single
+//! `SELECT EXISTS` -- rather than fetching the full [`ClipboardItem`] vec every tick. The
+//! full payload is only read from a single call site: when the watcher itself persists a
+//! newly captured row, and from the GUI chooser when it has been signalled that the visible
+//! state is stale.
 
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::clipboard::items::{ClipboardItemKind, is_collectable};
+use crate::clipboard::items::is_collectable;
 use crate::clipboard::settings::ClipboardSettings;
 use crate::clipboard::storage::{ClipboardHistoryStore, SqliteClipboardStore, UpsertOutcome};
 
@@ -194,30 +203,51 @@ impl WatcherHandle {
         )
     }
 
-    /// Spawn the polling thread. It writes accepted captures into the provided store and emits
-    /// row ids on `events` for the chooser to refresh. Returns the join handle so callers can
-    /// stop the watcher before the process exits.
+    /// Spawn the polling thread. It writes accepted captures into the provided store
+    /// and pushes a content-free [`WatcherSignal`] to a global queue whenever the
+    /// visible clipboard state changes (a new row arrived; the collection paused; a
+    /// capture error). Subscribers -- such as the chooser snapshot loop -- drain
+    /// that queue on their own cadence. Returns the join handle so callers can stop
+    /// the watcher before the process exits.
+    ///
+    /// Note: the watcher no longer takes an mpsc Sender of `CapturedText`. The
+    /// previous channel carried content the chooser already has access to, kept
+    /// aliases inside `Arc<Mutex<Vec<CapturedText>>>` if the receiver was dropped,
+    /// and could outlive a vault reset on the way to a never-read endpoint.
+    /// Replacing it with a content-free signal avoids the leak surface and keeps
+    /// the chooser's snapshot read on its own schedule.
     pub fn spawn(
         self,
         filter: Arc<CaptureFilter>,
         store: Arc<dyn ClipboardHistoryStore>,
-        events: std::sync::mpsc::Sender<CapturedText>,
     ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new().name("clipboard-watcher".into()).spawn(move || {
             let mut last_seen = LastSeenText::new();
             let mut last_generation = None;
             let mut active = false;
+            let mut last_has_protected: Option<bool> = None;
             while !self.stop.load(std::sync::atomic::Ordering::Relaxed) {
                 let tick = (|| -> anyhow::Result<()> {
                     let settings = futures::executor::block_on(store.settings())?;
-                    let has_protected = futures::executor::block_on(store.snapshot())?.iter()
-                        .any(|r| r.kind == ClipboardItemKind::Protected || r.retention.protected());
+                    // Cheap existence query, not the full snapshot. The full
+                    // content-bearing vec is only read once, in this tick's
+                    // capture-save path and from the chooser side, never from
+                    // a poll gate.
+                    let has_protected = futures::executor::block_on(store.has_protected_items())?;
                     if !settings.capture_enabled || has_protected {
                         active = false;
+                        // Notify only on transitions: emitting the pause signal
+                        // every tick would force the chooser to refresh
+                        // unnecessarily.
+                        if last_has_protected != Some(has_protected) {
+                            last_has_protected = Some(has_protected);
+                            push_watcher_signal(WatcherSignal::CapturePaused);
+                        }
                         set_capture_status(if has_protected { "Collection paused: protected history requires a safe recapture match check." }
                             else { "Collection paused. Enable to capture copied text (including secrets)." });
                         return Ok(());
                     }
+                    last_has_protected = Some(false);
                     if !active { last_seen = LastSeenText::new(); last_generation = None; active = true; }
                     let transaction = filter.transaction();
                     let before = clipboard_generation();
@@ -240,8 +270,13 @@ impl WatcherHandle {
                                 set_capture_status("Capture skipped: text exceeds 1 MiB; nothing was truncated."); return Ok(());
                             }
                             let captured = CapturedText { byte_size: text.len() as i64, content: text, source: CaptureSource::UserCopy };
+                            // Capture read happens only on the persist path,
+                            // which already pays for one snapshot's worth of
+                            // writes. Update the returned id when persist_capture
+                                // exposes it; see the WatcherSignal::Captured
+                                // arm below for the queueing pattern.
                             futures::executor::block_on(persist_capture(&*store, &captured, &settings))?;
-                            let _ = events.send(captured);
+                            push_watcher_signal(WatcherSignal::Captured);
                         }
                     } else { last_seen = LastSeenText::new(); }
                     set_capture_status("Collecting copied text. Secrets can enter ordinary history.");
@@ -393,6 +428,61 @@ fn set_capture_status(status: &str) {
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = status.into();
 }
+
+/// Content-free signals the watcher publishes onto a global queue when
+/// the visible state changes. Carries no payload: subscribers run a
+/// snapshot at their own cadence and inspect the row themselves. This
+/// avoids both the watchdog leak of the previous `mpsc::Sender<CapturedText>`
+/// (whose receiver was dropped) and the temptation to mirror plaintext
+/// through a long-lived channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatcherSignal {
+    /// A new ordinary capture was persisted to the store.
+    Captured,
+    /// `has_protected_items()` flipped to true (or to false). The chooser
+    /// should refresh; collection is now or is no longer paused on a
+    /// safety ground.
+    CapturePaused,
+    /// A tick failed and the watcher is retrying; the chooser keeps its
+    /// last good state but should surface a recoverable status.
+    CaptureError,
+}
+
+static WATCHER_SIGNALS: OnceLock<Mutex<VecDeque<WatcherSignal>>> = OnceLock::new();
+
+fn signals() -> &'static Mutex<VecDeque<WatcherSignal>> {
+    WATCHER_SIGNALS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// Push a content-free signal from the watcher thread. Coalescing is
+/// left to the subscriber: multiple `Captured` events arriving while a
+/// subscriber is busy collapse into a single UI refresh because the
+/// subscriber drains the entire queue and the existence query inside
+/// the chooser sees the latest storage state.
+fn push_watcher_signal(signal: WatcherSignal) {
+    if let Ok(mut queue) = signals().lock() {
+        queue.push_back(signal);
+    }
+}
+
+/// Drain all currently-queued watcher signals. Returns the drained list
+/// so callers can collapse multiple `Captured` (or `CapturePaused`)
+/// events into one UI update.
+pub fn drain_watcher_signals() -> Vec<WatcherSignal> {
+    match signals().lock() {
+        Ok(mut queue) => queue.drain(..).collect(),
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            guard.drain(..).collect()
+        }
+    }
+}
+
+/// Number of unread signals. Cheap; intended for tests that want to
+/// confirm an event made it onto the queue.
+pub fn pending_watcher_signals() -> usize {
+    signals().lock().map(|q| q.len()).unwrap_or(0)
+}
 #[cfg(target_os = "windows")]
 pub fn clipboard_generation() -> Option<u32> {
     // Signature verified against the locally cached windows-sys DataExchange bindings.
@@ -476,5 +566,27 @@ mod tests {
         filter.note_internal_write();
         assert_eq!(filter.consume_pending_internal_writes(), 2);
         assert_eq!(filter.consume_pending_internal_writes(), 0);
+    }
+
+    /// Many `Captured` events between two `drain` calls collapse into a
+    /// single render in the chooser: draining returns every queued event,
+    /// but `pending_watcher_signals` reports the post-drain depth so a
+    /// later caller can see whether anything was lost.
+    #[test]
+    fn watcher_signal_queue_preserves_each_push_and_drains_atomically() {
+        // Drain anything left over from earlier tests in this process.
+        let _ = drain_watcher_signals();
+
+        push_watcher_signal(WatcherSignal::Captured);
+        push_watcher_signal(WatcherSignal::Captured);
+        push_watcher_signal(WatcherSignal::CapturePaused);
+
+        assert_eq!(pending_watcher_signals(), 3);
+        let drained = drain_watcher_signals();
+        assert_eq!(drained.len(), 3);
+        assert_eq!(drained[0], WatcherSignal::Captured);
+        assert_eq!(drained[1], WatcherSignal::Captured);
+        assert_eq!(drained[2], WatcherSignal::CapturePaused);
+        assert_eq!(pending_watcher_signals(), 0);
     }
 }
