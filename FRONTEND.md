@@ -13,9 +13,8 @@ still lingers, what theme tokens to use, what design rules already
 govern the surface, and where to look for further reading.
 
 > If you change something in this doc, also update the related source
-> files and keep `docs/plans/gpui-kit-upgrade-goal.md` honest about
-> the new shape. This file is the **first stop** for newcomers, not
-> the only stop.
+> files. This file is the **first stop** for newcomers, not the only
+> stop.
 
 ---
 
@@ -124,12 +123,7 @@ src/
 tests/
   clipboard_storage.rs          ← 18 privacy regression tests — DO NOT regress
   sticker_palette.rs            ← 3 StickerColor palette regression tests
-docs/
-  plans/clipboard-design-guides.md
-  plans/clipboard-coding-guides.md
-  plans/gpui-kit-upgrade{,-goal}.md
-  reviews/post-kit-migration-review.md    ← prioritised follow-ups
-.github/workflows/ci.yml                  ← windows-latest / ubuntu-latest / macos-14
+.github/workflows/ci.yml        ← windows-latest / ubuntu-latest / macos-14
 ```
 
 Adding a new family:
@@ -651,7 +645,7 @@ repo has no opinion. Add a `.gitattributes` if you'd rather normalise.
 
 ---
 
-## 15. Roadmap (from `docs/reviews/post-kit-migration-review.md`)
+## 15. Roadmap (post-kit-migration)
 
 The PR review identified the follow-ups in priority order. Tackle
 in this order unless your feature intersects.
@@ -698,14 +692,13 @@ current with the v0.7.1 source.
 skills-lock.json            ← source URL + computed hash per skill
 ```
 
-`docs/plans/`:
-
-- `gpui-kit-upgrade.md` — audit baseline (evidence, decision, target architecture).
-- `gpui-kit-upgrade-goal.md` — the per-milestone log kept current as the migration proceeded.
-- `clipboard-coding-guides.md`, `clipboard-design-guides.md` — project-local copies of the user-facing UX rules; rename / extend as new UX ground rules land.
-
-`docs/reviews/post-kit-migration-review.md` — prioritised post-migration
-review (worth reading cover-to-cover before opening your first PR).
+The important takeaways from the migration's audit, milestone log,
+post-migration review, and clipboard UX guides have been distilled
+into the sections above. When you change a §1–§15 rule, mirror it
+back into the matching local skill reference under
+`.agents/skills/gpui-kit/reference/` or
+`.pi/skills/gpui-kit-design-guides/references/` so future snapshots
+of those skills stay current.
 
 ---
 
@@ -732,7 +725,8 @@ Before you open a PR that touches the desktop UI, walk this list:
       shape: think about whether to start removing the namespace bridges
       (§1). They are now vestigial from the module-level view; they
       will eventually come out.
-- [ ] `docs/plans/gpui-kit-upgrade-goal.md` and `docs/plans/gpui-kit-upgrade.md`
-      still reflect reality (or call out the divergence in this FRONTEND.md).
+- [ ] If your change supersedes a §2–§15 rule, mirror it back into
+      the matching entry in `.agents/skills/gpui-kit/reference/` or
+      `.pi/skills/gpui-kit-design-guides/references/` (see §16).
 
 If all boxes tick, ship it.
