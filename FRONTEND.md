@@ -385,51 +385,107 @@ merge.
 
 ## 8. Spawn / cancel / poll rules
 
-The application's render paths are *expected* to spawn async work
-in a few places (timer ticking, markdown autosave, clipboard
-ingest). GPUI tolerates this as long as the rule below holds.
+Async work appears in this app at three distinct surfaces:
+
+- **Tick loops** owned by attachable state (the timer sticker, the
+  command scheduler). These run for as long as the work demands and
+  must tear down cleanly when stopped or replaced.
+- **I/O dispatch** issued from event handlers and the foreground
+  state machine (clipboard usage, file reads, vault handles,
+  protection/unprotection, deletions). These should finish or be
+  abandoned on entity drop, never redo work that already succeeded.
+- **Watcher thread** that polls the OS clipboard and forwards
+  eligible captures. Owns its own thread, controlled by a stop flag.
+
+The relevant invariant for the first two categories is the one
+documented in the installed `cx.spawn` API: as long as the calling
+entity lives, the closure runs and `update_in` works; once the
+entity is dropped, `update_in` returns an error and the loop should
+break.
 
 ### Rule
 
-> Any `cx.spawn` issued inside `Render::render` must be **guarded**
-> by an idempotency flag **and** cancelled when the controlling
-> `Entity` is dropped or the window closes.
+> Spawn loops **must** guard their state with a revision tag owned by
+> the controller entity, **must** break when `update_in` returns an
+> error (which signals entity or window teardown), **must not** be
+> started from inside `Render::render`, and **must not** retain old
+> `Task` handles alongside new ones for the same role.
 
-The pattern that satisfies both:
+The same revision tag replaces the older "guard boolean" pattern: a
+guard only tells you a loop is *running*; a revision tag tells you
+whether the controller still cares about this particular loop. Both
+serve different purposes; do not collapse them into one field.
+
+Established pattern in the app's own code:
 
 ```rust
-fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    if !self.loop_running {
-        self.loop_running = true;
-        let weak = cx.entity().downgrade();
-        let task = cx.spawn_in(window, async move |entity, cx| {
-            'outer: loop {
-                if weak.upgrade().is_none() { break; }
-                …
-                Timer::after(Duration::from_millis(200)).await;
-            }
-            if let Some(entity) = weak.upgrade() {
-                entity.update(cx, |this, _| this.loop_running = false);
-            }
-        });
-        self.cancel_token = Some(task);
+// Spawn from initialization or a state transition, not from render.
+let revision = self.tick_revision;
+let weak = cx.entity().downgrade();
+cx.spawn_in(window, async move |entity, cx| {
+    loop {
+        Timer::after(Duration::from_millis(200)).await;
+        if entity
+            .update_in(cx, |this, cx| {
+                if this.tick_revision != revision { return false; }
+                // Tick work; return false if the work is no longer relevant.
+                true
+            })
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        break; // controller moved on or the entity was dropped
     }
-    …
+})
+.detach();
+```
+
+State-transition lifecycle helpers on the entity own the revision
+counter:
+
+```rust
+fn begin_tick(&mut self, cx: &mut Context<Self>) {
+    self.tick_revision += 1;
+    self.start_tick_loop(self.tick_revision, cx);
 }
 ```
 
-For window-bound work, prefer `cx.spawn_in(window, …)` so the task
-is naturally invalidated when the window tears down. For Entity-only
-work, capture a `WeakEntity` plus the entity's own `cx.on_window_close`
-hook to keep cancellation correct.
+A cancel-as-stop task -- such as the command scheduler's
+`schedule::CancelToken` -- is for cooperative cancellation of work
+the controller still believes in but no longer wants to continue.
+It is not a substitute for the revision tag.
 
-### Polling loops
+### Spawn-vs-spawn_in -- when each applies
 
-The clipboard chooser polls capture status at 1 Hz. That loop
-should be reworked into an event subscription on the watcher once
-the watcher exposes a push API; until then it's tolerated because
-the cost is bounded and the watcher debounces file events. Don't
-clone this loop shape into other surfaces — push > pull.
+`cx.spawn(...)` returns a task tracked by the app; `cx.spawn_in(window, ...)`
+returns a task tracked by that window. Neither cancels the future on
+its own when the window closes or the entity is dropped. Choose
+based on which scope you want to keep alive:
+
+- Use `cx.spawn` for background I/O or work that should survive
+  short-lived windows (CLI flows, detached background spawns).
+- Use `cx.spawn_in(window, ...)` when the work belongs to one
+  window and you want to call `update_in` on a typed handle.
+
+In both cases the loop has to obey the `update_in`-error rule above.
+
+### Forbidden patterns
+
+- Spawning tick loops or I/O directly from `Render::render`. This
+  makes it impossible to track which revision of the entity
+  requested the work and leaves dangling tasks on re-render.
+- Relying on `spawn_in` alone to "cancel when the window closes."
+  It does not -- the future runs to its next `await` regardless.
+
+### Polling loops to remember
+
+- The clipboard chooser polls capture status at 1 Hz. It is preserved
+  deliberate because it tolerates stale status and would have to be
+  reworked behind the watcher's change-push channel.
+- The OS clipboard watcher is a separate, dedicated thread with its
+  own `AtomicBool` stop flag; it is not visible from `cx.spawn` and
+  is controlled separately at shutdown.
 
 ---
 
@@ -647,27 +703,42 @@ repo has no opinion. Add a `.gitattributes` if you'd rather normalise.
 
 ## 15. Roadmap (post-kit-migration)
 
-The PR review identified the follow-ups in priority order. Tackle
-in this order unless your feature intersects.
+Material improvements from the post-migration code review, in
+priority order. Tackle from top unless your feature intersects.
 
 | Priority | Item | Why it tops the list |
 | --- | --- | --- |
-| **P0** | **§1.1 — virtualise the manager sticker list** with Kit `List`/`uniform_list` (`STICKER_LOAD_LIMIT = 10000` is rendered eagerly today; per-row `cx.listener` closures are reallocated every render). | Single largest performance and accessibility win. |
-| **P0** | **§4.1 — manager keyboard path + context menu**: `Tab` to enter the list, `↑/↓` to navigate, `Enter` to open, `F2` to edit, `Del` to remove; right-click context menu. | Falls out for free after `List` migration. |
-| **P1** | **§2.1 — bind timer / markdown autosave loops to the window lifecycle** via `cx.spawn_in(window, …)` and `cx.on_window_close`. | Reliability; the guard already exists, the cancellation doesn't. |
-| **P1** | **§4.2, §4.5 — footer hint surface and status banner alignment** with Kit `Alert::error(...).small()`. | Cheap UX wins, no behavior change. |
-| **P1** | **§2.4 — IPC single-instance hardening** (ack probe, `'ctrl-c' cleanup`, explicit permission-denied branch). | Recurring ticket fix on macOS. |
-| **P2** | **§5.1 / §5.2 — listener-as-data + `CardSurface` refactor**. | Cleanup with secondary performance benefits. |
-| **P2** | **§3 reliability — SQL contention diagnostics; install a panic hook** that writes `crash_log.txt`. | Polish; profile what's actually slow first. |
-| **P2** | **§4.10 — system tray icon** for "collection paused" status. | Out-of-scope fluff for the migration, but the single biggest continuous-discovery win. |
+| **P0** | **Timer task ownership** — the timer's tick loop ignores `update_in` failures and resets a guard without cancelling the prior task. Already documented in §8. Multiple concurrent ticks can run for the same timer. | Real reliability bug; a closed window can keep a detached loop running. |
+| **P0** | **Manager async correctness** — the loading-guard ducks abandoned requests. Out-of-order completions can clobber fresher state, and successful paths skip `cx.notify()` in places (`main.rs:198`, `:273`, `:348`). | Real correctness bug; fixes are local but the impact is large. |
+| **P1** | **Manager virtualization** — `STICKER_LOAD_LIMIT = 10000` is rendered eagerly through `v_flex().children(iter)`. Adopting Kit's variable-height list with stable domain IDs is the next milestone. | Largest single performance and accessibility win; do after the previous two because virtualization exposes their fragility. |
+| **P1** | **Recoverable WebView construction** — `SimpleWebView::new` calls `builder.build_as_child(window).unwrap()`. Propagate failures through the file preview's existing error surface so a missing backend never terminates the app. | Real robustness bug, small patch. |
+| **P1** | **Clipboard read efficiency** — the watcher reads a full snapshot every 250 ms just to decide whether any protected row exists; the chooser refreshes a snapshot every second. Use a cheap existence query, an in-process change channel, and bounded reconciliation. | Direct impact on idle CPU and SQL contention on slow disks. |
+| **P2** | **Targeted ergonomic safeguards** — keyboard discoverability, name-the-consequence wording for irreversible protection changes, light-theme palette variant. | Polished UX, not blockers. |
 
-There are also longer-horizon items:
+Longer-horizon items not in the priority list:
 
 - Resolve `gpui-kit`'s `test-support` so `#[gpui_kit::test]` UI
   integration tests can run in CI.
-- Promote the StickerColor palette to a true theme extension so
-  light mode brings the surface tints with it.
-- Replace `screenshots/demo1.png` after a native visual review.
+- Replace `screenshots/demo1.png` after native visual review.
+- A tray icon is not planned; the status banner in the manager
+  conveys "collection paused" already and IPC's running-instance
+  handshake covers single-rustickers expectations.
+
+Items the original review recommended that turned out to be
+**speculative or already in place** — don't redo them as refactors:
+
+- `cx.on_window_close` is not a verified GPUI API; cancellation is
+  by task drop plus the `update_in` error path described in §8.
+- A panic hook is already installed in `src/utils/logging.rs`.
+- SQLite is already configured with `max_connections(1)`; blanket
+  `BEGIN IMMEDIATE` would erode read concurrency without evidence.
+- The command runner already transports typed `CmdEvent`s over
+  `mpsc`; no JSON serialization in the loop.
+- Markdown saves only on explicit Ctrl+S / save button; it is not an
+  autosave on every keystroke.
+- Listeners and Tables already come with row IDs in their interface;
+  a generic `row_listener`/`CardSurface` helper over the whole app
+  is unproven leverage.
 
 ---
 
@@ -710,8 +781,9 @@ Before you open a PR that touches the desktop UI, walk this list:
 - [ ] Used Kit button variants (`Button::ghost()` / `.danger()` / `.selected(...)`),
       not manual `bg(transparent_black)` + `border_0()` compositions.
 - [ ] New long lists go through `uniform_list`, not `v_flex().children(…)`.
-- [ ] Spawned tasks from render are guarded + cancellation-bound to the
-      controlling `WeakEntity` and the window's close hook.
+- [ ] Spawned tasks are owned by initialization or a state transition,
+      not by `Render::render`; loops break on `update_in` errors and use a
+      revision tag rather than only a guard boolean (§8).
 - [ ] Any clipboard / vault change re-runs `cargo test --features cli
       --test clipboard_storage` — **210 passed, 0 failed** must hold.
 - [ ] Any palette change re-runs `cargo test --features cli --test
