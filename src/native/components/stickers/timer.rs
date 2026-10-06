@@ -13,6 +13,14 @@ use gpui::{
     Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window,
     WindowControlArea, div, prelude::*, px,
 };
+
+/// Result of a single tick-loop iteration. `Continue(ms)` asks the loop
+/// driver to sleep for at most `ms` milliseconds before the next body
+/// call. `Stop` exits the loop on the next scheduling point.
+enum TickBodyOutcome {
+    Continue(u64),
+    Stop,
+}
 use serde::{Deserialize, Serialize};
 
 use crate::model::sticker::StickerColor;
@@ -57,20 +65,27 @@ pub struct TimerSticker {
     last_save_time_while_countdown: i64,
 
     is_just_finished: bool,
-    timer_loop_running: bool,
+    /// Monotonic counter owned by this entity. Every tick-loop run is
+    /// tagged with the value at the moment it was started; if the entity
+    /// starts a new loop, a transition happens, or the entity is being
+    /// shut down, this counter moves and the prior loop exits on its
+    /// next iteration. The previous `bool` only proved *some* loop was
+    /// running; the revision tag proves *this exact loop is still*
+    /// wanted.
+    tick_loop_revision: u64,
     last_displayed_remaining_secs: i32,
 
     error: Option<String>,
 }
 
 impl TimerSticker {
-    pub fn new<T>(
+    pub fn new(
         id: i64,
         color: StickerColor,
         store: ArcStickerStore,
         content: &str,
         window: &mut Window,
-        cx: &mut Context<T>,
+        cx: &mut Context<Self>,
         sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     ) -> Self {
         let timer = parse_content(content);
@@ -107,7 +122,7 @@ impl TimerSticker {
             .searchable(true)
         });
 
-        Self {
+        let mut sticker = Self {
             id,
             color,
             store,
@@ -123,10 +138,24 @@ impl TimerSticker {
             seconds,
             last_save_time_while_countdown: 0,
             is_just_finished: false,
-            timer_loop_running: false,
+            tick_loop_revision: 0,
             last_displayed_remaining_secs: -1,
             error: None,
+        };
+
+        // Restore a tick loop when a running timer is reopened. Without
+        // this, a sticker that's ticking while its window is being
+        // restored would only show a countdown frame after the next
+        // render. begin_tick_loop checks the current revision, not just
+        // the bool flag, so it's safe to call unconditionally here.
+        if matches!(
+            sticker.timer.start_info.as_ref().map(|s| &s.state),
+            Some(TimerState::Running)
+        ) {
+            sticker.begin_tick_loop(cx);
         }
+
+        sticker
     }
 
     fn save_timer_state(&mut self, cx: &mut Context<Self>) -> bool {
@@ -226,36 +255,41 @@ impl TimerSticker {
             }),
         };
         self.last_displayed_remaining_secs = -1;
-        self.timer_loop_running = false;
+        self.supersede_tick_loop();
 
         self.save_timer_state(cx);
+        // Initialise the tick loop *now* so the freshly-started countdown
+        // does not depend on the next render pass noticing the running state.
+        self.begin_tick_loop(cx);
     }
 
     fn change_state(&mut self, cx: &mut Context<Self>, state: TimerState) {
         let remaining_secs = effective_remaining_secs(&self.timer);
+        let mut begin_tick = false;
         if let Some(start_info) = &mut self.timer.start_info {
             match (&start_info.state, state) {
                 (TimerState::Paused, TimerState::Running) => {
                     start_info.started_at_ms = crate::utils::time::now_unix_millis();
                     start_info.state = TimerState::Running;
                     self.last_displayed_remaining_secs = -1;
-                    self.timer_loop_running = false;
+                    begin_tick = true;
                 }
                 (TimerState::Finished, TimerState::Running) => {
                     start_info.started_at_ms = crate::utils::time::now_unix_millis();
                     start_info.state = TimerState::Running;
                     start_info.remaining_secs = self.timer.duration_secs;
                     self.last_displayed_remaining_secs = -1;
-                    self.timer_loop_running = false;
+                    begin_tick = true;
                 }
                 (TimerState::Running, TimerState::Paused) => {
                     start_info.remaining_secs = remaining_secs;
                     start_info.state = TimerState::Paused;
-                    self.timer_loop_running = false;
+                    // No tick loop; supersede whatever is currently running.
+                    self.supersede_tick_loop();
                 }
                 (_, TimerState::Finished) => {
                     self.timer.start_info = None;
-                    self.timer_loop_running = false;
+                    self.supersede_tick_loop();
                     self.last_displayed_remaining_secs = -1;
                 }
                 _ => { /* No state change */ }
@@ -263,19 +297,28 @@ impl TimerSticker {
 
             self.save_timer_state(cx);
         }
+
+        if begin_tick {
+            self.begin_tick_loop(cx);
+        }
     }
 
     fn restart(&mut self, cx: &mut Context<Self>) {
         self.is_just_finished = false;
+        let mut begin_tick = false;
 
         if let Some(start_info) = &mut self.timer.start_info {
             start_info.started_at_ms = crate::utils::time::now_unix_millis();
             start_info.remaining_secs = self.timer.duration_secs;
             start_info.state = TimerState::Running;
             self.last_displayed_remaining_secs = -1;
-            self.timer_loop_running = false;
+            begin_tick = true;
 
             self.save_timer_state(cx);
+        }
+
+        if begin_tick {
+            self.begin_tick_loop(cx);
         }
     }
 
@@ -302,68 +345,40 @@ impl TimerSticker {
         .detach();
     }
 
-    fn spawn_for_timer(&mut self, cx: &mut Context<Self>) {
-        if self.timer_loop_running {
-            return;
-        }
-        self.timer_loop_running = true;
+    /// Invalidate any currently-running tick loop on this entity. Detached
+    /// loops check `tick_loop_revision` against the snapshot they captured
+    /// at start; once it changes they exit on the next iteration. Safe to
+    /// call from any state transition, including ones the loop will
+    /// observe; supersession is monotonic.
+    fn supersede_tick_loop(&mut self) {
+        self.tick_loop_revision = self.tick_loop_revision.saturating_add(1);
+    }
 
-        cx.spawn(async move |e, cx| {
+    /// Start a tick loop pinned to the current revision. Tasks perform one
+    /// body call per iteration, then sleep until the next second boundary
+    /// or 200 ms, whichever is sooner. They exit when:
+    ///
+    /// - the controller moves to a non-Running state,
+    /// - the controller bumps `tick_loop_revision` (start/restart/resume),
+    /// - or `update` returns Err (entity dropped).
+    fn begin_tick_loop(&mut self, cx: &mut Context<Self>) {
+        self.supersede_tick_loop();
+        let revision = self.tick_loop_revision;
+
+        cx.spawn(async move |entity, cx| {
             loop {
-                let mut should_continue = true;
-                let mut sleep_ms: u64 = 200;
-
-                let _ = e.update(cx, |this, cx| {
-                    let Some(start_info) = this.timer.start_info.as_ref() else {
-                        this.timer_loop_running = false;
-                        should_continue = false;
-                        return;
-                    };
-
-                    if !matches!(start_info.state, TimerState::Running) {
-                        this.timer_loop_running = false;
-                        should_continue = false;
-                        return;
+                let sleep_ms: u64 = match entity.update(cx, |this, cx| {
+                    if this.tick_loop_revision != revision {
+                        return None;
                     }
-
-                    let now_ms = crate::utils::time::now_unix_millis();
-                    let elapsed_ms = now_ms.saturating_sub(start_info.started_at_ms);
-                    let remaining_ms =
-                        ((start_info.remaining_secs as i64) * 1000 - elapsed_ms).max(0);
-                    let remaining_secs =
-                        (start_info.remaining_secs - (elapsed_ms / 1000) as i32).max(0);
-
-                    if remaining_secs != this.last_displayed_remaining_secs {
-                        this.last_displayed_remaining_secs = remaining_secs;
-                        cx.notify();
+                    match this.tick_body(cx) {
+                        TickBodyOutcome::Continue(until_next_ms) => Some(until_next_ms),
+                        TickBodyOutcome::Stop => None,
                     }
-
-                    if remaining_secs <= 0 {
-                        this.is_just_finished = true;
-                        if let Some(start_info) = &mut this.timer.start_info {
-                            start_info.state = TimerState::Finished;
-                        }
-                        this.timer_loop_running = false;
-                        should_continue = false;
-                        cx.activate(true);
-                        this.spawn_for_beep(cx);
-                    }
-
-                    if remaining_secs <= 0 || now_ms - this.last_save_time_while_countdown >= 3000 {
-                        this.save_timer_state(cx);
-                        this.last_save_time_while_countdown = now_ms;
-                        tracing::trace!(id = this.id, "Timer sticker state saved");
-                    }
-
-                    if should_continue {
-                        let until_next_second = (remaining_ms % 1000).max(1) as u64;
-                        sleep_ms = until_next_second.min(200);
-                    }
-                });
-
-                if !should_continue {
-                    break;
-                }
+                }) {
+                    Ok(Some(until_next_ms)) => until_next_ms,
+                    Ok(None) | Err(_) => break,
+                };
 
                 cx.background_executor()
                     .timer(Duration::from_millis(sleep_ms))
@@ -371,6 +386,57 @@ impl TimerSticker {
             }
         })
         .detach();
+    }
+
+    /// One iteration of the tick loop. Caller must have already validated
+    /// that `tick_loop_revision == revision`. Returns the duration until
+    /// the loop should wake again, or `Stop` to terminate the loop.
+    fn tick_body(&mut self, cx: &mut Context<Self>) -> TickBodyOutcome {
+        let Some(start_info) = self.timer.start_info.as_ref() else {
+            // State was cleared underneath us. Leave the loop body; the
+            // loop driver will exit because there is no next wake to schedule.
+            // supersession isn't necessary: the next start() / restart()
+            // will bump the revision, and `change_state(_, Finished)` already
+            // did so before clearing `start_info`.
+            return TickBodyOutcome::Stop;
+        };
+
+        if !matches!(start_info.state, TimerState::Running) {
+            return TickBodyOutcome::Stop;
+        }
+
+        let now_ms = crate::utils::time::now_unix_millis();
+        let elapsed_ms = now_ms.saturating_sub(start_info.started_at_ms);
+        let remaining_ms = ((start_info.remaining_secs as i64) * 1000 - elapsed_ms).max(0);
+        let remaining_secs = (start_info.remaining_secs - (elapsed_ms / 1000) as i32).max(0);
+
+        if remaining_secs != self.last_displayed_remaining_secs {
+            self.last_displayed_remaining_secs = remaining_secs;
+            cx.notify();
+        }
+
+        if remaining_secs <= 0 {
+            self.is_just_finished = true;
+            if let Some(start_info) = &mut self.timer.start_info {
+                start_info.state = TimerState::Finished;
+            }
+            // The state has flipped terminal; bump the revision so the
+            // loop driver knows to exit even though this iteration may
+            // still schedule its first sleep.
+            self.supersede_tick_loop();
+            cx.activate(true);
+            self.spawn_for_beep(cx);
+            return TickBodyOutcome::Stop;
+        }
+
+        if now_ms - self.last_save_time_while_countdown >= 3000 {
+            self.save_timer_state(cx);
+            self.last_save_time_while_countdown = now_ms;
+            tracing::trace!(id = self.id, "Timer sticker state saved");
+        }
+
+        let until_next_second = (remaining_ms % 1000).max(1) as u64;
+        TickBodyOutcome::Continue(until_next_second.min(200))
     }
 
     fn setter_view(&mut self, _cx: &mut Context<Self>) -> AnyElement {
@@ -563,9 +629,11 @@ impl Render for TimerSticker {
             .window_control_area(WindowControlArea::Drag);
 
         if let Some(start_info) = &mut self.timer.start_info {
-            if let TimerState::Running = start_info.state {
-                self.spawn_for_timer(cx);
-            }
+            // Render must be a pure description of state. The tick loop
+            // is started in `start()`, `change_state(_, Running)` and
+            // `restart()`; this branch only reflects that state to the
+            // user.
+            let _ = start_info;
             body = body.child(self.countdown_view(cx, window));
         } else {
             body = body.child(self.setter_view(cx));
