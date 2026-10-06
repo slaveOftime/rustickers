@@ -16,8 +16,8 @@ mod view;
 
 use std::{sync::mpsc, time::Instant};
 
+use crate::gpui_component::input::{InputEvent, InputState};
 use gpui::{AppContext, Context, Subscription, Window};
-use gpui_component::input::{InputEvent, InputState};
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState};
 use crate::native::components::stickers::{FOCUS_LOSS_RELOCK_DELAY, StickerView};
