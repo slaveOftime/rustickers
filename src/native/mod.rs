@@ -3,8 +3,8 @@ use std::{
     time::Duration,
 };
 
-use gpui::{AnyWindowHandle, App, Application, rgb};
-use gpui_component::{Theme, ThemeMode};
+use crate::gpui_component::{Theme, ThemeMode};
+use gpui::{AnyWindowHandle, App};
 
 use crate::clipboard::vault_controller::VaultController;
 use crate::{
@@ -21,6 +21,7 @@ pub mod hotkey;
 pub mod http;
 pub mod power_guard;
 pub mod selection;
+pub mod theme;
 pub mod windows;
 
 pub fn run_native(
@@ -29,7 +30,7 @@ pub fn run_native(
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
 ) {
-    let app = Application::with_platform(gpui_platform::current_platform(false))
+    let app = gpui::application()
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
 
@@ -49,10 +50,8 @@ pub fn run_native(
     let clipboard_vault_for_open: Arc<OnceLock<Arc<VaultController>>> = Arc::new(OnceLock::new());
 
     app.run(move |cx: &mut App| {
-        gpui_component::init(cx);
+        crate::gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
-        let theme = cx.global_mut::<Theme>();
-        theme.background = rgb(0x151104).into();
 
         let main_window_handle_clone = main_window_handle.clone();
         let store_handle_clone = store_handle.clone();
