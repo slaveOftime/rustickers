@@ -17,12 +17,11 @@ use std::{
     },
 };
 
+use crate::gpui_component::Root;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, Styled,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
-    transparent_black,
+    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, WindowBackgroundAppearance,
+    WindowBounds, WindowKind, WindowOptions, point, px, size,
 };
-use gpui_component::Root;
 use url::Url;
 
 use crate::model::content::{CommandContent, FileStickerContent};
@@ -390,7 +389,7 @@ impl StickerWindow {
                 let entity = cx.new(|cx| {
                     StickerWindow::new(detail, store, sticker_events_tx, options, window, cx)
                 });
-                cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
+                cx.new(|cx| Root::new(entity, window, cx))
             },
         )?;
 

@@ -1,16 +1,16 @@
+use crate::gpui_component::Root;
+use crate::gpui_component::alert::Alert;
+use crate::gpui_component::button::{Button, ButtonVariants};
+use crate::gpui_component::input::{Input, InputEvent, InputState};
+use crate::gpui_component::menu::{DropdownMenu, PopupMenuItem};
+use crate::gpui_component::scroll::ScrollableElement;
+use crate::gpui_component::spinner::Spinner;
+use crate::gpui_component::*;
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Bounds, Context, Entity, IntoElement, MouseButton,
     MouseUpEvent, Render, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowOptions, div, prelude::*, px, rgb, rgba, size, transparent_black,
+    WindowControlArea, WindowOptions, div, prelude::*, px, size,
 };
-use gpui_component::Root;
-use gpui_component::alert::Alert;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
-use gpui_component::*;
 
 use std::sync::mpsc::{self};
 use std::time::Duration;
@@ -64,7 +64,7 @@ impl MainWindow {
                 let view = cx.new(|cx| {
                     MainWindow::new(window, cx, sticker_events_rx, sticker_events_tx, store)
                 });
-                cx.new(|cx| Root::new(view, window, cx).bg(transparent_black().alpha(0.0)))
+                cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .map(|x| x.into())
@@ -315,12 +315,12 @@ impl MainWindow {
     ) {
         let entity = cx.entity();
         let store = self.store.clone();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, _, _cx| {
             let store = store.clone();
             let entity = entity.clone();
             dialog
-                .title(div().text_color(cx.theme().warning).child("Warning"))
-                .child(format!("Are you confirm to delete: \"{title}\"?"))
+                .title(format!("Delete \"{title}\"?"))
+                .child("This permanently removes the sticker and its saved content.")
                 .footer(
                     h_flex()
                         .justify_end()
@@ -332,33 +332,37 @@ impl MainWindow {
                                     window.close_dialog(cx);
                                 }),
                         )
-                        .child(Button::new("Delete").warning().label("Delete").on_click(
-                            move |_, window, cx| {
-                                window.close_dialog(cx);
-                                let store = store.clone();
-                                let entity = entity.clone();
-                                cx.spawn(async move |cx| match store.delete_sticker(id).await {
-                                    Ok(()) => {
-                                        entity.update(cx, |this, cx| {
-                                            StickerWindow::try_close(id, cx);
-                                            this.stickers.retain(|s| s.id != id);
-                                        });
-                                    }
-                                    Err(err) => {
-                                        entity.update(cx, |this, cx| {
-                                            this.error =
-                                                Some(format!("Failed to delete sticker: {err:#}"));
-                                            cx.notify();
-                                        });
-                                    }
-                                })
-                                .detach();
-                            },
-                        )),
+                        .child(
+                            Button::new("delete-sticker")
+                                .danger()
+                                .label("Delete")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let store = store.clone();
+                                    let entity = entity.clone();
+                                    cx.spawn(async move |cx| {
+                                        match store.delete_sticker(id).await {
+                                            Ok(()) => {
+                                                entity.update(cx, |this, cx| {
+                                                    StickerWindow::try_close(id, cx);
+                                                    this.stickers.retain(|s| s.id != id);
+                                                });
+                                            }
+                                            Err(err) => {
+                                                entity.update(cx, |this, cx| {
+                                                    this.error = Some(format!(
+                                                        "Failed to delete sticker: {err:#}"
+                                                    ));
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }
+                                    })
+                                    .detach();
+                                }),
+                        ),
                 )
-                .w(px(300.0))
-                .bg(black().opacity(0.9))
-                .text_sm()
+                .w(px(360.0))
         });
     }
 
@@ -385,9 +389,7 @@ impl MainWindow {
                 StickerOrderBy::CreatedAsc | StickerOrderBy::UpdatedAsc => IconName::SortAscending,
                 _ => IconName::SortDescending,
             })
-            .bg(rgba(0x00000000))
-            .border_0()
-            .opacity(0.8)
+            .ghost()
             .dropdown_menu(move |menu, window, cx| {
                 let order_by = root_entity.read(cx).order;
                 menu.item(
@@ -429,8 +431,7 @@ impl MainWindow {
     fn create_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let root_entity = cx.entity();
         Button::new("create")
-            .border_0()
-            .bg(rgba(0x00000000))
+            .ghost()
             .icon(IconName::Plus)
             .dropdown_menu(move |menu, window, _| {
                 let root_entity = root_entity.clone();
@@ -560,9 +561,9 @@ impl MainWindow {
             } else {
                 1.0
             })
-            .hover(|s| s.bg(rgb(0x333333)).cursor_pointer())
+            .hover(|s| s.bg(cx.theme().list_hover))
             .border_1()
-            .border_color(rgb(0x3a3a3a))
+            .border_color(cx.theme().border)
             .rounded_md()
             .on_mouse_up(
                 MouseButton::Left,
@@ -596,9 +597,7 @@ impl MainWindow {
                     .top_0()
                     .right_0()
                     .icon(IconName::Close)
-                    .border_0()
-                    .bg(rgba(0x00000000))
-                    .opacity(0.8)
+                    .ghost()
                     .occlude()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.delete_sticker(id, title.clone(), window, cx);
@@ -622,8 +621,6 @@ impl MainWindow {
                             .border_0()
                             .w(px(160.0))
                             .tab_index(0)
-                            .focus_ring(false)
-                            .bg(rgba(0x00000000))
                             .prefix(Icon::new(IconName::Search)),
                     )
                     .child(self.sort_button(cx)),
@@ -633,9 +630,7 @@ impl MainWindow {
                     .child(
                         Button::new("minimize")
                             .icon(IconName::Minus)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .opacity(0.8)
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|_, _, window, _| {
                                 window.minimize_window();
@@ -644,9 +639,7 @@ impl MainWindow {
                     .child(
                         Button::new("close")
                             .icon(IconName::Close)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .opacity(0.8)
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.quit();
@@ -659,11 +652,11 @@ impl MainWindow {
 }
 
 impl Render for MainWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
             .size_full()
-            .bg(black().opacity(0.85))
+            .bg(cx.theme().background)
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 if !window.is_window_active() {
                     window.activate_window();
@@ -686,7 +679,6 @@ impl Render for MainWindow {
                     .window_control_area(WindowControlArea::Drag)
                     .child(self.status_banner(cx)),
             )
-            .children(Root::render_dialog_layer(window, cx))
     }
 }
 

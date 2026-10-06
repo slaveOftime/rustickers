@@ -1,18 +1,17 @@
 use std::sync::{Arc, RwLock, mpsc};
 
-use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
-    Render, ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, black, div, prelude::*, px, rgba, size,
-    transparent_black,
-};
-use gpui_component::{
-    FocusableExt, Icon, Root,
-    button::Button,
+use crate::gpui_component::{
+    ActiveTheme, Icon, Root,
+    button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     scroll::ScrollableElement,
     v_flex,
+};
+use gpui::{
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
+    Render, ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, size,
 };
 
 #[cfg(target_os = "macos")]
@@ -139,7 +138,7 @@ impl SelectionPopup {
             },
             |window, cx| {
                 let entity = cx.new(|cx| Self::new(window, cx, sticker_events_tx, store, init));
-                cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
+                cx.new(|cx| Root::new(entity, window, cx))
             },
         )?;
 
@@ -466,9 +465,8 @@ impl SelectionPopup {
             .w_full()
             .px_3()
             .py_2()
-            .cursor_pointer()
-            .when(selected, |row| row.bg(rgba(0xe5c23696)))
-            .hover(|row| row.bg(rgba(0xe5c23664)))
+            .when(selected, |row| row.bg(cx.theme().list_active))
+            .hover(|row| row.bg(cx.theme().list_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
             }))
@@ -505,8 +503,6 @@ impl SelectionPopup {
                                 .border_0()
                                 .w(px(200.0))
                                 .tab_index(0)
-                                .focus_ring(false)
-                                .bg(rgba(0x00000000))
                                 .prefix(Icon::new(IconName::Search)),
                         ),
                     )
@@ -514,9 +510,7 @@ impl SelectionPopup {
                     .child(
                         Button::new("close-selection-popup")
                             .icon(IconName::Close)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .cursor_pointer()
+                            .ghost()
                             // The header is a window drag area, which swallows
                             // clicks unless the button occludes it.
                             .occlude()
@@ -539,7 +533,7 @@ impl SelectionPopup {
                             div()
                                 .py_8()
                                 .text_center()
-                                .text_color(rgba(0xffffff88))
+                                .text_color(cx.theme().muted_foreground)
                                 .child("No matching command stickers"),
                         )
                     })
@@ -562,9 +556,7 @@ impl SelectionPopup {
                     .child(
                         Button::new("close-selection-popup")
                             .icon(IconName::Close)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .cursor_pointer()
+                            .ghost()
                             // The header is a window drag area, which swallows
                             // clicks unless the button occludes it.
                             .occlude()
@@ -577,8 +569,7 @@ impl SelectionPopup {
                         .size_full()
                         .mx_neg_0p5()
                         .my_neg_1()
-                        .bordered(false)
-                        .bg(rgba(0x00000000)),
+                        .bordered(false),
                 ),
             )
             .child(
@@ -586,7 +577,7 @@ impl SelectionPopup {
                     .p_2()
                     .text_sm()
                     .opacity(0.6)
-                    .when(error.is_some(), |row| row.text_color(rgba(0xf87171ff)))
+                    .when(error.is_some(), |row| row.text_color(cx.theme().danger))
                     .child(match &error {
                         Some(error) => format!("{error} · {INPUT_VIEW_HINT}"),
                         None if self.resolving => "Looking for command stickers ...".to_string(),
@@ -601,7 +592,7 @@ impl Render for SelectionPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .bg(black().opacity(0.85))
+            .bg(cx.theme().background)
             .overflow_hidden()
             .child(match self.view {
                 SelectionView::Input => self.input_view(cx),
