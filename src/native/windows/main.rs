@@ -41,6 +41,18 @@ pub struct MainWindow {
 
     loading: bool,
     error: Option<String>,
+    /// Monotonic counter incremented every time a sticker-load request is
+    /// launched. Each request captures the counter at the moment it
+    /// starts; the spawned task ignores its result unless it matches the
+    /// counter held here when the response lands. This is the same
+    /// revision-tag pattern as the timer sticker: a newer request
+    /// supersedes older ones, so out-of-order responses (slow SQL
+    /// followed by a sort change, a deletion that races a refresh, etc.)
+    /// cannot overwrite a fresher intent. A successful delete also bumps
+    /// this counter for the same reason: any in-flight reload that still
+    /// has the deleted sticker in its payload must be invalidated before
+    /// it lands.
+    load_request_token: u64,
 }
 
 impl MainWindow {
@@ -110,6 +122,7 @@ impl MainWindow {
 
             loading: false,
             error: None,
+            load_request_token: 0,
         }
     }
 
@@ -271,12 +284,10 @@ impl MainWindow {
     }
 
     fn spawn_load_stickers(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
-            return;
-        }
-
-        self.loading = true;
         self.error = None;
+        self.load_request_token = self.load_request_token.wrapping_add(1);
+        let token = self.load_request_token;
+        self.loading = true;
         cx.notify();
 
         let query = self.query.read(cx).value().to_string();
@@ -284,24 +295,76 @@ impl MainWindow {
         let store = self.store.clone();
 
         cx.spawn(async move |entity, cx| {
-            let query = (!query.is_empty()).then_some(query);
-            let Ok(stickers) = store
-                .query_stickers(query, order_by, STICKER_LOAD_LIMIT, 0)
-                .await
-            else {
-                let _ = entity.update(cx, move |this, cx| {
-                    this.error = Some("Failed to query stickers".to_string());
-                    this.loading = false;
-                    cx.notify();
-                });
-                return;
-            };
+            let query_filter = (!query.is_empty()).then_some(query);
+            let result = store
+                .query_stickers(query_filter, order_by, STICKER_LOAD_LIMIT, 0)
+                .await;
 
             let _ = entity.update(cx, move |this, cx| {
-                this.stickers = stickers;
+                // A newer request has been issued since this one was
+                // dispatched -- either another sort/search change or a
+                // successful delete that bumped the token to defend
+                // against this very response. Drop the result so the
+                // older ordering, filter, or about-to-be-deleted row
+                // does not stomp on fresher state. `loading` stays true
+                // here on purpose: whichever request is current will
+                // clear it when its own response lands.
+                if this.load_request_token != token {
+                    return;
+                }
+
                 this.loading = false;
+                match result {
+                    Ok(stickers) => this.stickers = stickers,
+                    Err(err) => {
+                        this.error = Some(format!("Failed to query stickers: {err:#}"));
+                    }
+                }
                 cx.notify();
             });
+        })
+        .detach();
+    }
+
+    /// Open a sticker window starting from a list activation (mouse
+    /// double-click, or the upcoming keyboard Enter handler). The
+    /// in-memory sticker is flipped to `Open` synchronously so the
+    /// "greyed-out" closed state clears immediately; if the underlying
+    /// `StickerWindow::open_async_with_options` call fails, the prior
+    /// state is restored and the user sees a single actionable error.
+    /// That keeps the optimistic flip honest while still surfacing
+    /// failures instead of swallowing them.
+    ///
+    /// All callsites must funnel through this method so future keyboard
+    /// and menu entry points share one error-handling and notification
+    /// path.
+    fn open_sticker(&mut self, id: i64, cx: &mut Context<Self>) {
+        let prior_state = self.stickers.iter().find(|s| s.id == id).map(|s| s.state);
+        if let Some(sticker) = self.stickers.iter_mut().find(|s| s.id == id) {
+            sticker.state = StickerState::Open;
+            cx.notify();
+        }
+
+        let store = self.store.clone();
+        let sticker_events_tx = self.sticker_events_sender.clone();
+        cx.spawn(async move |entity, cx| {
+            // Opened from the list: command stickers with auto close start
+            // in their settings view instead of running again.
+            let result =
+                StickerWindow::open_async_with_options(cx, sticker_events_tx, store, id, true)
+                    .await;
+            if let Err(err) = result {
+                tracing::warn!(id, error = ?err, "Failed to open sticker window from list");
+                let _ = entity.update(cx, |this, cx| {
+                    if let Some(sticker) = this.stickers.iter_mut().find(|s| s.id == id)
+                        && let Some(prior) = prior_state
+                    {
+                        sticker.state = prior;
+                    }
+                    this.error = Some(format!("Could not open sticker {id}: {err:#}"));
+                    cx.notify();
+                });
+            }
         })
         .detach();
     }
@@ -344,8 +407,17 @@ impl MainWindow {
                                         match store.delete_sticker(id).await {
                                             Ok(()) => {
                                                 entity.update(cx, |this, cx| {
+                                                    // Bump the load token so
+                                                    // any already-running
+                                                    // reload that still
+                                                    // includes this row
+                                                    // cannot resurrect it.
+                                                    this.load_request_token =
+                                                        this.load_request_token.wrapping_add(1);
+                                                    this.loading = false;
                                                     StickerWindow::try_close(id, cx);
                                                     this.stickers.retain(|s| s.id != id);
+                                                    cx.notify();
                                                 });
                                             }
                                             Err(err) => {
@@ -569,24 +641,7 @@ impl MainWindow {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseUpEvent, _, cx| {
                     if event.click_count >= 2 {
-                        if let Some(sticker) = this.stickers.iter_mut().find(|s| s.id == id) {
-                            sticker.state = StickerState::Open;
-                        }
-                        let store = this.store.clone();
-                        let sticker_events_tx = this.sticker_events_sender.clone();
-                        cx.spawn(async move |_, cx| {
-                            // Opened from the list: command stickers with auto close start in
-                            // their settings view instead of running again.
-                            let _ = StickerWindow::open_async_with_options(
-                                cx,
-                                sticker_events_tx,
-                                store,
-                                id,
-                                true,
-                            )
-                            .await;
-                        })
-                        .detach();
+                        this.open_sticker(id, cx);
                     }
                 }),
             )
