@@ -49,11 +49,9 @@ impl FilePreview {
         cx: &mut Context<super::FileSticker>,
     ) -> Result<Option<FilePreview>, String> {
         if crate::utils::url::is_url(source) {
-            return Ok(Some(FilePreview::WebView(cx.new(|cx| {
-                let mut view = SimpleWebView::new(source, window, cx);
-                view.set_bg(color, cx);
-                view
-            }))));
+            let entity = SimpleWebView::try_new(source, window, cx)?;
+            entity.update(cx, |view, cx| view.set_bg(color, cx));
+            return Ok(Some(FilePreview::WebView(entity)));
         }
 
         let path = Path::new(source);
@@ -81,15 +79,10 @@ impl FilePreview {
         }
 
         if crate::utils::file::is_web_doc_ext(ext) || crate::utils::file::is_video_ext(ext) {
-            return crate::utils::url::create_local_file_url(path)
-                .map(|url| {
-                    FilePreview::WebView(cx.new(|cx| {
-                        let mut view = SimpleWebView::new(&url, window, cx);
-                        view.set_bg(color, cx);
-                        view
-                    }))
-                })
-                .map(Some);
+            let url = crate::utils::url::create_local_file_url(path)?;
+            let entity = SimpleWebView::try_new(&url, window, cx)?;
+            entity.update(cx, |view, cx| view.set_bg(color, cx));
+            return Ok(Some(FilePreview::WebView(entity)));
         }
 
         if crate::utils::file::is_audio_ext(ext) {

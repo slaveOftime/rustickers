@@ -154,7 +154,17 @@ impl CommandSticker {
 
         let result_html_entity = match &cmd.result {
             CommandResult::Html(Some(html)) if !open_in_settings => {
-                Some(cx.new(|cx| SimpleWebView::new(html.as_str(), window, cx)))
+                match SimpleWebView::try_new(html.as_str(), window, cx) {
+                    Ok(entity) => Some(entity),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "WebView backend refused the command-output HTML preview; \
+                             falling back to an empty surface"
+                        );
+                        None
+                    }
+                }
             }
             _ => None,
         };

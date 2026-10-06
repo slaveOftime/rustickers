@@ -1019,7 +1019,11 @@ mod tests {
     #[test]
     fn keyboard_navigation_arithmetic_clamps_and_pages() {
         fn clamp(current: usize, count: usize) -> usize {
-            if count == 0 { 0 } else { current.min(count - 1) }
+            if count == 0 {
+                0
+            } else {
+                current.min(count - 1)
+            }
         }
         fn step_up(current: usize, step: usize, count: usize) -> usize {
             (current + step).min(count.saturating_sub(1))
