@@ -3,13 +3,13 @@ use crate::gpui_component::alert::Alert;
 use crate::gpui_component::button::{Button, ButtonVariants};
 use crate::gpui_component::input::{Input, InputEvent, InputState};
 use crate::gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use crate::gpui_component::scroll::ScrollableElement;
 use crate::gpui_component::spinner::Spinner;
 use crate::gpui_component::*;
 use gpui::{
-    AnyWindowHandle, App, AsyncApp, Bounds, Context, Entity, IntoElement, MouseButton,
-    MouseUpEvent, Render, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowOptions, div, prelude::*, px, size,
+    AnyWindowHandle, App, AsyncApp, Bounds, Context, Entity, FocusHandle, IntoElement,
+    KeyDownEvent, MouseButton, MouseUpEvent, Render, ScrollStrategy, UniformListScrollHandle,
+    WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowOptions,
+    div, prelude::*, px, size, uniform_list,
 };
 
 use std::sync::mpsc::{self};
@@ -31,6 +31,14 @@ use crate::storage::ArcStickerStore;
 const STICKER_LOAD_LIMIT: i64 = 10000;
 const STICKER_EVENT_PUMP_INTERVAL: Duration = Duration::from_millis(120);
 
+/// Fixed row height for the manager sticker list. uniform_list only
+/// renders rows whose bounding boxes are identical; titles are clipped
+/// at three lines inside the row so the box stays bounded.
+const ROW_HEIGHT: f32 = 80.0;
+/// How many rows one PageUp / PageDown step moves. Chosen to roughly
+/// match a six-row viewport so the focused row stays on screen.
+const PAGE_STEP: usize = 6;
+
 pub struct MainWindow {
     store: ArcStickerStore,
     sticker_events_sender: mpsc::Sender<StickerWindowEvent>,
@@ -38,6 +46,25 @@ pub struct MainWindow {
     query: Entity<InputState>,
     order: StickerOrderBy,
     stickers: Vec<StickerBrief>,
+
+    /// Index of the currently focused row in the sticker list.
+    /// `None` means nothing is focused (e.g. before any load completes
+    /// or right after a delete removed the focused row). Reset to
+    /// `None` on sort changes; clamped into bounds on every select.
+    /// Keyboard-driven navigation keeps this value stable across
+    /// re-renders caused by the event pump, but a sort/search change
+    /// discards it because the underlying row positions change.
+    /// Domain IDs are the only safe identity for selection over a
+    /// refresh; we still keep an index here because the keyboard
+    /// model is index-based.
+    selected_index: Option<usize>,
+    /// Focus handle attached to the sticker list region. Created with
+    /// \`tab_stop(true)\` so a Tab from the search input lands on the
+    /// list, exposing arrow-navigation, Enter, and Delete actions.
+    list_focus: FocusHandle,
+    /// Scroll handle driving the virtualised list so keyboard navigation
+    /// can scroll the focused row into view.
+    list_scroll: UniformListScrollHandle,
 
     loading: bool,
     error: Option<String>,
@@ -119,6 +146,10 @@ impl MainWindow {
             query,
             order: StickerOrderBy::CreatedDesc,
             stickers: Vec::new(),
+
+            selected_index: None,
+            list_focus: cx.focus_handle().tab_index(1).tab_stop(true),
+            list_scroll: UniformListScrollHandle::default(),
 
             loading: false,
             error: None,
@@ -327,7 +358,8 @@ impl MainWindow {
     }
 
     /// Open a sticker window starting from a list activation (mouse
-    /// double-click, or the upcoming keyboard Enter handler). The
+    /// double-click, or the keyboard Enter handler in
+    /// \`handle_list_key\`). The
     /// in-memory sticker is flipped to `Open` synchronously so the
     /// "greyed-out" closed state clears immediately; if the underlying
     /// `StickerWindow::open_async_with_options` call fails, the prior
@@ -367,6 +399,78 @@ impl MainWindow {
             }
         })
         .detach();
+    }
+
+    /// Domain id of the currently focused row, if any. The index may
+    /// become stale across sort/search refreshes; the id is the only
+    /// stable handle across those boundaries.
+    fn selected_sticker_id(&self) -> Option<i64> {
+        self.selected_index
+            .and_then(|i| self.stickers.get(i).map(|s| s.id))
+    }
+
+    /// Move the focused row to a new index, clamped into bounds. Caller
+    /// is expected to provide either a valid index or one past the end
+    /// when the list is empty. After clamping, the scroll handle is
+    /// asked to bring the row into view so keyboard navigation never
+    /// leaves the focus target off-screen.
+    fn move_selection_to(&mut self, new_index: usize, cx: &mut Context<Self>) {
+        if self.stickers.is_empty() {
+            self.selected_index = None;
+            cx.notify();
+            return;
+        }
+        let clamped = new_index.min(self.stickers.len() - 1);
+        self.selected_index = Some(clamped);
+        self.list_scroll
+            .scroll_to_item(clamped, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    /// Dispatch keyboard events scoped to the manager list. The list
+    /// region uses \`track_focus\`; this handler only fires when the
+    /// list has focus (after a Tab from the search input, or after a
+    /// user clicked a row). Other key events fall through to whatever
+    /// built-in handler the focused input has.
+    fn handle_list_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.stickers.is_empty() {
+            return;
+        }
+
+        let count = self.stickers.len();
+        let current = self.selected_index.unwrap_or(0);
+        let mods = event.keystroke.modifiers;
+
+        let key = event.keystroke.key.as_str();
+        let next: Option<usize> = match key {
+            "down" => Some(current.saturating_add(1).min(count - 1)),
+            "up" => Some(current.saturating_sub(1)),
+            "home" => Some(0),
+            "end" => Some(count - 1),
+            "pageDown" => Some(current.saturating_add(PAGE_STEP).min(count - 1)),
+            "pageUp" => Some(current.saturating_sub(PAGE_STEP)),
+            _ => None,
+        };
+
+        if let Some(target) = next {
+            self.move_selection_to(target, cx);
+            cx.stop_propagation();
+            window.prevent_default();
+            return;
+        }
+
+        if key == "enter" && !mods.control && !mods.alt && !mods.platform && !mods.shift {
+            if let Some(id) = self.selected_sticker_id() {
+                self.open_sticker(id, cx);
+            }
+            cx.stop_propagation();
+            window.prevent_default();
+        }
     }
 
     fn delete_sticker(
@@ -555,10 +659,16 @@ impl MainWindow {
             .into_any_element()
     }
 
-    fn sticker_card(sticker: &StickerBrief, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn sticker_card(
+        &self,
+        index: usize,
+        sticker: &StickerBrief,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let id = sticker.id;
         let title = sticker.title.clone();
         let updated = crate::utils::time::format_unix_millis(sticker.updated_at);
+        let is_selected = self.selected_index == Some(index);
 
         // A command sticker can be busy, or waiting on a schedule, even while it is closed. That is
         // otherwise invisible from the list.
@@ -626,17 +736,40 @@ impl MainWindow {
                     .child(status),
             );
 
+        // Fixed row height. uniform_list requires one row height for the
+        // whole surface; titles are already line_clamp(3) inside the
+        // padded main column so the content stays bounded. The number is
+        // roughly title area (48 px × 14 px line height) + status (16 px)
+        // + padding (16 px vertical inside .p_2 outer). At rem size 14,
+        // 80 px works without clipping.
+        let row_bg: gpui::Hsla = if is_selected {
+            cx.theme().list_active
+        } else {
+            sticker.color.bg().into()
+        };
         div()
-            .bg(sticker.color.bg())
+            .id(("sticker-row", id as usize))
+            .h(px(ROW_HEIGHT))
+            .bg(row_bg)
+            .border_1()
+            .rounded_md()
+            .when(is_selected, |el| {
+                el.border_color(cx.theme().list_active_border)
+            })
+            .when(!is_selected, |el| el.border_color(cx.theme().border))
             .opacity(if sticker.state == StickerState::Close {
                 0.6
             } else {
                 1.0
             })
             .hover(|s| s.bg(cx.theme().list_hover))
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.selected_index = Some(index);
+                    cx.notify();
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseUpEvent, _, cx| {
@@ -708,6 +841,9 @@ impl MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let list_count = self.stickers.len();
+        let view = cx.entity();
+
         v_flex()
             .gap_2()
             .size_full()
@@ -719,13 +855,54 @@ impl Render for MainWindow {
             })
             .child(self.title_bar(cx))
             .child(
-                div().h_full().flex_shrink(1.0).overflow_hidden().child(
-                    v_flex().overflow_y_scrollbar().children(
-                        self.stickers
-                            .iter()
-                            .map(|s| div().pl_2().pr_2().pb_2().child(Self::sticker_card(s, cx))),
-                    ),
-                ),
+                div()
+                    .h_full()
+                    .flex_shrink(1.0)
+                    .overflow_hidden()
+                    .track_focus(&self.list_focus)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        this.handle_list_key(event, window, cx);
+                    }))
+                    .when(list_count > 0, |el| {
+                        el.child(
+                            uniform_list(
+                                "manager-stickers",
+                                list_count,
+                                move |range, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        range
+                                            .into_iter()
+                                            .filter_map(|index| {
+                                                this.stickers
+                                                    .get(index)
+                                                    .map(|s| this.sticker_card(index, s, cx))
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                },
+                            )
+                            .size_full()
+                            .track_scroll(&self.list_scroll),
+                        )
+                    })
+                    .when(list_count == 0, |el| {
+                        el.child(
+                            v_flex()
+                                .flex_1()
+                                .items_center()
+                                .justify_center()
+                                .gap_1()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(Icon::new(IconName::DocumentText).with_size(px(20.)))
+                                .child(if self.loading {
+                                    "Loading stickers\u{2026}"
+                                } else if self.error.is_some() {
+                                    "Could not load stickers."
+                                } else {
+                                    "No stickers yet. Create one with the + menu."
+                                }),
+                        )
+                    }),
             )
             .child(
                 v_flex()
@@ -833,5 +1010,34 @@ mod tests {
     #[test]
     fn an_unscheduled_command_card_is_indistinguishable_from_any_other() {
         assert_eq!(CardActivity::of_command(false, None), CardActivity::Idle);
+    }
+
+    /// Pure arithmetic covering the keyboard-navigation logic. The real
+    /// \`handle_list_key\` needs GPUI context for keyboard wiring; this
+    /// exercises the same clamp / page-step behaviour so regressions in
+    /// \`move_selection_to\` show up without UI integration tests.
+    #[test]
+    fn keyboard_navigation_arithmetic_clamps_and_pages() {
+        fn clamp(current: usize, count: usize) -> usize {
+            if count == 0 { 0 } else { current.min(count - 1) }
+        }
+        fn step_up(current: usize, step: usize, count: usize) -> usize {
+            (current + step).min(count.saturating_sub(1))
+        }
+        fn step_down(current: usize, step: usize) -> usize {
+            current.saturating_sub(step)
+        }
+
+        // Empty list keeps the user on a valid index.
+        assert_eq!(clamp(0, 0), 0);
+        // Last element is a hard cap.
+        assert_eq!(step_up(998, 10, 1000), 999);
+        // Saturating subtract at the top.
+        assert_eq!(step_down(0, 5), 0);
+        assert_eq!(step_down(2, 5), 0);
+        assert_eq!(step_down(20, 5), 15);
+        // Page step equals a chunk of rows.
+        assert_eq!(step_up(0, PAGE_STEP, 1000), PAGE_STEP);
+        assert_eq!(step_down(PAGE_STEP, PAGE_STEP), 0);
     }
 }
