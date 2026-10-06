@@ -1,7 +1,6 @@
 //! The command sticker's settings form.
 
-use gpui::{AnyElement, Context, prelude::*};
-use gpui_component::{
+use crate::gpui_component::{
     Sizable,
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
@@ -11,6 +10,7 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
+use gpui::{AnyElement, Context, prelude::*};
 
 use crate::model::content::{CommandResult, Scheduler};
 

@@ -2,13 +2,17 @@
 
 use std::{sync::Arc, time::Duration};
 
+use crate::gpui_component::{
+    alert::Alert,
+    button::{Button, ButtonVariants},
+    h_flex,
+    scroll::ScrollableElement,
+    text::TextView,
+    v_flex, yellow_500,
+};
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, Image, ImageFormat, ImageSource, Render,
-    Rgba, Window, div, img, prelude::*, px, transparent_white,
-};
-use gpui_component::{
-    alert::Alert, button::Button, h_flex, scroll::ScrollableElement, text::TextView, v_flex,
-    yellow_500,
+    Rgba, Window, div, img, prelude::*, px,
 };
 
 use crate::{
@@ -108,8 +112,7 @@ impl CommandSticker {
             return Some(
                 Button::new("start")
                     .icon(IconName::Play)
-                    .bg(transparent_white())
-                    .border_0()
+                    .ghost()
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.start(window, cx, false);
@@ -126,8 +129,7 @@ impl CommandSticker {
                     .when_some(self.next_scheduled_at.clone(), |view, next_run| {
                         view.tooltip(format!("Next run at {next_run}"))
                     })
-                    .bg(transparent_white())
-                    .border_0()
+                    .ghost()
                     .occlude()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.stop_schedule();
@@ -143,8 +145,7 @@ impl CommandSticker {
                 .child(
                     Button::new("reset")
                         .icon(IconName::Adjustments)
-                        .bg(transparent_white())
-                        .border_0()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, _, cx| {
                             // Dropping the result is what sends the sticker back to its settings.
@@ -157,8 +158,7 @@ impl CommandSticker {
                 .child(
                     Button::new("restart")
                         .icon(IconName::Play)
-                        .bg(transparent_white())
-                        .border_0()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.start(window, cx, false);

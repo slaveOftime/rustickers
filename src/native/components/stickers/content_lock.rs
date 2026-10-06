@@ -1,16 +1,16 @@
 use std::{num::NonZeroU32, time::Duration};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-use gpui::{
-    AnyElement, Context, Entity, Focusable, KeyDownEvent, Window, WindowControlArea, div,
-    prelude::*, px,
-};
-use gpui_component::{
-    Disableable, StyledExt,
+use crate::gpui_component::{
+    ActiveTheme, Disableable, StyledExt,
     button::Button,
     h_flex,
     input::{Input, InputState},
     v_flex,
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+use gpui::{
+    AnyElement, Context, Entity, Focusable, KeyDownEvent, Window, WindowControlArea, div,
+    prelude::*, px,
 };
 use ring::{
     aead::{self, Aad, LessSafeKey, Nonce, UnboundKey},
@@ -189,6 +189,7 @@ impl LockForm {
             confirm: on_confirm,
         } = actions;
         let confirm = self.confirm.clone();
+        let danger_color = cx.theme().danger;
         v_flex()
             .size_full()
             .items_center()
@@ -226,7 +227,7 @@ impl LockForm {
                             div()
                                 .text_sm()
                                 .text_center()
-                                .text_color(gpui::red())
+                                .text_color(danger_color)
                                 .child(error.to_string()),
                         )
                     })
@@ -273,6 +274,7 @@ impl LockForm {
             unlock_forever: on_unlock_forever,
         } = actions;
         let password = self.password.clone();
+        let danger_color = cx.theme().danger;
         v_flex()
             .size_full()
             .items_center()
@@ -334,7 +336,7 @@ impl LockForm {
                             div()
                                 .text_sm()
                                 .text_center()
-                                .text_color(gpui::red())
+                                .text_color(danger_color)
                                 .child(error.to_string()),
                         )
                     }),

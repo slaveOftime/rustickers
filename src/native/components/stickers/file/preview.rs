@@ -1,8 +1,8 @@
+use crate::gpui_component::{input::Editor, scroll::ScrollableElement, text::TextView, v_flex};
 use gpui::{
     Context, Entity, Image, ImageSource, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit,
     Rgba, Window, div, img, prelude::*,
 };
-use gpui_component::{input::Editor, scroll::ScrollableElement, text::TextView, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -401,12 +401,7 @@ impl super::FileSticker {
                         window.prevent_default();
                     }
                 }))
-                .child(
-                    Editor::new(editor)
-                        .size_full()
-                        .bordered(false)
-                        .bg(gpui::rgba(0x000000)),
-                )
+                .child(Editor::new(editor).size_full().bordered(false))
                 .into_any_element();
         }
 

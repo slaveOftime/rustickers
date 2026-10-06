@@ -1,17 +1,17 @@
 use std::time::Duration;
 
-use gpui::{
-    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window,
-    WindowControlArea, div, prelude::*, px, transparent_white,
-};
-use gpui_component::{
+use crate::gpui_component::{
     IndexPath, Sizable, StyledExt,
     alert::Alert,
-    button::Button,
+    button::{Button, ButtonVariants},
     green_500, h_flex,
     input::{Input, InputState},
     select::{SearchableVec, Select, SelectState},
     v_flex,
+};
+use gpui::{
+    Animation, AnimationExt, AnyElement, AppContext, Context, Empty, Entity, Size, Window,
+    WindowControlArea, div, prelude::*, px,
 };
 use serde::{Deserialize, Serialize};
 
@@ -490,8 +490,7 @@ impl Sticker for TimerSticker {
             return Some(
                 Button::new("timer-start")
                     .icon(IconName::Play)
-                    .bg(transparent_white())
-                    .border_0()
+                    .ghost()
                     .occlude()
                     .on_click(cx.listener(|this, _, _, cx| this.start(cx)))
                     .into_any_element(),
@@ -504,8 +503,7 @@ impl Sticker for TimerSticker {
                 TimerState::Running => controls.child(
                     Button::new("pause")
                         .icon(IconName::Pause)
-                        .bg(transparent_white())
-                        .border_0()
+                        .ghost()
                         .occlude()
                         .on_click(
                             cx.listener(|this, _, _, cx| this.change_state(cx, TimerState::Paused)),
@@ -515,8 +513,7 @@ impl Sticker for TimerSticker {
                     .child(
                         Button::new("reset")
                             .icon(IconName::Adjustments)
-                            .bg(transparent_white())
-                            .border_0()
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.is_just_finished = false;
@@ -526,8 +523,7 @@ impl Sticker for TimerSticker {
                     .child(
                         Button::new("resume")
                             .icon(IconName::Play)
-                            .bg(transparent_white())
-                            .border_0()
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.is_just_finished = false;
@@ -538,8 +534,7 @@ impl Sticker for TimerSticker {
                     .child(
                         Button::new("reset")
                             .icon(IconName::Adjustments)
-                            .bg(transparent_white())
-                            .border_0()
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.is_just_finished = false;
@@ -549,8 +544,7 @@ impl Sticker for TimerSticker {
                     .child(
                         Button::new("restart")
                             .icon(IconName::Forward)
-                            .bg(transparent_white())
-                            .border_0()
+                            .ghost()
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.restart(cx);

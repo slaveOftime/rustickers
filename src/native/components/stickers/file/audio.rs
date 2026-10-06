@@ -1,8 +1,9 @@
+use crate::gpui_component::button::{Button, ButtonVariants};
+use crate::gpui_component::{Selectable, h_flex, v_flex};
 use gpui::{
     Context, Image, ImageFormat, ImageSource, ObjectFit, Rgba, Window, WindowControlArea, div, img,
-    prelude::*, px, relative, rgba,
+    prelude::*, px, relative,
 };
-use gpui_component::{button::Button, h_flex, v_flex};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use rodio::{Decoder, Source};
@@ -547,9 +548,7 @@ impl super::FileSticker {
                 .child(
                     Button::new("audio-prev")
                         .icon(IconName::ArrowLeft)
-                        .bg(rgba(0x00000000))
-                        .border_0()
-                        .cursor_pointer()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.navigate(-1, cx);
@@ -562,9 +561,7 @@ impl super::FileSticker {
                         } else {
                             IconName::Play
                         })
-                        .bg(rgba(0x00000000))
-                        .border_0()
-                        .cursor_pointer()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_play(cx);
@@ -573,9 +570,7 @@ impl super::FileSticker {
                 .child(
                     Button::new("audio-next")
                         .icon(IconName::ArrowRight)
-                        .bg(rgba(0x00000000))
-                        .border_0()
-                        .cursor_pointer()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.navigate(1, cx);
@@ -584,13 +579,8 @@ impl super::FileSticker {
                 .child(
                     Button::new("audio-play-mode")
                         .icon(play_mode_icon)
-                        .bg(if play_mode.is_autoplay() {
-                            rgba(0xffffff30)
-                        } else {
-                            rgba(0x00000000)
-                        })
-                        .border_0()
-                        .cursor_pointer()
+                        .ghost()
+                        .selected(play_mode.is_autoplay())
                         .occlude()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.switch_play_mode(cx);

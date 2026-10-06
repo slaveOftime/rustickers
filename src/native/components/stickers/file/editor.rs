@@ -1,5 +1,5 @@
+use crate::gpui_component::input::EditorState;
 use gpui::{Context, Window, prelude::*};
-use gpui_component::input::EditorState;
 use std::path::Path;
 
 use super::preview::FilePreview;

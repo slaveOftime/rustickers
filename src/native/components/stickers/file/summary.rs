@@ -1,5 +1,5 @@
+use crate::gpui_component::{Icon, green_500, h_flex, v_flex};
 use gpui::{Context, Window, div, prelude::*, relative};
-use gpui_component::{Icon, green_500, h_flex, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

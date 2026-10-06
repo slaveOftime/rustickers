@@ -5,12 +5,16 @@ mod summary;
 mod utils;
 mod watcher;
 
-use futures::channel::mpsc as async_mpsc;
-use gpui::{Context, Entity, Rgba, Window, div, prelude::*, px, rgba};
-use gpui_component::h_flex;
-use gpui_component::{
-    Disableable, alert::Alert, button::Button, scroll::ScrollableElement, v_flex,
+use crate::gpui_component::h_flex;
+use crate::gpui_component::{
+    ActiveTheme, Disableable,
+    alert::Alert,
+    button::{Button, ButtonVariants},
+    scroll::ScrollableElement,
+    v_flex,
 };
+use futures::channel::mpsc as async_mpsc;
+use gpui::{Context, Entity, Rgba, Window, div, prelude::*, px};
 use notify::RecommendedWatcher;
 use preview::FilePreview;
 use std::path::Path;
@@ -36,7 +40,7 @@ pub struct FileSticker {
     source_paths: Vec<String>,
     summaries: Vec<FileSummary>,
     preview: Option<FilePreview>,
-    preview_editor: Option<Entity<gpui_component::input::EditorState>>,
+    preview_editor: Option<Entity<crate::gpui_component::input::EditorState>>,
     refreshing: bool,
     pining: bool,
     error: Option<String>,
@@ -265,9 +269,7 @@ impl FileSticker {
         Button::new("stick")
             .icon(IconName::Pin)
             .disabled(self.pining)
-            .bg(rgba(0x000000))
-            .border_0()
-            .cursor_pointer()
+            .ghost()
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.pin(window, cx);
@@ -279,9 +281,7 @@ impl FileSticker {
         Button::new("refresh")
             .icon(IconName::Refresh)
             .disabled(self.refreshing)
-            .bg(rgba(0x000000))
-            .border_0()
-            .cursor_pointer()
+            .ghost()
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| {
                 if let Some(FilePreview::WebView(web)) = &this.preview {
@@ -517,7 +517,7 @@ impl super::Sticker for FileSticker {
     }
 
     fn header_extension(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let controls = gpui_component::h_flex()
+        let controls = crate::gpui_component::h_flex()
             .flex_1()
             .gap_1()
             .child(div().flex_1());
@@ -542,9 +542,7 @@ impl super::Sticker for FileSticker {
                         "Protect file with a password (ctrl+l)"
                     })
                     .disabled(self.lock_busy || self.locking)
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
+                    .ghost()
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.locked_content.is_some() {
@@ -641,7 +639,7 @@ impl Render for FileSticker {
             .when(
                 matches!(self.preview, Some(FilePreview::WebView(_))),
                 |view| {
-                    view.bg(rgba(0x000000)).child(
+                    view.bg(cx.theme().transparent).child(
                         div()
                             .bg(bg_color)
                             .py_1()

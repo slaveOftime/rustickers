@@ -1,13 +1,13 @@
-use gpui::{
-    Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, Window, div, prelude::*,
-    px, rgba,
-};
-use gpui_component::text::TextView;
-use gpui_component::{ActiveTheme, Disableable, h_flex};
-use gpui_component::{
-    button::Button,
+use crate::gpui_component::text::TextView;
+use crate::gpui_component::{ActiveTheme, Disableable, h_flex};
+use crate::gpui_component::{
+    button::{Button, ButtonVariants},
     input::{Textarea, TextareaState},
     v_flex,
+};
+use gpui::{
+    Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, Window, div, prelude::*,
+    px,
 };
 
 use crate::model::content::FileStickerContent;
@@ -592,9 +592,7 @@ impl super::Sticker for MarkdownSticker {
                             "Protect sticker with a password (ctrl+l)"
                         })
                         .disabled(self.lock_busy || self.locking)
-                        .bg(rgba(0x000000))
-                        .border_0()
-                        .cursor_pointer()
+                        .ghost()
                         .occlude()
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.locked_content.is_some() || !this.content_visible {
@@ -695,12 +693,7 @@ impl Render for MarkdownSticker {
                             window.prevent_default();
                         }
                     }))
-                    .child(
-                        Textarea::new(&self.editor)
-                            .size_full()
-                            .bordered(false)
-                            .bg(rgba(0x000000)),
-                    ),
+                    .child(Textarea::new(&self.editor).size_full().bordered(false)),
             );
         } else {
             window.set_rem_size(px(14.0));

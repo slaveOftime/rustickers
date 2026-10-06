@@ -1,9 +1,13 @@
+use crate::gpui_component::{
+    ActiveTheme, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 use gpui::{
     AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PathBuilder, PathStyle, Pixels, Point, Render, StrokeOptions, Window, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, transparent_black,
+    prelude::*, px, rgba, size,
 };
-use gpui_component::{Sizable, button::Button, h_flex, v_flex, white};
 use serde::{
     Deserialize, Serialize,
     ser::{SerializeSeq, SerializeStruct},
@@ -466,8 +470,7 @@ impl PaintSticker {
                 PaintTool::Pen => IconName::Paint,
             })
             .small()
-            .border_0()
-            .bg(transparent_black())
+            .ghost()
             .text_color(rgba(current_color))
             .occlude()
             .on_click(cx.listener(|this, _, _, cx| {
@@ -488,10 +491,11 @@ impl PaintSticker {
                     .h(px(14.0))
                     .bg(rgba(c))
                     .rounded_full()
-                    .cursor_pointer()
-                    .when(is_selected, |v| v.border_1().border_color(rgb(0xffffff)))
+                    .when(is_selected, |v| {
+                        v.border_1().border_color(cx.theme().list_active_border)
+                    })
                     .when(!is_selected, |v| {
-                        v.border_1().border_color(rgba(0x00000000))
+                        v.border_1().border_color(cx.theme().transparent)
                     })
                     .occlude()
                     .on_mouse_down(
@@ -511,8 +515,12 @@ impl PaintSticker {
             let is_selected = (w - current_width).abs() < f32::EPSILON;
             stroke_picker = stroke_picker.child(
                 div()
-                    .cursor_pointer()
-                    .child(make_dot(w, current_color, is_selected))
+                    .child(make_dot(
+                        w,
+                        current_color,
+                        is_selected,
+                        cx.theme().list_active_border,
+                    ))
                     .occlude()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -675,7 +683,7 @@ impl Render for PaintSticker {
     }
 }
 
-fn make_dot(w: f32, color: u32, is_selected: bool) -> AnyElement {
+fn make_dot(w: f32, color: u32, is_selected: bool, list_active_border: gpui::Hsla) -> AnyElement {
     div()
         .w(px(14.0))
         .h(px(14.0))
@@ -683,7 +691,9 @@ fn make_dot(w: f32, color: u32, is_selected: bool) -> AnyElement {
         .items_center()
         .justify_center()
         .rounded_full()
-        .when(is_selected, |v| v.border_1().border_color(white()))
+        .when(is_selected, |v| {
+            v.border_1().border_color(list_active_border)
+        })
         .child(
             div()
                 .w(px((w + 3.0).max(4.0)))

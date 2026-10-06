@@ -2,17 +2,17 @@
 
 use std::{sync::mpsc, time::Duration};
 
-use gpui::{
-    Animation, AnimationExt, AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window,
-    WindowControlArea, div, prelude::*, px, rgba,
-};
-use gpui_component::{
+use crate::gpui_component::{
     ActiveTheme,
     alert::Alert,
-    button::Button,
+    button::{Button, ButtonVariants},
     h_flex,
     menu::{DropdownMenu, PopupMenuItem},
     v_flex,
+};
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window,
+    WindowControlArea, div, prelude::*, px,
 };
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
@@ -175,9 +175,7 @@ impl StickerWindow {
             .child(self.create_button(cx))
             .child(
                 Button::new("close")
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
+                    .ghost()
                     .icon(IconName::Close)
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
@@ -201,7 +199,6 @@ impl StickerWindow {
                     .h(px(16.0))
                     .bg(theme.swatch())
                     .rounded_full()
-                    .cursor_pointer()
                     .window_control_area(WindowControlArea::Drag)
                     .occlude()
                     .on_mouse_down(
@@ -219,7 +216,6 @@ impl StickerWindow {
             .gap_2()
             .items_center()
             .occlude()
-            .cursor_grab()
             .window_control_area(WindowControlArea::Drag)
             .child(
                 div()
@@ -236,10 +232,8 @@ impl StickerWindow {
     fn create_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let root_entity = cx.entity();
         Button::new("create")
-            .border_0()
-            .bg(rgba(0x00000000))
+            .ghost()
             .icon(IconName::Plus)
-            .opacity(0.8)
             .dropdown_menu(move |mut menu, window, _| {
                 for (id, sticker_type) in [
                     ("text", StickerType::Markdown),

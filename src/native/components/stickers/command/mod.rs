@@ -18,11 +18,11 @@ pub mod schedule;
 
 use std::sync::{Arc, Mutex};
 
-use gpui::{Context, Entity, Window, prelude::*};
-use gpui_component::{
+use crate::gpui_component::{
     input::{InputEvent, InputState, TextareaState},
     slider::SliderState,
 };
+use gpui::{Context, Entity, Window, prelude::*};
 
 use crate::{
     model::{
