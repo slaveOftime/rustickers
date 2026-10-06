@@ -83,6 +83,12 @@ enum Commands {
     /// Show everything stored about one sticker
     Show(commands::show::ShowArgs),
 
+    /// Browse and reuse past clipboard copies
+    Cp {
+        #[command(subcommand)]
+        command: commands::cp::CpCommand,
+    },
+
     /// Print what a command sticker last produced
     Result(commands::result::ResultArgs),
 
@@ -129,6 +135,13 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
     match cli.command {
         Commands::List(args) => commands::list::run(app_paths, args, format),
         Commands::Show(args) => commands::show::run(app_paths, args, format),
+        Commands::Cp { command } => match command {
+            commands::cp::CpCommand::Ls(args) => commands::cp::run(app_paths, args, format),
+            commands::cp::CpCommand::Import(args) => commands::cp::import(app_paths, args, format),
+            commands::cp::CpCommand::Forget(args) => commands::cp::forget(app_paths, args, format),
+            commands::cp::CpCommand::Show(args) => commands::cp::show(app_paths, args, format),
+            commands::cp::CpCommand::Vault(args) => commands::cp::vault(app_paths, args, format),
+        },
         Commands::Result(args) => commands::result::run(app_paths, args, format),
         Commands::Open(args) => commands::window::open(app_paths, args, format),
         Commands::Close(args) => commands::window::close(app_paths, args, format),
@@ -153,7 +166,8 @@ mod tests {
     fn the_subcommand_list_includes_every_command() {
         let names = subcommand_names();
         for expected in [
-            "list", "show", "result", "open", "close", "delete", "view", "markdown", "cmd", "skill",
+            "list", "show", "result", "open", "close", "delete", "view", "markdown", "cmd",
+            "skill", "cp",
         ] {
             assert!(names.contains(&expected.to_owned()), "missing {expected}");
         }
@@ -174,6 +188,29 @@ mod tests {
         assert!(!Cli::parse_from(["rusticker", "list"]).format().is_json());
     }
 
+    #[test]
+    fn clipboard_child_json_flag_belongs_to_child_not_parent() {
+        let cli = Cli::try_parse_from([
+            "rusticker",
+            "cp",
+            "ls",
+            "--id",
+            "42",
+            "--",
+            "tool",
+            "--json",
+            "{{cp}}",
+        ])
+        .expect("parse child argv");
+        assert!(!cli.format().is_json());
+        let Commands::Cp {
+            command: commands::cp::CpCommand::Ls(args),
+        } = cli.command
+        else {
+            panic!()
+        };
+        assert_eq!(args.command, ["tool", "--json", "{{cp}}"]);
+    }
     #[test]
     fn colors_are_validated_against_the_real_palette() {
         assert!(parse_color("blue").is_ok());

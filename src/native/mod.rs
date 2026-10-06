@@ -6,12 +6,15 @@ use std::{
 use gpui::{AnyWindowHandle, App, Application, rgb};
 use gpui_component::{Theme, ThemeMode};
 
+use crate::clipboard::vault_controller::VaultController;
 use crate::{
+    clipboard::storage::{ClipboardHistoryStore, SqliteClipboardStore},
     ipc::IpcEvent,
     native::windows::{StickerWindowEvent, main::MainWindow, sticker::StickerWindow},
     storage::{ArcStickerStore, open_sqlite, paths::AppPaths},
 };
 
+pub mod clipboard;
 pub mod components;
 pub mod file_manager;
 pub mod hotkey;
@@ -36,6 +39,14 @@ pub fn run_native(
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
     let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());
+    let clipboard_handle_for_open: Arc<OnceLock<Arc<dyn ClipboardHistoryStore>>> =
+        Arc::new(OnceLock::new());
+    let clipboard_handle_for_ipc = clipboard_handle_for_open.clone();
+    let clipboard_filter_for_open: Arc<
+        OnceLock<std::sync::Arc<crate::native::clipboard::CaptureFilter>>,
+    > = Arc::new(OnceLock::new());
+    let clipboard_filter_for_ipc = clipboard_filter_for_open.clone();
+    let clipboard_vault_for_open: Arc<OnceLock<Arc<VaultController>>> = Arc::new(OnceLock::new());
 
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -128,7 +139,11 @@ pub fn run_native(
                             if let Some(store) = store_handle_clone.get() {
                                 let store = store.clone();
                                 let tx = sticker_events_tx_for_ipc.clone();
-                                let selection = match crate::native::selection::capture_selection() {
+                                let selection = match clipboard_filter_for_ipc.get() {
+                                    Some(filter) => crate::native::selection::capture_selection_with_filter(filter),
+                                    None => crate::native::selection::capture_selection(),
+                                };
+                                let selection = match selection {
                                     Ok(selection) => selection,
                                     Err(err) => {
                                         tracing::warn!(error = ?err, "Failed to capture text selection");
@@ -165,6 +180,26 @@ pub fn run_native(
                                 }
                             }
                         }
+                        crate::ipc::IpcEvent::ToggleClipboardChooser { focused_window } => {
+                            let store = clipboard_handle_for_ipc.get().cloned();
+                            let filter = clipboard_filter_for_ipc.get().cloned();
+                            if let (Some(store), Some(_filter)) = (store, filter) {
+                                cx.update(|cx| {
+                                    if let Err(err) = crate::native::windows::clipboard::ClipboardChooserWindow::toggle(
+                                        cx,
+                                        sticker_events_tx_for_ipc.clone(),
+                                        store,
+                                        focused_window,
+                                    ) {
+                                        tracing::warn!(error = ?err, "Failed to toggle clipboard chooser");
+                                    }
+                                });
+                            } else {
+                                tracing::warn!(
+                                    "Clipboard chooser requested but the clipboard backend has not been initialised"
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -173,8 +208,9 @@ pub fn run_native(
 
         let main_window_handle_clone = main_window_handle.clone();
         cx.spawn(async move |cx| {
-            tracing::info!(db_path = %app_paths.db_path.display(), "Opening sticker store");
-            let store: ArcStickerStore = match open_sqlite(app_paths.db_path).await {
+            let sticker_db = app_paths.db_path.clone();
+            tracing::info!(db_path = %sticker_db.display(), "Opening sticker store");
+            let store: ArcStickerStore = match open_sqlite(&sticker_db).await {
                 Ok(store) => store,
                 Err(err) => {
                     tracing::error!(error = ?err, "Failed to open store");
@@ -185,6 +221,28 @@ pub fn run_native(
             let _ = store_handle.set(store.clone());
 
             tracing::info!("Sticker store opened");
+
+            // Clipboard failure must not prevent the main window or stickers from opening.
+            let clipboard_db_path = sticker_db.with_file_name("clipboard.db");
+            match SqliteClipboardStore::open(&clipboard_db_path).await {
+                Ok(backend) => {
+                    let clipboard_store: Arc<dyn ClipboardHistoryStore> = Arc::new(backend);
+                    let filter = crate::native::clipboard::CaptureFilter::new();
+                    let vault = Arc::new(VaultController::new(clipboard_store.clone()));
+                    let _ = clipboard_handle_for_open.set(clipboard_store.clone());
+                    let _ = clipboard_filter_for_open.set(filter.clone());
+                    let _ = clipboard_vault_for_open.set(vault.clone());
+                    let (watcher, _stop) = crate::native::clipboard::watcher::WatcherHandle::new(Duration::from_millis(250));
+                    let (events, _receiver) = mpsc::channel();
+                    watcher.spawn(filter.clone(), clipboard_store.clone(), events);
+                    crate::native::windows::clipboard::set_global_store(clipboard_store);
+                    cx.update(move |_cx| {
+                        crate::native::windows::clipboard::set_global_capture_filter(filter);
+                        crate::native::windows::clipboard::set_global_vault_controller(vault);
+                    });
+                }
+                Err(_) => tracing::error!("Clipboard backend unavailable; continuing sticker startup"),
+            }
 
             // Armed cron stickers have to keep ticking whether or not their window is open, so the
             // scheduler starts before any window is restored.

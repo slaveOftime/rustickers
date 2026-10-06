@@ -1,6 +1,7 @@
 use crate::model::sticker::StickerColor;
 use std::sync::RwLock;
 
+pub mod clipboard;
 pub mod main;
 pub mod placement;
 pub mod selection;
@@ -11,6 +12,7 @@ mod transient_topmost;
 pub(crate) enum EscapeDismissTarget {
     Selection,
     Sticker(i64),
+    Clipboard,
 }
 
 static ACTIVE_ESCAPE_DISMISS_TARGET: RwLock<Option<EscapeDismissTarget>> = RwLock::new(None);
@@ -23,6 +25,11 @@ pub(crate) fn set_escape_dismiss_target_active(target: EscapeDismissTarget, acti
             *current = None;
         }
     }
+}
+
+/// Toggle whether the global escape dispatch should target the clipboard chooser.
+pub(crate) fn set_clipboard_escape_target(active: bool) {
+    set_escape_dismiss_target_active(EscapeDismissTarget::Clipboard, active);
 }
 
 pub fn has_escape_dismiss_target() -> bool {
@@ -41,6 +48,7 @@ pub fn close_active_escape_target(cx: &mut gpui::App) -> bool {
         Some(EscapeDismissTarget::Sticker(open_id)) => {
             sticker::StickerWindow::dispatch_escape(open_id, cx)
         }
+        Some(EscapeDismissTarget::Clipboard) => clipboard::dispatch_escape(cx),
         None => false,
     }
 }

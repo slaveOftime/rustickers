@@ -14,12 +14,65 @@ Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), 
 - **File / URL preview**: preview files, folders, or URLs and pin them as stickers. Any number of previews can be open side by side; asking for the same files again raises the window that already shows them.
 - **Paint stickers**: freehand drawing space for quick sketches.
 
+## Clipboard history
+
+A keyboard-first history chooser shares exact-text deduplication, search, ordering, and
+SQLite storage with the CLI. Ordinary history is bounded by count and bytes; reserved,
+edited, and protected items are retained independently. Collection starts **paused** so
+copying a password does not silently opt you into recording it.
+
+```bash
+rusticker cp ls                              # browse: type, ↑/↓, Enter, Esc
+rusticker cp ls -s rust                       # start with a filter
+rusticker cp ls --list -n 20                  # readable recent-history table
+rusticker cp ls --list --json                 # one machine-readable JSON object
+rusticker cp ls -- rg -F -- '{{cp}}' .         # pick and substitute into argv
+rusticker cp ls --id 42 -- my-tool            # append the exact text as one argument
+rusticker cp import 'text from a script'
+rusticker cp import --stdin                   # read a pipeline without trimming it
+rusticker cp show --id 42                     # exact text, no extra newline
+rusticker cp forget 42                        # release ordinary saved/edit retention
+rusticker cp vault create                     # hidden master-password setup
+rusticker cp import --protect --stdin        # authorize, encrypt, then store piped text
+rusticker cp vault status
+```
+
+Quote `'{{cp}}'` in PowerShell/POSIX shells, or `"{{cp}}"` in Windows cmd. The CLI
+uses the parsed argument vector directly: spaces, quotes, newlines, and shell punctuation
+remain data. Child stdin/stdout/stderr are inherited unchanged; chooser/password prompts
+use the controlling terminal. Cancellation returns 130; missing/non-executable programs
+return 127/126; otherwise the child exit code propagates. Use child-supported `--` to
+prevent clipboard text beginning with `-` from becoming an option. **Explicitly passing
+clipboard text into a shell/interpreter's code argument can still execute it.**
+
+Open/dismiss the desktop chooser with `Ctrl + Alt + V` (`Cmd + Alt + V` on macOS).
+Type to search, use arrows/Page keys to select, and press Enter to paste; Ctrl/Cmd+Enter
+copies only. Single-click selects, F2/double-click edits, and Ctrl/Cmd+R toggles reservation.
+Ctrl/Cmd+L protects the selected item after password authorization; encrypted edits are saved
+in place. The chooser uses the existing theme and a virtualized list, with visible actions.
+Verified automatic paste is currently Windows-only; unavailable or lost destinations fail
+closed and leave **Copy only** available.
+
+Protected imports are encrypted before insertion and never fall back to ordinary history.
+Protected text is not searchable; only an explicitly public alias is visible. CLI password
+authorization is scoped to that invocation, **not shared with the desktop process**;
+`cp vault unlock` verifies a password rather than unlocking subsequent commands. Automatic
+collection pauses whenever protected history exists until safe protected recapture matching
+is implemented. Encryption does not erase copies held by other apps, OS history, backups,
+or historical database artifacts; protection hardening is still in progress. GUI deletion and
+unprotecting are not available yet; existing protected rows remain retained.
+
+See the [clipboard-history plan](docs/plans/clipboard-history.md) for the contract and
+remaining platform/security acceptance work.
+
 ## Global hotkeys
 
 - **Show main window**: `Ctrl + Alt + R` (macOS also supports `Cmd + Alt + R`)
+- **Toggle clipboard chooser**: `Ctrl + Alt + V` (macOS `Cmd + Alt + V`) — paste back into the
+  previously focused app
 - **Toggle quick file preview**: `Ctrl/Cmd + Alt`
 - **Open command for selected text**: `Ctrl/Cmd + Space` (consumed instead of forwarded to the active app)
-- **Dismiss transient Rustickers windows**: `Esc` is consumed for selection popups, quick previews, and selected-text command runs
+- **Dismiss transient Rustickers windows**: `Esc` is consumed for selection popups, quick previews, the clipboard chooser, and selected-text command runs
 - **Save in editor/markdown views**: `Ctrl + S`
 
 ## Quick start

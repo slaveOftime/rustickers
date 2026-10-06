@@ -462,6 +462,22 @@ impl MainWindow {
                             this.create_sticker(cx, &StickerType::Paint);
                         })),
                 )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Clipboard history")
+                        .icon(IconName::DocumentText)
+                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
+                            if super::clipboard::open_from_main(
+                                cx,
+                                this.sticker_events_sender.clone(),
+                            )
+                            .is_err()
+                            {
+                                this.error = Some("Clipboard backend is unavailable".into());
+                                cx.notify();
+                            }
+                        })),
+                )
             })
             .into_any_element()
     }

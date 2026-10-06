@@ -8,15 +8,19 @@ enum HotkeyAction {
     ToggleFilePreview,
     TriggerSelectionToCommand,
     DismissEscapeTarget,
+    /// Toggle the clipboard history chooser window. The focused window id is captured by the
+    /// keyboard hook so the chooser can restore focus before simulating the paste.
+    ToggleClipboardChooser,
 }
 
 impl HotkeyAction {
-    fn into_ipc_event(self) -> IpcEvent {
+    fn into_ipc_event(self, focused_window: Option<u64>) -> IpcEvent {
         match self {
             Self::Show => IpcEvent::Show,
             Self::ToggleFilePreview => IpcEvent::ToggleFilePreview,
             Self::TriggerSelectionToCommand => IpcEvent::TriggerSelectionToCommand,
             Self::DismissEscapeTarget => IpcEvent::DismissEscapeTarget,
+            Self::ToggleClipboardChooser => IpcEvent::ToggleClipboardChooser { focused_window },
         }
     }
 }
@@ -28,15 +32,24 @@ enum HotkeyKey {
     AltLeft,
     AltRight,
     R,
+    V,
     Space,
     Other,
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy)]
 struct HotkeyOutcome {
     action: Option<HotkeyAction>,
     suppress: bool,
 }
+
+impl PartialEq for HotkeyOutcome {
+    fn eq(&self, other: &Self) -> bool {
+        self.action == other.action && self.suppress == other.suppress
+    }
+}
+
+impl Eq for HotkeyOutcome {}
 
 #[derive(Default, Debug, Clone, Copy)]
 struct KeyState {
@@ -45,8 +58,10 @@ struct KeyState {
     alt_left: bool,
     alt_right: bool,
     r_down: bool,
+    v_down: bool,
     space_down: bool,
     suppress_r_until_release: bool,
+    suppress_v_until_release: bool,
     suppress_space_until_release: bool,
     suppress_escape_until_release: bool,
     modifier_combo_active: bool,
@@ -85,6 +100,26 @@ impl KeyState {
                 }
                 return HotkeyOutcome {
                     suppress: self.suppress_r_until_release,
+                    ..HotkeyOutcome::default()
+                };
+            }
+            HotkeyKey::V => {
+                if !self.v_down {
+                    self.v_down = true;
+                    if self.ctrl() && self.alt() {
+                        self.modifier_combo_consumed = true;
+                        self.suppress_v_until_release = true;
+                        return HotkeyOutcome {
+                            action: Some(HotkeyAction::ToggleClipboardChooser),
+                            suppress: true,
+                        };
+                    }
+                }
+                if self.modifier_combo_active {
+                    self.modifier_combo_consumed = true;
+                }
+                return HotkeyOutcome {
+                    suppress: self.suppress_v_until_release,
                     ..HotkeyOutcome::default()
                 };
             }
@@ -132,6 +167,11 @@ impl KeyState {
                 self.r_down = false;
                 outcome.suppress = self.suppress_r_until_release;
                 self.suppress_r_until_release = false;
+            }
+            HotkeyKey::V => {
+                self.v_down = false;
+                outcome.suppress = self.suppress_v_until_release;
+                self.suppress_v_until_release = false;
             }
             HotkeyKey::Space => {
                 self.space_down = false;
@@ -189,10 +229,35 @@ pub fn start_global_hotkey_listener(ipc_events_tx: Sender<IpcEvent>) -> anyhow::
     Ok(())
 }
 
-fn dispatch_action(ipc_events_tx: &Sender<IpcEvent>, action: Option<HotkeyAction>) {
+fn dispatch_action(
+    ipc_events_tx: &Sender<IpcEvent>,
+    action: Option<HotkeyAction>,
+    focused_window: Option<u64>,
+) {
     let Some(action) = action else { return };
-    tracing::debug!(?action, "Global hotkey triggered");
-    let _ = ipc_events_tx.send(action.into_ipc_event());
+    tracing::debug!(?action, ?focused_window, "Global hotkey triggered");
+    let _ = ipc_events_tx.send(action.into_ipc_event(focused_window));
+}
+
+#[cfg(target_os = "windows")]
+fn capture_focused_window() -> Option<u64> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let handle = unsafe { GetForegroundWindow() };
+    if handle.is_null() {
+        None
+    } else {
+        Some(handle as u64)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn capture_focused_window() -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn capture_focused_window() -> Option<u64> {
+    None
 }
 
 #[cfg(target_os = "windows")]
@@ -212,6 +277,7 @@ fn windows_hotkey_key(vk_code: u32) -> HotkeyKey {
     };
 
     const VK_R: u32 = b'R' as u32;
+    const VK_V: u32 = b'V' as u32;
 
     match vk_code {
         code if code == VK_LCONTROL as u32 || code == VK_CONTROL as u32 => HotkeyKey::CtrlLeft,
@@ -219,6 +285,7 @@ fn windows_hotkey_key(vk_code: u32) -> HotkeyKey {
         code if code == VK_LMENU as u32 || code == VK_MENU as u32 => HotkeyKey::AltLeft,
         code if code == VK_RMENU as u32 => HotkeyKey::AltRight,
         VK_R => HotkeyKey::R,
+        VK_V => HotkeyKey::V,
         code if code == VK_SPACE as u32 => HotkeyKey::Space,
         _ => HotkeyKey::Other,
     }
@@ -292,7 +359,7 @@ unsafe extern "system" fn windows_keyboard_hook(
                     (context.ipc_events_tx.clone(), outcome)
                 };
 
-                dispatch_action(&ipc_events_tx, outcome.action);
+                dispatch_action(&ipc_events_tx, outcome.action, capture_focused_window());
                 if outcome.suppress {
                     return 1;
                 }
@@ -365,6 +432,7 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
     };
 
     const KEY_R: i64 = 0x0f;
+    const KEY_V: i64 = 0x09;
     const KEY_SPACE: i64 = 0x31;
     const KEY_ESCAPE: i64 = 0x35;
 
@@ -378,6 +446,8 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
     let suppress_space_until_release_for_tap = suppress_space_until_release.clone();
     let suppress_escape_until_release = Arc::new(AtomicBool::new(false));
     let suppress_escape_until_release_for_tap = suppress_escape_until_release.clone();
+    let suppress_v_until_release = Arc::new(AtomicBool::new(false));
+    let suppress_v_until_release_for_tap = suppress_v_until_release.clone();
     let tap = CGEventTap::new(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -421,6 +491,24 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                 CGEventType::KeyUp
                     if key_code == KEY_R
                         && suppress_r_until_release_for_tap.swap(false, Ordering::Relaxed) =>
+                {
+                    event.set_type(CGEventType::Null);
+                }
+                CGEventType::KeyDown if primary && alt && key_code == KEY_V => {
+                    modifier_combo_consumed_for_tap.store(true, Ordering::Relaxed);
+                    suppress_v_until_release_for_tap.store(true, Ordering::Relaxed);
+                    if !is_repeat {
+                        dispatch_action(
+                            &ipc_events_tx,
+                            Some(HotkeyAction::ToggleClipboardChooser),
+                            None,
+                        );
+                    }
+                    event.set_type(CGEventType::Null);
+                }
+                CGEventType::KeyUp
+                    if key_code == KEY_V
+                        && suppress_v_until_release_for_tap.swap(false, Ordering::Relaxed) =>
                 {
                     event.set_type(CGEventType::Null);
                 }
@@ -499,6 +587,7 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
             Key::Alt => HotkeyKey::AltLeft,
             Key::AltGr => HotkeyKey::AltRight,
             Key::KeyR => HotkeyKey::R,
+            Key::KeyV => HotkeyKey::V,
             Key::Space => HotkeyKey::Space,
             _ => HotkeyKey::Other,
         }
@@ -517,7 +606,7 @@ fn start_listen(ipc_events_tx: Sender<IpcEvent>) -> anyhow::Result<()> {
                 _ => HotkeyOutcome::default(),
             }
         };
-        dispatch_action(&ipc_events_tx, outcome.action);
+        dispatch_action(&ipc_events_tx, outcome.action, None);
     };
 
     listen(callback).map_err(|err| anyhow::anyhow!("rdev listen failed: {err:?}"))
@@ -626,6 +715,56 @@ mod tests {
         state.key_up(HotkeyKey::AltLeft);
 
         assert_eq!(state.key_up(HotkeyKey::CtrlLeft).action, None);
+    }
+
+    #[test]
+    fn ctrl_alt_v_triggers_the_clipboard_chooser_once() {
+        let mut state = KeyState::default();
+
+        state.key_down(HotkeyKey::CtrlLeft);
+        state.key_down(HotkeyKey::AltLeft);
+        assert_eq!(
+            state.key_down(HotkeyKey::V),
+            HotkeyOutcome {
+                action: Some(HotkeyAction::ToggleClipboardChooser),
+                suppress: true,
+            }
+        );
+        // Held V during a window scroll reports no new action and stays suppressed.
+        assert_eq!(
+            state.key_down(HotkeyKey::V),
+            HotkeyOutcome {
+                action: None,
+                suppress: true,
+            }
+        );
+        assert!(state.key_up(HotkeyKey::V).suppress);
+        state.key_up(HotkeyKey::AltLeft);
+
+        assert_eq!(state.key_up(HotkeyKey::CtrlLeft).action, None);
+    }
+
+    #[test]
+    fn ctrl_alt_v_does_not_toggle_preview_when_released() {
+        let mut state = KeyState::default();
+
+        state.key_down(HotkeyKey::CtrlLeft);
+        state.key_down(HotkeyKey::AltLeft);
+        assert_eq!(
+            state.key_down(HotkeyKey::V),
+            HotkeyOutcome {
+                action: Some(HotkeyAction::ToggleClipboardChooser),
+                suppress: true,
+            }
+        );
+        state.key_up(HotkeyKey::V);
+        state.key_up(HotkeyKey::AltLeft);
+
+        assert_eq!(
+            state.key_up(HotkeyKey::CtrlLeft).action,
+            None,
+            "ctrl+alt+V must consume the modifier combo, so the trailing release must not also toggle the file preview",
+        );
     }
 
     #[test]
