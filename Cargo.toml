@@ -24,9 +24,11 @@ ui = [
 	"dep:sqlx",
 	"sqlx/migrate",
 	"storage",
-	"dep:gpui",
-	"dep:gpui_platform",
-	"dep:gpui-component",
+	# GPUI Kit single consumer entry point plus its WRY adapter.
+	# Pinned to the upstream clone until the v0.7.1 tag is fetched into the
+	# cargo git cache; will be replaced with `[git] tag = "v0.7.1"` once the
+	# implementation migration is verified.
+	"dep:gpui-kit",
 	"dep:gpui-wry",
 	"dep:wry",
 	"dep:lyon",
@@ -97,14 +99,19 @@ required-features = ["ui"]
 
 [dependencies]
 crossterm = { version = "0.29", features = ["use-dev-tty"], optional = true }
-gpui = { git = "https://github.com/zed-industries/zed", optional = true }
-# Enable GPUI's real macOS text backend; without this feature it installs
-# NoopTextSystem, which does not rasterize text.
-gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true, features = ["font-kit", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", optional = true, rev = "aa7def675aa17b31ca7b79542c8e7a779ed3e56b" }
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", optional = true, rev = "aa7def675aa17b31ca7b79542c8e7a779ed3e56b" }
+# GPUI Kit single consumer entry point. Kit re-exports the gpui-pre family
+# as `gpui_kit::gpui` and the component library as `gpui_kit::component`, so
+# application code can adopt the Kit namespaces without depending on the
+# individual layered crates.
+gpui-kit = { version = "0.7.1", optional = true }
+gpui-wry = { version = "0.7.1", optional = true }
 raw-window-handle = { version = "0.6.2", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
+# `gpui-wry` already references `lb-wry` internally; the application still
+# uses some `wry::*` helpers directly (e.g. `WebViewBuilder`), but those are
+# forwarded through the Kit adapter. Keep `wry` optional so the CLI-only
+# build does not pull in the Linux webkit dependencies on build farms that
+# only need the storage stack.
 anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }
 async-trait = "0.1.85"

@@ -1,6 +1,6 @@
 //! Isolated visual smoke harness: fixture database only, no watcher or clipboard writes.
-use gpui::{App, Application, rgb};
-use gpui_component::{Theme, ThemeMode};
+use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::{App, application};
 use rustickers::clipboard::storage::{ClipboardHistoryStore, SqliteClipboardStore};
 use rustickers::clipboard::vault_controller::VaultController;
 use rustickers::native::{clipboard::CaptureFilter, components::Assets, windows::clipboard};
@@ -37,12 +37,10 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--configured") {
         futures::executor::block_on(vault.create("fixture-password"))?;
     }
-    let app =
-        Application::with_platform(gpui_platform::current_platform(false)).with_assets(Assets);
+    let app = application().with_assets(Assets);
     app.run(move |cx: &mut App| {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
-        cx.global_mut::<Theme>().background = rgb(0x151104).into();
         clipboard::set_global_capture_filter(CaptureFilter::new());
         clipboard::set_global_store(store.clone());
         clipboard::set_global_vault_controller(vault);

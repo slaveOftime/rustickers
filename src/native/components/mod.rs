@@ -1,6 +1,6 @@
+use crate::gpui_component::IconNamed;
 use anyhow::anyhow;
 use gpui::*;
-use gpui_component::IconNamed;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
