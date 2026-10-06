@@ -1000,6 +1000,18 @@ impl ClipboardChooserWidget {
         let Some(item) = self.selected_item() else {
             return;
         };
+        // Instant delete is fine for ordinary disposable items -- the
+        // chooser is keyboard-first and the user can always re-copy.
+        // Protected and explicitly retained items need a confirmation
+        // because the action is irreversible (a pinned note, an
+        // edited entry, or a protected envelope's plaintext cannot be
+        // recovered once the store drops them). The design-guide rule
+        // applies here: name the object, name the consequence, no
+        // blanket confirmation ritual.
+        if item.retention.is_retained() || protected(&item) {
+            self.confirm_remove(item, window, cx);
+            return;
+        }
         self.busy = true;
         let store = self.store.clone();
         cx.spawn_in(window, async move |entity, cx| {
@@ -1018,6 +1030,92 @@ impl ClipboardChooserWidget {
             });
         })
         .detach();
+    }
+
+    /// Confirm-then-delete for items whose removal is irreversible from
+    /// the chooser's point of view. The body spells out the consequence
+    /// of the action -- "removes the pin", "removes your edit",
+    /// "removes the encryption envelope" -- rather than "Are you sure?"
+    /// so the user can decide without consulting a separate doc.
+    fn confirm_remove(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        let id = item.id;
+        let preview = item.preview_text();
+        let already_protected = protected(&item);
+        let retain_reasons = (
+            item.retention.explicit(),
+            item.retention.edited(),
+            already_protected,
+        );
+        let body: &'static str = match retain_reasons {
+            (true, _, true) => {
+                "This item is pinned and encrypted. Forgetting it removes both the pin and the encryption envelope -- it falls off your history and the plaintext is gone for good."
+            }
+            (true, _, false) => {
+                "This item is pinned. Forgetting it unpins the entry and removes it from your history."
+            }
+            (false, true, true) => {
+                "This item carries your edit and is encrypted. Forgetting it removes the edit and the encryption envelope -- the original captured text is gone for good."
+            }
+            (false, true, false) => {
+                "This item carries your edit. Forgetting it removes the edit and the entry from your history."
+            }
+            (false, false, true) => {
+                "This item is encrypted. Forgetting it removes the encryption envelope -- the plaintext is gone for good."
+            }
+            // Caller only routes here when at least one of those flags
+            // is true. The exhaustion arm here is defensive; if the
+            // route ever changes, the explanatory copy needs updating.
+            (false, false, false) => "This item's history entry will be removed.",
+        };
+
+        let entity = cx.entity();
+        let store = self.store.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let entity = entity.clone();
+            let store = store.clone();
+            dialog
+                .title(format!("Forget \"{preview}\"?"))
+                .child(div().text_sm().child(body))
+                .footer(
+                    h_flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(Button::new("cancel-forget").label("Cancel").on_click(
+                            |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
+                        .child(
+                            Button::new("confirm-forget")
+                                .label("Forget")
+                                .danger()
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let store = store.clone();
+                                    let entity = entity.clone();
+                                    window
+                                        .spawn(cx, async move |cx| {
+                                            let result = store.delete_row(id).await;
+                                            let _ = entity.update_in(cx, |this, window, cx| {
+                                                this.busy = false;
+                                                this.status_error = result.is_err();
+                                                this.status_warning = false;
+                                                this.status = if result.is_ok() {
+                                                    "Item forgotten."
+                                                } else {
+                                                    "Could not forget this item. Try again."
+                                                }
+                                                .into();
+                                                this.refresh(window, cx);
+                                                cx.notify();
+                                            });
+                                        })
+                                        .detach();
+                                }),
+                        ),
+                )
+                .w(px(420.0))
+        });
     }
     fn row(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
         let item = &self.rows[self.filtered[index]];
