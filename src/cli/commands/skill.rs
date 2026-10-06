@@ -1,4 +1,4 @@
-//! `rusticker skill` — browse and run the worked examples.
+//! `rst skill` — browse and run the worked examples.
 
 use anyhow::bail;
 use serde_json::json;
@@ -22,13 +22,13 @@ pub enum SkillAction {
 
     /// Explain one skill, its variables and the command it stands for
     Show {
-        /// Skill name, as listed by `rusticker skill list`
+        /// Skill name, as listed by `rst skill list`
         name: String,
     },
 
     /// Create the sticker a skill describes
     Run {
-        /// Skill name, as listed by `rusticker skill list`
+        /// Skill name, as listed by `rst skill list`
         name: String,
 
         /// Override one of the skill's variables, repeatable
@@ -85,7 +85,7 @@ fn list(format: Format) {
                 .collect();
             table(&["SKILL", "WHAT IT DOES"], &rows);
             println!(
-                "\n`rusticker skill show <name>` explains one; `rusticker skill run <name>` \
+                "\n`rst skill show <name>` explains one; `rst skill run <name>` \
                  creates it."
             );
         },
@@ -136,7 +136,7 @@ fn show(name: &str, format: Format) -> anyhow::Result<()> {
         println!("Equivalent command:");
         println!("  {}", skills::command_line(&expanded));
         println!("\nRun it with:");
-        println!("  rusticker skill run {}", skill.name);
+        println!("  rst skill run {}", skill.name);
     });
 
     Ok(())
@@ -171,7 +171,7 @@ fn run_skill(
 
     // Feeding the expansion back through the ordinary parser is what keeps a skill honest: it can
     // only do things the CLI can already do, and it does them exactly as `skill show` advertised.
-    let mut argv = vec!["rusticker".to_owned()];
+    let mut argv = vec!["rst".to_owned()];
     if format.is_json() {
         argv.push("--json".to_owned());
     }

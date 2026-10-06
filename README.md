@@ -24,19 +24,19 @@ edited, and protected items are retained independently. Collection starts **paus
 copying a password does not silently opt you into recording it.
 
 ```bash
-rusticker cp ls                              # browse: type, ↑/↓, Enter, Esc
-rusticker cp ls -s rust                       # start with a filter
-rusticker cp ls --list -n 20                  # readable recent-history table
-rusticker cp ls --list --json                 # one machine-readable JSON object
-rusticker cp ls -- rg -F -- '{{cp}}' .         # pick and substitute into argv
-rusticker cp ls --id 42 -- my-tool            # append the exact text as one argument
-rusticker cp import 'text from a script'
-rusticker cp import --stdin                   # read a pipeline without trimming it
-rusticker cp show --id 42                     # exact text, no extra newline
-rusticker cp forget 42                        # release ordinary saved/edit retention
-rusticker cp vault create                     # hidden master-password setup
-rusticker cp import --protect --stdin        # authorize, encrypt, then store piped text
-rusticker cp vault status
+rst cp ls                              # browse: type, ↑/↓, Enter, Esc
+rst cp ls -s rust                       # start with a filter
+rst cp ls --list -n 20                  # readable recent-history table
+rst cp ls --list --json                 # one machine-readable JSON object
+rst cp ls -- rg -F -- '{{cp}}' .         # pick and substitute into argv
+rst cp ls --id 42 -- my-tool            # append the exact text as one argument
+rst cp import 'text from a script'
+rst cp import --stdin                   # read a pipeline without trimming it
+rst cp show --id 42                     # exact text, no extra newline
+rst cp forget 42                        # release ordinary saved/edit retention
+rst cp vault create                     # hidden master-password setup
+rst cp import --protect --stdin        # authorize, encrypt, then store piped text
+rst cp vault status
 ```
 
 Quote `'{{cp}}'` in PowerShell/POSIX shells, or `"{{cp}}"` in Windows cmd. The CLI
@@ -82,16 +82,16 @@ Prerequisite: stable Rust toolchain.
 
 ```bash
 cargo run                                    # desktop app
-cargo run --bin rusticker --no-default-features --features cli -- --help
+cargo run --bin rst --no-default-features --features cli -- --help
 cargo build --release --bin rustickers
-cargo build --release --bin rusticker --no-default-features --features cli
+cargo build --release --bin rst --no-default-features --features cli
 ```
 
 Outputs are written to `target/release/`.
 
 ## CLI commands
 
-`rusticker` is the scripting surface for the app. It writes to the same database the app reads, so
+`rst` is the scripting surface for the app. It writes to the same database the app reads, so
 changes apply immediately when the app is running and on next launch when it is not.
 
 | Command | What it does |
@@ -116,10 +116,10 @@ options are forwarded.
 ### Command stickers
 
 ```bash
-rusticker cmd "cargo test" --result text --dir .          # run and show plain output
-rusticker cmd "npm test 2>&1 | tail -20" --shell          # use a shell for pipes and redirection
-rusticker cmd "gh pr list" --cron "0 */5 * * *"         # re-run every five minutes
-rusticker cmd "copilot -p {{RUSTICKERS_SELECTION}}" \
+rst cmd "cargo test" --result text --dir .          # run and show plain output
+rst cmd "npm test 2>&1 | tail -20" --shell          # use a shell for pipes and redirection
+rst cmd "gh pr list" --cron "0 */5 * * *"         # re-run every five minutes
+rst cmd "copilot -p {{RUSTICKERS_SELECTION}}" \
   --accept-selection --result markdown --closed           # answer whatever text you have selected
 ```
 
@@ -135,7 +135,7 @@ so pipes and `&&` are literal text until you add `--shell`. A sticker created wi
 
 An armed sticker with `--cron` also keeps running with its window **closed**, for as long
 as the app is running. Combine it with `--no-window` for a schedule that never puts
-anything on screen, and read the result over `rusticker result <id>` from anywhere.
+anything on screen, and read the result over `rst result <id>` from anywhere.
 In the manager, a spinner marks a command that is running right now and a loop icon marks
 one waiting for its next tick. Press Stop on the sticker to disarm it, or delete the
 sticker to stop it for good.
@@ -146,15 +146,15 @@ Add `--json` to any command to get exactly one JSON object on stdout, with an `o
 success and failure parse the same way:
 
 ```bash
-rusticker cmd "git status --short" --dir . --json   # → {"ok":true,"id":42,...}
-rusticker result 42 --json                          # → {"ok":true,"output":"...","has_run":true}
+rst cmd "git status --short" --dir . --json   # → {"ok":true,"id":42,...}
+rst result 42 --json                          # → {"ok":true,"output":"...","has_run":true}
 ```
 
 ### Skills
 
-`rusticker skill list` is a catalogue of ready-made stickers — selection-driven AI prompts,
+`rst skill list` is a catalogue of ready-made stickers — selection-driven AI prompts,
 scheduled watchers, HTML and SVG reports. `skill show <name>` explains one and prints the
-exact `rusticker` command it is equivalent to, and `skill run <name> --var key=value` creates
+exact `rst` command it is equivalent to, and `skill run <name> --var key=value` creates
 it. `--dry-run` prints the command without creating anything.
 
 ## Data and logs

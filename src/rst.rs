@@ -1,4 +1,4 @@
-//! Entry point for the `rusticker` command line binary.
+//! Entry point for the `rst` command line binary.
 
 use clap::Parser as _;
 use std::ffi::OsString;
@@ -28,7 +28,7 @@ fn main() {
     }
 }
 
-/// Let `rusticker <file-or-url>` mean `rusticker view <file-or-url>`.
+/// Let `rst <file-or-url>` mean `rst view <file-or-url>`.
 ///
 /// The shorthand only applies when the first argument is unambiguous — an existing path or a URL,
 /// and not the name of a subcommand. The subcommand list comes from the parser itself, so adding

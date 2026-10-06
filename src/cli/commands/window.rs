@@ -1,4 +1,4 @@
-//! `rusticker open` and `rusticker close` — show or hide a sticker's window.
+//! `rst open` and `rst close` — show or hide a sticker's window.
 //!
 //! Both write the new state to the database first and only then tell the app, so the request
 //! survives the app not running: the sticker comes up in the right state on the next launch.
@@ -13,7 +13,7 @@ use crate::cli::runtime::{self, Delivery, block_on, open_store};
 
 #[derive(clap::Args, Debug)]
 pub struct WindowArgs {
-    /// Sticker ID, as listed by `rusticker list`
+    /// Sticker ID, as listed by `rst list`
     pub id: i64,
 }
 

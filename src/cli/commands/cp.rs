@@ -46,7 +46,7 @@ pub enum CpCommand {
 #[derive(clap::Args, Debug)]
 #[command(
     about = "Browse and reuse previous copies",
-    after_help = "Examples:\n  rusticker cp ls                              browse (↑↓, Enter, Esc)\n  rusticker cp ls -s rust                      start with a search\n  rusticker cp ls --list -n 20                  print recent history\n  rusticker cp ls --json --list                 machine-readable history\n  rusticker cp ls -- rg -F -- '{{cp}}' .         select and run\n  rusticker cp ls --id 42 -- my-tool            append one exact argument\n\nQuote '{{cp}}' in POSIX shells and PowerShell; use \"{{cp}}\" in cmd.exe.\nClipboard text stays data; a shell/interpreter code argument can still execute it.\nChooser/password input uses the terminal, leaving child stdin and stdout untouched.\nExit codes: 130 cancelled, 127 program missing, 126 not executable, otherwise child status."
+    after_help = "Examples:\n  rst cp ls                              browse (↑↓, Enter, Esc)\n  rst cp ls -s rust                      start with a search\n  rst cp ls --list -n 20                  print recent history\n  rst cp ls --json --list                 machine-readable history\n  rst cp ls -- rg -F -- '{{cp}}' .         select and run\n  rst cp ls --id 42 -- my-tool            append one exact argument\n\nQuote '{{cp}}' in POSIX shells and PowerShell; use \"{{cp}}\" in cmd.exe.\nClipboard text stays data; a shell/interpreter code argument can still execute it.\nChooser/password input uses the terminal, leaving child stdin and stdout untouched.\nExit codes: 130 cancelled, 127 program missing, 126 not executable, otherwise child status."
 )]
 pub struct CpArgs {
     /// Print a compact table (or one JSON object with --json), without choosing.
@@ -118,7 +118,7 @@ fn require_password(prompt: &str) -> Result<Zeroizing<String>> {
 
 fn unlock(controller: &VaultController) -> Result<()> {
     if block_on(controller.envelope())?.is_none() {
-        bail!("no master password configured; run `rusticker cp vault create` first");
+        bail!("no master password configured; run `rst cp vault create` first");
     }
     let password = require_password("Master password: ")?;
     if !block_on(controller.unlock(&password))? {
@@ -163,7 +163,7 @@ pub fn run(paths: &AppPaths, args: CpArgs, format: Format) -> Result<()> {
     } else {
         if snapshot.is_empty() {
             bail!(
-                "no clipboard history yet; enable collection in the desktop app or use `rusticker cp import <TEXT>`"
+                "no clipboard history yet; enable collection in the desktop app or use `rst cp import <TEXT>`"
             );
         }
         choose(&snapshot, args.search.as_deref().unwrap_or(""))?.ok_or(ExitCode(130))?
@@ -173,7 +173,7 @@ pub fn run(paths: &AppPaths, args: CpArgs, format: Format) -> Result<()> {
         .with_context(|| format!("clipboard row {id} is no longer available"))?;
     if args.command.is_empty() {
         format.emit(json!({"id": id, "kind": kind(&row), "hint": "pass -- <PROGRAM> <ARGS> to reuse this item"}), || {
-            println!("Selected #{id}. To reuse it: rusticker cp ls --id {id} -- <PROGRAM> '{{{{cp}}}}'");
+            println!("Selected #{id}. To reuse it: rst cp ls --id {id} -- <PROGRAM> '{{{{cp}}}}'");
         });
         return Ok(());
     }

@@ -1,4 +1,4 @@
-//! `rusticker list` — find stickers.
+//! `rst list` — find stickers.
 
 use clap::ValueEnum;
 use serde_json::json;
@@ -119,7 +119,7 @@ pub fn run(app_paths: &AppPaths, args: ListArgs, format: Format) -> anyhow::Resu
             if stickers.is_empty() {
                 if args.state == StateFilter::Open && args.search.is_none() {
                     println!(
-                        "No open stickers. Try `rusticker list --state all`, or `rusticker skill \
+                        "No open stickers. Try `rst list --state all`, or `rst skill \
                          list` for ready-made ones."
                     );
                 } else {

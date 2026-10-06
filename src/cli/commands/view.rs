@@ -1,4 +1,4 @@
-//! `rusticker view` — preview a file, folder or URL.
+//! `rst view` — preview a file, folder or URL.
 //!
 //! Unlike the other create commands this one does not write to the database. The preview is a
 //! live request to the running app, which decides how to render the source, so there is nothing

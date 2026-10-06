@@ -2,7 +2,7 @@
 //!
 //! The `cmd` command can express a lot of different stickers, and the interesting combinations are
 //! not obvious from a list of flags. A skill is one of those combinations, written down: what it
-//! is for, which parts you are expected to change, and the exact `rusticker` invocation it stands
+//! is for, which parts you are expected to change, and the exact `rst` invocation it stands
 //! for.
 //!
 //! Skills expand to argument lists that are fed back through the ordinary parser, so a skill can
@@ -29,7 +29,7 @@ pub struct Skill {
     /// The longer explanation: when to reach for it, and what it will do.
     pub detail: &'static str,
     pub vars: &'static [Var],
-    /// `rusticker` arguments, with `${name}` standing in for a variable.
+    /// `rst` arguments, with `${name}` standing in for a variable.
     pub template: &'static [&'static str],
 }
 
@@ -220,7 +220,7 @@ Schedules are Quartz-style and start with a seconds field, so every five minutes
 '0 */5 * * * *' rather than '*/5 * * * *'.
 
 The schedule is not tied to the window. Close the sticker and it keeps ticking in the background,
-so `rusticker result <id>` always returns the most recent run. Add --no-window to build a schedule
+so `rst result <id>` always returns the most recent run. Add --no-window to build a schedule
 that never puts anything on screen at all, and watch the sticker list for the running indicator.",
         vars: &[
             Var {
@@ -332,7 +332,7 @@ Not every sticker runs something. This is the plain case: a markdown note that s
 is edited in place.
 
 For anything longer than a line, skip the variable and pipe the document in instead:
-`rusticker markdown --file notes.md`, or `--file -` to read standard input.",
+`rst markdown --file notes.md`, or `--file -` to read standard input.",
         vars: &[Var {
             name: "text",
             description: "the markdown content",
@@ -428,7 +428,7 @@ pub fn command_line(args: &[String]) -> String {
             }
         })
         .collect();
-    format!("rusticker {}", quoted.join(" "))
+    format!("rst {}", quoted.join(" "))
 }
 
 #[cfg(test)]
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn a_command_line_quotes_arguments_that_need_it() {
         let line = command_line(&["cmd".into(), "git status".into(), "--closed".into()]);
-        assert_eq!(line, "rusticker cmd \"git status\" --closed");
+        assert_eq!(line, "rst cmd \"git status\" --closed");
     }
 
     #[test]

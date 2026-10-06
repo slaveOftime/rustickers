@@ -127,7 +127,7 @@ impl Created {
         format.note(format!("Created {kind} sticker (id={})", self.id));
         match (self.state, self.delivery) {
             (StickerState::Close, _) => format.note(format!(
-                "It was created closed. Run `rusticker open {}` to show it.",
+                "It was created closed. Run `rst open {}` to show it.",
                 self.id
             )),
             (StickerState::Open, Delivery::Delivered) => {

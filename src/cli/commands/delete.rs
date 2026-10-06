@@ -1,4 +1,4 @@
-//! `rusticker delete` — remove a sticker for good.
+//! `rst delete` — remove a sticker for good.
 
 use anyhow::bail;
 use serde_json::json;
@@ -13,7 +13,7 @@ use super::list::type_name;
 
 #[derive(clap::Args, Debug)]
 pub struct DeleteArgs {
-    /// Sticker ID, as listed by `rusticker list`
+    /// Sticker ID, as listed by `rst list`
     pub id: i64,
 
     /// Delete without asking for confirmation

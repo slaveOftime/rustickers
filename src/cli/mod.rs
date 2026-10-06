@@ -1,4 +1,4 @@
-//! The `rusticker` command line.
+//! The `rst` command line.
 //!
 //! The CLI is the scripting surface for the desktop app: it creates stickers, finds them, opens
 //! and closes them, and reads back what command stickers produced. Anything it changes goes into
@@ -42,12 +42,12 @@ pub(crate) fn parse_color(s: &str) -> Result<StickerColor, String> {
 
 const AFTER_HELP: &str = "\
 Examples:
-  rusticker list --state all                       every sticker
-  rusticker markdown --file notes.md               pin a document
-  rusticker cmd \"git status --short\" --dir .       show command output
-  rusticker cmd \"npm test\" --shell                 use a shell for pipes and redirection
-  rusticker result 12                              print what sticker 12 last produced
-  rusticker skill list                             ready-made recipes worth copying
+  rst list --state all                       every sticker
+  rst markdown --file notes.md               pin a document
+  rst cmd \"git status --short\" --dir .       show command output
+  rst cmd \"npm test\" --shell                 use a shell for pipes and redirection
+  rst result 12                              print what sticker 12 last produced
+  rst skill list                             ready-made recipes worth copying
 
 Command stickers do not run through a shell: the command is split with Windows argument rules and
 the program is looked up on PATH. Pass --shell when you need pipes, redirection or `&&`.
@@ -56,7 +56,7 @@ Add --json to any command to get one machine-readable object on stdout instead o
 
 #[derive(Parser)]
 #[command(
-    name = "rusticker",
+    name = "rst",
     about = "Create and control Rustickers desktop stickers",
     long_about = "Create and control Rustickers desktop stickers.\n\nStickers live in a local \
                   database that the desktop app reads. Changes made here apply immediately when \
@@ -176,22 +176,22 @@ mod tests {
     #[test]
     fn json_is_accepted_before_and_after_the_subcommand() {
         assert!(
-            Cli::parse_from(["rusticker", "--json", "list"])
+            Cli::parse_from(["rst", "--json", "list"])
                 .format()
                 .is_json()
         );
         assert!(
-            Cli::parse_from(["rusticker", "list", "--json"])
+            Cli::parse_from(["rst", "list", "--json"])
                 .format()
                 .is_json()
         );
-        assert!(!Cli::parse_from(["rusticker", "list"]).format().is_json());
+        assert!(!Cli::parse_from(["rst", "list"]).format().is_json());
     }
 
     #[test]
     fn clipboard_child_json_flag_belongs_to_child_not_parent() {
         let cli = Cli::try_parse_from([
-            "rusticker",
+            "rst",
             "cp",
             "ls",
             "--id",
@@ -233,7 +233,7 @@ mod tests {
                     )
                 })
                 .collect();
-            let mut argv = vec!["rusticker".to_owned()];
+            let mut argv = vec!["rst".to_owned()];
             argv.extend(skill.expand(&vars));
             Cli::try_parse_from(&argv)
                 .unwrap_or_else(|err| panic!("skill '{}' does not parse: {err}", skill.name));

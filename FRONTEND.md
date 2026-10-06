@@ -381,7 +381,7 @@ PR CI (`.github/workflows/ci.yml`) runs on `windows-latest`,
 cargo fmt          --all -- --check
 cargo check        --locked --bin rustickers
 cargo check        --locked --no-default-features --features storage
-cargo check        --locked --no-default-features --features cli --bin rusticker
+cargo check        --locked --no-default-features --features cli --bin rst
 cargo check        --locked --features ui
 cargo clippy       --locked --features ui
 cargo test         --locked --no-default-features --features cli

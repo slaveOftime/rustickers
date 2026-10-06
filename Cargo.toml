@@ -89,8 +89,8 @@ path = "src/rustickers.rs"
 required-features = ["ui"]
 
 [[bin]]
-name = "rusticker"
-path = "src/rusticker.rs"
+name = "rst"
+path = "src/rst.rs"
 required-features = ["cli"]
 
 [[example]]

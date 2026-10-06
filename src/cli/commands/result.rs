@@ -1,4 +1,4 @@
-//! `rusticker result` — read back what a command sticker last produced.
+//! `rst result` — read back what a command sticker last produced.
 //!
 //! A command sticker saves its output to the database every time a run finishes, which makes it a
 //! usable one-way channel: create a sticker with `--no-window`, let the app run it, then collect
@@ -58,7 +58,7 @@ pub fn run(app_paths: &AppPaths, args: ResultArgs, format: Format) -> anyhow::Re
             "updated_at": sticker.updated_at,
         }),
         || match output {
-            // Bare output on stdout, so `rusticker result 12 > report.md` does the obvious thing.
+            // Bare output on stdout, so `rst result 12 > report.md` does the obvious thing.
             Some(output) => print!("{output}"),
             None if content.started_at.is_some() => {
                 eprintln!(
@@ -68,7 +68,7 @@ pub fn run(app_paths: &AppPaths, args: ResultArgs, format: Format) -> anyhow::Re
                 );
             }
             None => eprintln!(
-                "Sticker {} has not run yet. Open it with `rusticker open {}` to run it.",
+                "Sticker {} has not run yet. Open it with `rst open {}` to run it.",
                 sticker.id, sticker.id
             ),
         },

@@ -1,4 +1,4 @@
-//! `rusticker show` — everything stored about one sticker.
+//! `rst show` — everything stored about one sticker.
 
 use serde_json::{Value, json};
 
@@ -12,7 +12,7 @@ use super::list::{state_name, type_name};
 
 #[derive(clap::Args, Debug)]
 pub struct ShowArgs {
-    /// Sticker ID, as listed by `rusticker list`
+    /// Sticker ID, as listed by `rst list`
     pub id: i64,
 
     /// Print only the stored content, with no surrounding report

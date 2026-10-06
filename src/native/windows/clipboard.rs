@@ -935,7 +935,7 @@ impl ClipboardChooserWidget {
                     Err(err) => {
                         show_chooser(window);
                         this.password_error = Some(if err.to_string().contains("No master password") {
-                            "Set up your master password first: rusticker cp vault create."
+                            "Set up your master password first: rst cp vault create."
                         } else if err.to_string() == "Wrong master password" {
                             "Incorrect master password. Try again."
                         } else if matches!(action, AuthorizedAction::Protect) {

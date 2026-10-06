@@ -1,4 +1,4 @@
-//! `rusticker markdown` — create a markdown note sticker.
+//! `rst markdown` — create a markdown note sticker.
 
 use anyhow::{Context as _, bail};
 use serde_json::json;

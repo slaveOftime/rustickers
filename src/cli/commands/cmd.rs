@@ -1,4 +1,4 @@
-//! `rusticker cmd` — create a command sticker.
+//! `rst cmd` — create a command sticker.
 //!
 //! This is the command with the most surface, because a command sticker is the most configurable
 //! thing Rustickers has: it can render its output five different ways, run on a schedule, run
@@ -98,7 +98,7 @@ pub struct CmdArgs {
     /// five minutes.
     ///
     /// The schedule keeps running for as long as the app is, whether or not the sticker's window
-    /// is open, so `rusticker result` always has the latest run waiting.
+    /// is open, so `rst result` always has the latest run waiting.
     #[arg(long, value_name = "EXPR", help_heading = "Behaviour")]
     pub cron: Option<String>,
 
@@ -113,7 +113,7 @@ pub struct CmdArgs {
     /// Create the sticker stopped, so nothing runs until you press Run
     ///
     /// Without this the sticker is armed: it runs when its window opens, and again each time the
-    /// app starts, which is what makes `rusticker result` useful.
+    /// app starts, which is what makes `rst result` useful.
     #[arg(long, help_heading = "Behaviour")]
     pub idle: bool,
 
@@ -233,7 +233,7 @@ fn collect_warnings(
     }
     if cron.is_some() && !args.idle {
         warnings.push(
-            "a scheduled sticker waits for its first tick, so `rusticker result` stays empty until \
+            "a scheduled sticker waits for its first tick, so `rst result` stays empty until \
              then."
                 .to_owned(),
         );
@@ -271,7 +271,7 @@ fn collect_warnings(
     }
     if args.idle {
         warnings.push(
-            "--idle means nothing runs yet, so `rusticker result` will stay empty until you press \
+            "--idle means nothing runs yet, so `rst result` will stay empty until you press \
              Run on the sticker."
                 .to_owned(),
         );

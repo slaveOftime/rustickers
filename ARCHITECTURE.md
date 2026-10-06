@@ -71,7 +71,7 @@ rustickers/
 ├── src/
 │   ├── lib.rs               # Library root, module declarations
 │   ├── rustickers.rs        # GUI application entry point
-│   ├── rusticker.rs         # CLI application entry point
+│   ├── rst.rs         # CLI application entry point
 │   ├── ipc.rs               # Inter-process communication
 │   ├── cli/                 # CLI commands
 │   ├── model/               # Data models
@@ -104,7 +104,7 @@ cli = ["dep:clap", "dep:futures", "dep:sqlx"]
 | Binary | Path | Features | Description |
 |--------|------|----------|-------------|
 | `rustickers` | `src/rustickers.rs` | `ui` | Full GUI application |
-| `rusticker` | `src/rusticker.rs` | `cli` | CLI-only tool |
+| `rst` | `src/rst.rs` | `cli` | CLI-only tool |
 
 ### Release Optimization
 
@@ -150,7 +150,7 @@ panic = "abort"     # No stack unwinding
 5. Start global hotkey listener
 6. Run GPUI native loop
 
-#### CLI Application (`src/rusticker.rs`)
+#### CLI Application (`src/rst.rs`)
 
 ```rust
 fn main() {
@@ -461,7 +461,7 @@ touches one new file plus two lines in `mod.rs`.
 | `runtime.rs` | Opening the store and talking to the running app. `Delivery` distinguishes "sent over IPC" from "the app is not running". |
 | `draft.rs` | The single sticker-creation path: the shared `--width/--height/--left/--top/--color/--top-most/--closed` group, insertion, and the "created" report. |
 | `shell.rs` | `--shell` wrapping and fail-fast validation of a command string, its program and its cron expression. |
-| `skills.rs` | The static skill catalogue and the expansion of a skill into real `rusticker` arguments. |
+| `skills.rs` | The static skill catalogue and the expansion of a skill into real `rst` arguments. |
 
 #### CLI Flow
 
@@ -497,7 +497,7 @@ triggered by the hotkey, which sets its own start time.
 *An armed cron schedule keeps running with the sticker closed.* `command/background.rs` polls the
 store for stickers that are armed and have a cron expression, fires the ones that are due, and
 writes the output back into the sticker's content. It does not care about `StickerState`, which is
-what makes a closed sticker keep ticking; `rusticker result <id>` then reads the latest run.
+what makes a closed sticker keep ticking; `rst result <id>` then reads the latest run.
 
 The open window still drives its own schedule, because only it can stream output into the view. The
 two are kept apart by `command/activity.rs`: a sticker window claims its sticker for as long as it
@@ -800,7 +800,7 @@ Sticker content stored as JSON strings, allowing type-specific data without sche
    ```
 
 2. **Declare it** in `src/cli/commands/mod.rs`, and add a variant plus a dispatch arm in
-   `src/cli/mod.rs`. Nothing else needs updating: the `rusticker <file>` shorthand and the help
+   `src/cli/mod.rs`. Nothing else needs updating: the `rst <file>` shorthand and the help
    text both read the subcommand list from the parser.
 
 3. **Consider a skill.** If the command has a use worth demonstrating, add an entry to
