@@ -1,9 +1,14 @@
-# Rustickers frontend handbook
+# Rustickers frontend knowledge
 
-> First stop for any change that touches the desktop UI, theme,
-> sticker rendering, clipboard surface, or window code. `README.md`
-> tells you what the app does and how to run it; this file tells you
-> how it is built.
+> Knowledge base for AI coding agents and human contributors working
+> on the desktop layer: theme tokens, component patterns, async
+> ownership rules, palette contracts, and the privacy invariants the
+> clipboard layer enforces. `README.md` describes *what* the app
+> does and *how to run* it; this file describes *how it is built*.
+>
+> This is **not** a roadmap, plan, or checklist. It encodes the
+> current state of the codebase. For change history, run
+> `git log --oneline`.
 
 ---
 
@@ -390,45 +395,23 @@ exactly one `gpui-pre` family.
 UI integration tests via `#[gpui_kit::test]` are deferred:
 `gpui-kit`'s `test-support` depends on `gpui_web` (`wasm`) whose
 `unicode-properties = ^0.1.3` conflicts with the closure-locked
-`^0.1.4`. Visual flows are covered by `clipboard_ux_smoke.rs`
-until upstream resolves the gap.
+`^0.1.4`. Visual flows are covered by `clipboard_ux_smoke.rs`.
 
 ---
 
-## 13. Status of the post-kit work
-
-The plan that came out of the post-kit code review had six phases.
-Currently:
-
-| Phase | Status | Commit |
-| --- | --- | --- |
-| P0: Timer task ownership | Done | `9aeb6a9` |
-| P0: Manager async correctness (latest-request policy, supersede delete, owner `open_sticker`) | Done | `7cee743` |
-| P1: Manager virtualization + keyboard nav (uniform_list, Tab/Enter/Delete) | Done | `51d6d3b` |
-| P1: Recoverable WebView (`SimpleWebView::try_new -> Result<…>`) | Done | `f6cd76e` |
-| P1: Clipboard read efficiency (existence query, content-free `WatcherSignal`, 5 s reconciliation) | Done | `eb1b5ec` |
-| P2: Confirm-then-forget for protected / retained clipboard rows | Done | `5521df4` |
-
-Open follow-ups: UI integration tests once `gpui-kit`'s
-`test-support` re-bumps; status-banner alignment with Kit elevation;
-sticker palette → theme extension when light theming lands;
-`screenshots/demo1.png` replacement after a native visual review.
-
----
-
-## 14. Reference skill catalog
+## 13. Reference skill catalog
 
 ```text
 .agents/skills/gpui-kit/                SKILL.md + references/
                                        (coding-guides, conventions, recipes, gpui/**)
 .pi/skills/gpui-kit-design-guides/      SKILL.md + references/design-guides.md
 skills-lock.json                       source URL + computed hash per skill
-docs/plans/gpui-kit-upgrade{,-goal}.md  (deleted; the takeaways live in §1–§13)
-docs/plans/clipboard-{coding,design}-guides.md  (deleted; the
-                                                  takeaways live in §4–§10)
+docs/plans/gpui-kit-upgrade{,-goal}.md  (deleted; absorbed by this doc)
+docs/plans/clipboard-{coding,design}-guides.md  (deleted; absorbed by this doc)
+README.md, ARCHITECTURE.md             read these for what the app does and store/IPC contracts
 ```
 
 The local skill snapshots are the authoritative reference for kit
-conventions during a migration and stay current with the v0.7.1
-source. Read them for full design/coding details; this file
-distils the project-specific consequences.
+conventions. They stay current with the v0.7.1 source. Read them
+for full design/coding details; this file distils the
+project-specific consequences.
