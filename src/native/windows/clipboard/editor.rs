@@ -2,17 +2,17 @@
 use super::{ClipboardChooserWidget, protected};
 use crate::clipboard::{items::ClipboardItem, storage::ClipboardHistoryStore};
 
-use gpui::{
-    App, Context, Entity, Focusable, IntoElement, Render, Subscription, WeakEntity, Window, black,
-    div, prelude::*, px,
-};
-use gpui_component::{
+use crate::gpui_component::{
     ActiveTheme, Disableable, Sizable, WindowExt,
     alert::Alert,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Textarea, TextareaState},
     v_flex,
+};
+use gpui::{
+    App, Context, Entity, Focusable, IntoElement, Render, Subscription, WeakEntity, Window, div,
+    prelude::*, px,
 };
 use std::sync::Arc;
 
@@ -56,7 +56,6 @@ pub(super) fn open(
                     ),
             )
             .w(window.viewport_size().width.min(px(500.0)) - px(32.0))
-            .bg(black().opacity(0.95))
             .text_sm()
             .overlay_closable(false)
             .keyboard(false)
@@ -231,7 +230,7 @@ impl Render for ClipboardEditor {
         v_flex()
             .w_full()
             .gap_2()
-            .bg(black().opacity(0.90))
+            .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(
                 div()

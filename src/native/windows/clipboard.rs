@@ -7,22 +7,22 @@ use crate::clipboard::{
     storage::{ClipboardHistoryStore, RetentionFlag},
     vault_controller::VaultController,
 };
-use crate::native::clipboard::{CaptureFilter, foreground, paste_foreground, write_clipboard_text};
-use crate::native::components::IconName;
-use crate::utils::time::now_unix_millis;
-use gpui::{
-    App, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement, MouseButton,
-    MouseDownEvent, Render, ScrollStrategy, Subscription, UniformListScrollHandle, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowOptions, black,
-    div, prelude::*, px, rgba, size, uniform_list,
-};
-use gpui_component::{
+use crate::gpui_component::{
     ActiveTheme, Disableable, Icon, Root, Selectable, Sizable, WindowExt,
     alert::Alert,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,
+};
+use crate::native::clipboard::{CaptureFilter, foreground, paste_foreground, write_clipboard_text};
+use crate::native::components::IconName;
+use crate::utils::time::now_unix_millis;
+use gpui::{
+    App, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement, MouseButton,
+    MouseDownEvent, Render, ScrollStrategy, Subscription, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowOptions, div,
+    prelude::*, px, size, uniform_list,
 };
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -156,12 +156,8 @@ struct ClipboardChooserSurface {
     view: Entity<ClipboardChooserWidget>,
 }
 impl Render for ClipboardChooserSurface {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .relative()
-            .size_full()
-            .child(self.view.clone())
-            .children(Root::render_dialog_layer(window, cx))
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().relative().size_full().child(self.view.clone())
     }
 }
 
@@ -724,7 +720,6 @@ impl ClipboardChooserWidget {
             dialog
                 .title(if creating { "Set up clipboard vault" } else if protecting { "Protect clipboard item" } else if unprotecting { "Remove item protection" } else { "Unlock clipboard item" })
                 .w(window.viewport_size().width.min(px(400.0)) - px(32.0))
-                .bg(black().opacity(0.95))
                 .text_sm()
                 .overlay_closable(false)
                 .keyboard(false)
@@ -1106,7 +1101,6 @@ impl ClipboardChooserWidget {
                 cx.notify();
             }))
             .w_full()
-            .cursor_pointer()
             .items_center()
             .h(px(44.0))
             .px_2()
@@ -1114,16 +1108,16 @@ impl ClipboardChooserWidget {
             .rounded_md()
             .border_1()
             .border_color(if index == self.selected {
-                cx.theme().primary
+                cx.theme().list_active_border
             } else {
-                rgba(0x00000000).into()
+                cx.theme().transparent
             })
             .bg(if index == self.selected {
-                rgba(0xe5c23664)
+                cx.theme().list_active
             } else {
-                rgba(0x00000000)
+                cx.theme().transparent
             })
-            .hover(|row| row.bg(rgba(0xe5c23632)))
+            .hover(|row| row.bg(cx.theme().list_hover))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1173,7 +1167,7 @@ impl Render for ClipboardChooserWidget {
             .size_full()
             .rounded_lg()
             .overflow_hidden()
-            .bg(black().opacity(0.90))
+            .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(
                 h_flex()
@@ -1416,7 +1410,7 @@ mod tests {
     }
     #[test]
     fn clipboard_action_icons_are_embedded() {
-        use gpui_component::IconNamed;
+        use crate::gpui_component::IconNamed;
         for icon in [IconName::Copy, IconName::Delete] {
             assert!(crate::native::components::Assets::get(icon.path().as_ref()).is_some());
         }
