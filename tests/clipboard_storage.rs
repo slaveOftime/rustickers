@@ -357,11 +357,48 @@ fn stale_editor_save_fails_without_overwriting_newer_content() {
     let tmp = tempfile::tempdir().unwrap();
     let store = block_on(SqliteClipboardStore::open(tmp.path().join("clip.db"))).unwrap();
     let id = insert(&store, "original", 10);
-    block_on(store.compare_exchange_content(id, "original", "first", 5, 20)).unwrap();
-    assert!(block_on(store.compare_exchange_content(id, "original", "stale", 5, 30)).is_err());
+    block_on(store.compare_exchange_content(id, "original", "first", 5, 20, None)).unwrap();
+    assert!(
+        block_on(store.compare_exchange_content(id, "original", "stale", 5, 30, None)).is_err()
+    );
     assert_eq!(block_on(store.get(id)).unwrap().content, "first");
     block_on(store.delete_row(id)).unwrap();
-    assert!(block_on(store.compare_exchange_content(id, "first", "lost", 4, 40)).is_err());
+    assert!(block_on(store.compare_exchange_content(id, "first", "lost", 4, 40, None)).is_err());
+}
+
+#[test]
+fn editor_save_writes_label_alongside_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = block_on(SqliteClipboardStore::open(tmp.path().join("clip.db"))).unwrap();
+    let id = insert(&store, "first", 5);
+
+    // Edit content + label together; both must persist.
+    block_on(store.compare_exchange_content(id, "first", "second", 6, 20, Some("alias"))).unwrap();
+    let row = block_on(store.get(id)).unwrap();
+    assert_eq!(row.content, "second");
+    assert_eq!(row.public_label.as_deref(), Some("alias"));
+
+    // Edit content while leaving the label untouched; the label survives.
+    block_on(store.compare_exchange_content(id, "second", "third", 5, 30, None)).unwrap();
+    let row = block_on(store.get(id)).unwrap();
+    assert_eq!(row.content, "third");
+    assert_eq!(row.public_label.as_deref(), Some("alias"));
+
+    // Empty/whitespace label collapses to NULL.
+    block_on(store.compare_exchange_content(id, "third", "fourth", 6, 40, Some("   "))).unwrap();
+    let row = block_on(store.get(id)).unwrap();
+    assert_eq!(row.content, "fourth");
+    assert!(row.public_label.is_none());
+
+    // A label-only change also commits: content moves with the new alias and
+    // `last_edited_at` is bumped because the content differs.
+    block_on(store.compare_exchange_content(id, "fourth", "fifth", 5, 50, Some("next-alias")))
+        .unwrap();
+    let row = block_on(store.get(id)).unwrap();
+    assert_eq!(row.content, "fifth");
+    assert_eq!(row.public_label.as_deref(), Some("next-alias"));
+    assert_eq!(row.last_edited_at, Some(50));
+    assert!(row.retention.edited);
 }
 
 #[test]
@@ -459,6 +496,7 @@ fn protected_editor_cas_keeps_ciphertext_only_and_rejects_stale_save() {
         13,
         20,
         &vault_envelope,
+        None,
     ))
     .unwrap();
     assert!(
@@ -468,7 +506,8 @@ fn protected_editor_cas_keeps_ciphertext_only_and_rejects_stale_save() {
             &first,
             12,
             30,
-            &vault_envelope
+            &vault_envelope,
+            None,
         ))
         .is_err()
     );
@@ -674,7 +713,8 @@ fn password_rewrap_requires_new_generation_for_protected_edit() {
             &stale_edit.ciphertext,
             5,
             20,
-            &stale_edit.vault_envelope
+            &stale_edit.vault_envelope,
+            None,
         ))
         .is_err()
     );
@@ -688,6 +728,7 @@ fn password_rewrap_requires_new_generation_for_protected_edit() {
         5,
         20,
         &fresh.vault_envelope,
+        None,
     ))
     .unwrap();
     assert_eq!(

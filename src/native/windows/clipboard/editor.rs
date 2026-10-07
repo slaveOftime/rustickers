@@ -7,7 +7,7 @@ use crate::gpui_component::{
     alert::Alert,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Textarea, TextareaState},
+    input::{Input, InputState, Textarea, TextareaState},
     v_flex,
 };
 use gpui::{
@@ -26,12 +26,23 @@ pub(super) fn open(
         zeroize::Zeroizing<String>,
         Arc<crate::clipboard::vault_controller::VaultController>,
     )>,
+    prefilled_label: Option<String>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         !protected(&initial) || authorized.is_some(),
         "Encrypted editing requires authorization"
     );
-    let view = cx.new(|cx| ClipboardEditor::new(window, cx, store, initial, parent, authorized));
+    let view = cx.new(|cx| {
+        ClipboardEditor::new(
+            window,
+            cx,
+            store,
+            initial,
+            parent,
+            authorized,
+            prefilled_label,
+        )
+    });
     let focus = view.read(cx).focus_handle(cx);
     window.open_dialog(cx, move |dialog, window, cx| {
         dialog
@@ -69,6 +80,11 @@ struct ClipboardEditor {
     store: Arc<dyn ClipboardHistoryStore>,
     initial: ClipboardItem,
     content: Entity<TextareaState>,
+    /// Optional public alias. Pre-filled from `initial.public_label` (or from the
+    /// caller when the protected-edit password dialog pre-fills with a fresh value).
+    /// Empty/whitespace maps to `public_label = NULL` at save time.
+    label: Entity<InputState>,
+    original_label: Option<String>,
     parent: WeakEntity<ClipboardChooserWidget>,
     original_plain: zeroize::Zeroizing<String>,
     vault: Option<Arc<crate::clipboard::vault_controller::VaultController>>,
@@ -88,11 +104,32 @@ impl ClipboardEditor {
             zeroize::Zeroizing<String>,
             Arc<crate::clipboard::vault_controller::VaultController>,
         )>,
+        prefilled_label: Option<String>,
     ) -> Self {
         let (original_plain, vault) = match authorized {
             Some((text, vault)) => (text, Some(vault)),
             None => (zeroize::Zeroizing::new(initial.content.clone()), None),
         };
+        // Pre-fill priority:
+        //   `Some(s)` -- caller is being explicit; empty/whitespace-only values
+        //     shorten to `""` and through the save pipeline null out the column.
+        //   `None`   -- the password dialog saw no edit; fall back to the row's
+        //     stored alias so an idle unlock doesn't change the alias.
+        let initial_label = initial
+            .public_label
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let start_with_label = match prefilled_label.as_deref() {
+            Some(p) => p.trim().to_owned(),
+            None => initial_label.clone(),
+        };
+        let label_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Public label (optional)")
+                .default_value(start_with_label.clone())
+        });
         let content = cx.new(|cx| {
             let mut text = TextareaState::new(window, cx);
             text.set_value(original_plain.to_string(), window, cx);
@@ -143,6 +180,8 @@ impl ClipboardEditor {
             store,
             initial,
             content,
+            label: label_state,
+            original_label: Some(start_with_label),
             parent,
             original_plain,
             vault,
@@ -170,9 +209,11 @@ impl ClipboardEditor {
         if self.saving {
             return;
         }
-        if self.content.read(cx).value().as_str() != self.original_plain.as_str()
-            && !self.confirm_discard
-        {
+        let content_changed =
+            self.content.read(cx).value().as_str() != self.original_plain.as_str();
+        let label_changed =
+            self.label.read(cx).value().as_str() != self.original_label.as_deref().unwrap_or("");
+        if (content_changed || label_changed) && !self.confirm_discard {
             self.confirm_discard = true;
             self.error = Some(
                 "Unsaved changes. Press Esc again or Cancel to discard; Save keeps them.".into(),
@@ -187,10 +228,25 @@ impl ClipboardEditor {
             return;
         }
         let text = zeroize::Zeroizing::new(self.content.read(cx).value().to_string());
-        if *text == *self.original_plain {
+        // Read the label before we commit to saving so we can diff it against the
+        // pre-fill on this same open -- "label-only changes" still go through the
+        // store so the user's edit isn't lost the moment they rescue a stuck alias.
+        let raw_label = self.label.read(cx).value();
+        let label_trimmed = raw_label.trim().to_string();
+        let label_changed = Some(label_trimmed.as_str()) != self.original_label.as_deref();
+        let content_changed = text.as_str() != self.original_plain.as_str();
+        if !content_changed && !label_changed {
             self.close(window, cx);
             return;
         }
+        // Move the trimmed label into the spawned task so its lifetime is not
+        // tied to the editor borrow; `Some("")` and `Some("   ") reduce to NULL
+        // inside the storage layer.
+        let label_for_storage: Option<String> = if label_changed {
+            Some(label_trimmed)
+        } else {
+            None
+        };
         self.saving = true;
         self.error = None;
         cx.notify();
@@ -199,13 +255,34 @@ impl ClipboardEditor {
         let parent = self.parent.clone();
         let vault = self.vault.clone();
         cx.spawn_in(window, async move |entity, cx| {
+            // Re-borrow the storage path with the label value held by the task.
+            let label_ref: Option<&str> = label_for_storage.as_deref();
             let result = async {
                 if let Some(vault) = vault {
                     let sealed = vault.seal_for_storage(text.as_bytes())?.ok_or_else(|| anyhow::anyhow!("Authorization expired; reopen to unlock"))?;
-                    store.compare_exchange_protected_content_bound(initial.id, &initial.content, &sealed.ciphertext, text.len() as i64, crate::utils::time::now_unix_millis(), &sealed.vault_envelope).await
+                    store
+                        .compare_exchange_protected_content_bound(
+                            initial.id,
+                            &initial.content,
+                            &sealed.ciphertext,
+                            text.len() as i64,
+                            crate::utils::time::now_unix_millis(),
+                            &sealed.vault_envelope,
+                            label_ref,
+                        )
+                        .await
                 } else {
                     // Compare-and-swap is atomic with edited retention and rejects protection/deletion races.
-                    store.compare_exchange_content(initial.id, &initial.content, &text, text.len() as i64, crate::utils::time::now_unix_millis()).await
+                    store
+                        .compare_exchange_content(
+                            initial.id,
+                            &initial.content,
+                            &text,
+                            text.len() as i64,
+                            crate::utils::time::now_unix_millis(),
+                            label_ref,
+                        )
+                        .await
                 }
             }.await;
             let _ = entity.update_in(cx, |this, window, cx| {
@@ -237,6 +314,19 @@ impl Render for ClipboardEditor {
                     .h(px(200.0))
                     .min_h_0()
                     .child(Textarea::new(&self.content).size_full()),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(Input::new(&self.label).w_full().small())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "Public alias shown in history without unlocking. Leave empty to clear; do not include secrets.",
+                            ),
+                    ),
             )
             .when(self.error.is_some(), |body| {
                 body.child(if self.confirm_discard {

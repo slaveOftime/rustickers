@@ -191,15 +191,7 @@ mod tests {
     #[test]
     fn clipboard_child_json_flag_belongs_to_child_not_parent() {
         let cli = Cli::try_parse_from([
-            "rst",
-            "cp",
-            "ls",
-            "--id",
-            "42",
-            "--",
-            "tool",
-            "--json",
-            "{{cp}}",
+            "rst", "cp", "ls", "--id", "42", "--", "tool", "--json", "{{cp}}",
         ])
         .expect("parse child argv");
         assert!(!cli.format().is_json());

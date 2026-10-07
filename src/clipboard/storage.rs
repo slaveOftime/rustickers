@@ -103,7 +103,13 @@ pub trait ClipboardHistoryStore: Send + Sync {
         now_ms: i64,
     ) -> Result<()>;
 
+    #[allow(clippy::too_many_arguments)]
     /// Save against the exact content read by the editor; fails on delete or concurrent edit.
+    ///
+    /// `label` is the public alias the row should carry after the save. Pass `Some(s)`
+    /// to set `public_label = trim(s)` (or `NULL` when the trimmed string is empty);
+    /// pass `None` to leave the column untouched. Empty-string and whitespace-only
+    /// values always normalise to `NULL`, mirroring the protect path.
     async fn compare_exchange_content(
         &self,
         id: i64,
@@ -111,6 +117,7 @@ pub trait ClipboardHistoryStore: Send + Sync {
         replacement: &str,
         byte_size: i64,
         now_ms: i64,
+        label: Option<&str>,
     ) -> Result<()>;
 
     /// Protected edits must supply fresh ciphertext and the ciphertext read on opening.
@@ -123,8 +130,12 @@ pub trait ClipboardHistoryStore: Send + Sync {
         now_ms: i64,
     ) -> Result<()>;
 
+    #[allow(clippy::too_many_arguments)]
     /// Generation-bound counterpart of protected editing. Seal the replacement and capture
     /// its vault envelope together; ciphertext from a stale cached vault must not be stored.
+    ///
+    /// `label` follows the same convention as `compare_exchange_content`: `Some(s)` sets
+    /// the trimmed value (or `NULL` when empty), `None` leaves the column untouched.
     async fn compare_exchange_protected_content_bound(
         &self,
         id: i64,
@@ -133,6 +144,7 @@ pub trait ClipboardHistoryStore: Send + Sync {
         byte_size: i64,
         now_ms: i64,
         expected_vault_envelope: &str,
+        label: Option<&str>,
     ) -> Result<()>;
     async fn mark_used(&self, id: i64, now_ms: i64) -> Result<()>;
 
@@ -749,11 +761,14 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         replacement: &str,
         byte_size: i64,
         now_ms: i64,
+        label: Option<&str>,
     ) -> Result<()> {
         ensure!(
             byte_size == replacement.len() as i64,
             "clipboard byte size must match content"
         );
+        // Some("") / Some("   ") reduce to None; None leaves the column untouched.
+        let normalised_label: Option<&str> = label.map(str::trim).filter(|s| !s.is_empty());
         let affected = sqlx::query(
             "UPDATE clipboard_items SET content = ?1,
             byte_size = ?2, content_bytes = ?2,
@@ -775,6 +790,20 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
             affected == 1,
             "clipboard row changed or was deleted; reload before saving"
         );
+        // Apply the label update for `Some(...)`: the editor read the row at
+        // open time and is now writing back, so the user is being authoritative.
+        // Bind `NULL` when the caller passed whitespace/empty so `Some("")`
+        // becomes a "clear", not a no-op. `None` is a separate signal that
+        // means "column untouched" -- we exercise it when the labelled save
+        // races with content-only saves.
+        if label.is_some() {
+            sqlx::query("UPDATE clipboard_items SET public_label = ?1 WHERE id = ?2")
+                .bind(normalised_label)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .context("update public_label")?;
+        }
         Ok(())
     }
 
@@ -798,9 +827,12 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         byte_size: i64,
         now_ms: i64,
         expected_vault_envelope: &str,
+        label: Option<&str>,
     ) -> Result<()> {
         super::vault::validate_sealed(replacement)?;
         ensure!(byte_size >= 0, "clipboard byte size cannot be negative");
+        // Some("") / Some("   ") reduce to None; None leaves the column untouched.
+        let normalised_label: Option<&str> = label.map(str::trim).filter(|s| !s.is_empty());
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         Self::require_vault_generation(&mut tx, expected_vault_envelope).await?;
         let affected = sqlx::query("UPDATE clipboard_items SET protected_envelope = ?1,
@@ -814,6 +846,19 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
             affected == 1,
             "protected row changed or was deleted; reload before saving"
         );
+        // The encrypt path already binds `public_label` into the same UPDATE; for
+        // encrypted edits, the editor surfaces this label in the unprotect-protected
+        // handoff. Some(...) writes the authoritative value (NULL passes through to
+        // the column, so whitespace-only inputs become a clear). None skips so
+        // the column is left alone.
+        if label.is_some() {
+            sqlx::query("UPDATE clipboard_items SET public_label = ?1 WHERE id = ?2")
+                .bind(normalised_label)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .context("update public_label")?;
+        }
         tx.commit().await?;
         Ok(())
     }

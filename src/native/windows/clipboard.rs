@@ -40,6 +40,10 @@ struct PasswordPrompt {
     id: i64,
     action: AuthorizedAction,
     expected_plaintext: Option<zeroize::Zeroizing<String>>,
+    /// The label pre-filled into the dialog at open time. `submit_password`
+    /// forwards only typed differences into the editor so an untouched
+    /// input doesn't accidentally overwrite the row's stored label.
+    prefilled_label: Option<String>,
 }
 enum AuthorizedResult {
     Protected,
@@ -631,7 +635,7 @@ impl ClipboardChooserWidget {
         }
         self.editor_open = true;
         let parent = cx.weak_entity();
-        if editor::open(window, cx, self.store.clone(), item, parent, None).is_err() {
+        if editor::open(window, cx, self.store.clone(), item, parent, None, None).is_err() {
             self.status_error = true;
             self.editor_open = false;
             self.status = "Could not open the editor. Try again.".into();
@@ -677,11 +681,35 @@ impl ClipboardChooserWidget {
         self.status.clear();
         self.status_warning = false;
         self.password_error = None;
-        self.label.update(cx, |p, cx| p.set_value("", window, cx));
+        // Pre-fill the label input. Protect starts blank (user types fresh);
+        // Edit pre-fills with the row's current alias so the user only has to
+        // adjust when they want a change.
+        let preset_label = if matches!(action, AuthorizedAction::Edit) {
+            self.selected_item()
+                .filter(|item| item.id == id)
+                .and_then(|item| item.public_label.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let placeholder = if matches!(action, AuthorizedAction::Edit) {
+            "Public label (optional)"
+        } else {
+            "Public label (required)"
+        };
+        self.label.update(cx, |p, cx| {
+            p.set_placeholder(gpui::SharedString::from(placeholder), window, cx);
+            p.set_value(&preset_label, window, cx);
+        });
         self.prompt = Some(PasswordPrompt {
             id,
             action,
             expected_plaintext,
+            prefilled_label: if matches!(action, AuthorizedAction::Edit) {
+                Some(preset_label)
+            } else {
+                Some(String::new())
+            },
         });
         self.password
             .update(cx, |p, cx| p.set_value("", window, cx));
@@ -725,6 +753,7 @@ impl ClipboardChooserWidget {
         window.open_dialog(cx, move |dialog, window, cx| {
             let this = entity.read(cx);
             let protecting = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Protect));
+            let editing = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Edit));
             let unprotecting = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Unprotect));
             let creating = this.creating_vault;
             let label = this.label.clone();
@@ -736,7 +765,13 @@ impl ClipboardChooserWidget {
             let cancel = entity.clone();
             let closed = entity.clone();
             dialog
-                .title(if creating { "Set up clipboard vault" } else if protecting { "Protect clipboard item" } else if unprotecting { "Remove item protection" } else { "Unlock clipboard item" })
+                .title(
+                    if creating { "Set up clipboard vault" }
+                    else if protecting { "Protect clipboard item" }
+                    else if editing { "Edit clipboard item" }
+                    else if unprotecting { "Remove item protection" }
+                    else { "Unlock clipboard item" },
+                )
                 .w(window.viewport_size().width.min(px(400.0)) - px(32.0))
                 .text_sm()
                 .overlay_closable(false)
@@ -751,22 +786,39 @@ impl ClipboardChooserWidget {
                 })
                 .child(v_flex().gap_3()
                     .child(div().text_color(cx.theme().muted_foreground).child(
-                        if creating { "Choose a master password to securely encrypt your clipboard items." } else if protecting { "Enter your master password to encrypt this item." }
-                        else if unprotecting { "Enter your master password to remove encryption from this item." } else { "Enter your master password to use this protected item." }))
+                        if creating { "Choose a master password to securely encrypt your clipboard items." }
+                        else if protecting { "Enter your master password to encrypt this item." }
+                        else if editing { "Enter your master password to edit and (optionally) relabel this item." }
+                        else if unprotecting { "Enter your master password to remove encryption from this item." }
+                        else { "Enter your master password to use this protected item." }))
                     .when(creating, |body| body.child(Alert::warning("clipboard-vault-setup", "No clipboard vault exists yet. Keep your master password safe: it cannot be recovered or reset to unlock existing items.").small()))
-                    .when(protecting, |body| body.child(Input::new(&label).disabled(busy).w_full())
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Visible in history without unlocking. Do not include secrets.")))
+                    // The label field is shared between Protect (required) and Edit
+                    // (optional). Same input, same hint, same style; only the
+                    // empty-check in `submit_password` differs.
+                    .when(protecting || editing, |body| body.child(Input::new(&label).disabled(busy).w_full()))
+                    .when(protecting || editing, |body| body.child(
+                        div().text_xs().text_color(cx.theme().muted_foreground)
+                            .child("Visible in history without unlocking. Do not include secrets."),
+                    ))
                     .child(Input::new(&password).disabled(busy).w_full())
                     .when(creating, |body| body.child(Input::new(&confirmation).disabled(busy).w_full()))
                     .when(error.is_some(), |body| body.child(Alert::error("clipboard-password-error", error.unwrap_or_default()).small()))
                     .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
                         if protecting { "This item is encrypted only after you confirm. Existing backups may still contain the original text." }
-                        else if unprotecting { "The item will be stored as plain text and ordinary history limits will apply unless pinned or edited." } else { "Authorization is temporary. Protected copies clear after 30 seconds if unchanged." })))
+                        else if editing { "Authorization is temporary. The label persists with the row; leave empty to clear it." }
+                        else if unprotecting { "The item will be stored as plain text and ordinary history limits will apply unless pinned or edited." }
+                        else { "Authorization is temporary. Protected copies clear after 30 seconds if unchanged." })))
                 .footer(h_flex().items_center().gap_2()
                     .child(div().flex_1().text_xs().text_color(cx.theme().muted_foreground).child("Enter confirm · Esc cancel"))
                     .child(Button::new("cancel-authorization").label("Cancel").small().disabled(busy)
                         .on_click(move |_, window, cx| cancel.update(cx, |this, cx| this.cancel_prompt(window, cx))))
-                    .child(Button::new("authorize-item").label(if creating { "Create vault & protect" } else if protecting { "Protect" } else if unprotecting { "Remove protection" } else { "Unlock" }).primary().small().loading(busy).disabled(busy)
+                    .child(Button::new("authorize-item").label(
+                        if creating { "Create vault & protect" }
+                        else if protecting { "Protect" }
+                        else if editing { "Edit" }
+                        else if unprotecting { "Remove protection" }
+                        else { "Unlock" },
+                    ).primary().small().loading(busy).disabled(busy)
                         .on_click(move |_, window, cx| submit.update(cx, |this, cx| this.submit_password(window, cx)))))
         });
     }
@@ -800,6 +852,12 @@ impl ClipboardChooserWidget {
         let action = prompt.action;
         let expected_plaintext = prompt.expected_plaintext.clone();
         let label = self.label.read(cx).value().trim().to_owned();
+        let prefilled_label = prompt
+            .prefilled_label
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_owned();
         if matches!(action, AuthorizedAction::Protect) && label.is_empty() {
             self.password_error = Some("Enter a public label for this item.".into());
             self.label.update(cx, |p, cx| p.focus(window, cx));
@@ -930,7 +988,21 @@ impl ClipboardChooserWidget {
                         this.password.update(cx, |p, cx| p.set_value("", window, cx));
                         this.editor_open = true;
                         let parent = cx.weak_entity();
-                        if editor::open(window, cx, this.store.clone(), item, parent, Some((text, vault.clone()))).is_err() { this.editor_open = false; vault.lock(); this.status_error = true; this.status = "Could not open the encrypted editor.".into(); }
+                        // Forward the label only when it differs from the dialog's
+                        // pre-fill. An untouched input -> `None` so the editor
+                        // leaves the column alone (no overwrite). A clearance ->
+                        // `Some("")` so the store normalises it to NULL.
+                        let typed_label = this.label.read(cx).value().trim().to_owned();
+                        let prefilled_label = if typed_label == prefilled_label {
+                            None
+                        } else {
+                            Some(typed_label)
+                        };
+                        if editor::open(window, cx, this.store.clone(), item, parent, Some((text, vault.clone())), prefilled_label).is_err() { this.editor_open = false; vault.lock(); this.status_error = true; this.status = "Could not open the encrypted editor.".into(); }
+                        // Drop the dialog's label input back to empty so the next
+                        // protect/unprotect pass doesn't leak a stale draft into the
+                        // wrong prompt.
+                        this.label.update(cx, |p, cx| p.set_value("", window, cx));
                     }
                     Err(err) => {
                         show_chooser(window);
@@ -1121,6 +1193,12 @@ impl ClipboardChooserWidget {
         let item = &self.rows[self.filtered[index]];
         let pinned = item.retention.explicit();
         let locked = protected(item);
+        // The persistent pin badge: any reason retention holds (pinned OR
+        // edited) shows the pin icon -- unless the row is locked, in which
+        // case the lock icon wins. The badge is always visible regardless of
+        // hover; the existing actions row already disables the pin button on
+        // locked items, so there's no visual conflict.
+        let show_pin_badge = item.retention.is_retained() && !locked;
         let disabled = self.busy || self.prompt.is_some() || self.editor_open;
         let hovered = self.hovered_row == Some(item.id);
         let id = item.id;
@@ -1256,6 +1334,14 @@ impl ClipboardChooserWidget {
                     .truncate()
                     .child(display_preview(item)),
             )
+            .when(show_pin_badge, |row| {
+                row.child(
+                    Icon::new(IconName::Pin)
+                        .flex_shrink_0()
+                        .with_size(px(14.0))
+                        .text_color(cx.theme().muted_foreground),
+                )
+            })
             .when(hovered || locked, |row| row.child(actions))
             .into_any_element()
     }
