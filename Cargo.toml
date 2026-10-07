@@ -93,25 +93,6 @@ name = "rst"
 path = "src/rst.rs"
 required-features = ["cli"]
 
-[[example]]
-name = "clipboard_ux_smoke"
-required-features = ["ui"]
-
-# Walks the visible-top-level windows of the current process and writes a
-# PNG via `PrintWindow` + `GetDIBits`. Used only by `examples/clipboard_ux_smoke.rs`
-# when the operator passes `--screenshot`. The OS-screenshot path is opt-in
-# because it adds ~30 s of clean-build time on cold dev machines.
-[target.'cfg(target_os = "windows")'.dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Storage_Xps",
-    "Win32_System_Threading",
-    "Win32_UI_WindowsAndMessaging",
-] }
-windows-core = "0.62"
-
 [dependencies]
 crossterm = { version = "0.29", features = ["use-dev-tty"], optional = true }
 # GPUI Kit single consumer entry point. Kit re-exports the gpui-pre family
