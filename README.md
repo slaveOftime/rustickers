@@ -36,7 +36,6 @@ rst cp show --id 42                     # exact text, no extra newline
 rst cp rm 42                            # release ordinary saved/edit retention
 rst cp add --protect --stdin            # authorize, encrypt, then store piped text
 rst vault create                        # choose a master password (hidden prompts)
-rst vault unlock                        # verify it for one command run
 rst vault status                        # does a vault exist; how CLI authorization works
 ```
 
@@ -59,9 +58,9 @@ closed and leave **Copy only** available.
 
 Protected adds are encrypted before insertion and never fall back to ordinary history.
 Protected text is not searchable; only an explicitly public alias is visible. The master
-password is managed in the desktop app or with `rst vault`; CLI password authorization is
-scoped to that invocation, **not shared with the desktop process**, and `rst vault unlock`
-verifies a password rather than unlocking subsequent commands. Automatic
+password is managed in the desktop app or with `rst vault create`; CLI password authorization
+is scoped to that invocation, **not shared with the desktop process** — a protected command
+prompts for the password when it needs it. Automatic
 collection pauses whenever protected history exists until safe protected recapture matching
 is implemented.
 

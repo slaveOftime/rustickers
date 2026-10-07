@@ -20,7 +20,7 @@ use crate::storage::paths::AppPaths;
 #[derive(clap::Args, Debug)]
 #[command(
     about = "Manage the encrypted clipboard vault",
-    after_help = "Examples:\n  rst vault create                       choose a master password (hidden prompts)\n  rst vault unlock                       verify it for one command run\n  rst vault status                     what exists, what is authorized\n\nThe password is only ever typed on the terminal: never argv, stdin, or the environment.\nThe master password cannot be reset — forgetting it makes protected items unreadable."
+    after_help = "Examples:\n  rst vault create                       choose a master password (hidden prompts)\n  rst vault status                     what exists, how CLI authorization works\n\nThe password is only ever typed on the terminal: never argv, stdin, or the environment.\nProtected commands prompt for it when they need it, for that command only.\nThe master password cannot be reset — forgetting it makes protected items unreadable."
 )]
 pub struct VaultArgs {
     #[command(subcommand)]
@@ -31,12 +31,6 @@ pub struct VaultArgs {
 pub enum VaultAction {
     /// Choose a master password; never overwrites an existing vault
     Create,
-
-    /// Verify the password; the answer lasts for this one command only
-    Unlock,
-
-    /// Report the lock state (every CLI run starts locked, so this is a no-op)
-    Lock,
 
     /// Show whether a vault exists and how CLI authorization works
     Status,
@@ -71,8 +65,8 @@ pub fn run(paths: &AppPaths, args: VaultArgs, format: Format) -> Result<()> {
                 || {
                     if configured {
                         println!(
-                            "Vault: configured. Each CLI run starts locked; `rst vault unlock` \
-                             verifies the password for that run only."
+                            "Vault: configured. Commands that touch protected history prompt \
+                             for the password, for that run only."
                         );
                     } else {
                         println!(
@@ -106,24 +100,6 @@ pub fn run(paths: &AppPaths, args: VaultArgs, format: Format) -> Result<()> {
                 )
             });
         }
-        VaultAction::Unlock => {
-            unlock(&controller)?;
-            format.emit(json!({"state": "verified", "scope": "this CLI invocation"}), || {
-                println!(
-                    "Password verified. This authorization dies with the command; the desktop \
-                     app keeps its own lock."
-                )
-            });
-        }
-        VaultAction::Lock => {
-            controller.lock();
-            format.emit(json!({"state": "locked", "scope": "this CLI invocation"}), || {
-                println!(
-                    "Nothing to do: every CLI run starts locked and this one is. Lock the \
-                     desktop vault from its chooser."
-                )
-            });
-        }
     }
     Ok(())
 }
@@ -147,7 +123,7 @@ mod tests {
     #[test]
     fn every_action_parses() {
         // First element is argv[0], then `vault <ACTION>`.
-        for action in ["create", "unlock", "lock", "status"] {
+        for action in ["create", "status"] {
             let parsed = TestCli::try_parse_from(["rst", "vault", action]).unwrap();
             let TestCommand::Vault(args) = parsed.command else {
                 panic!()
@@ -156,6 +132,9 @@ mod tests {
         }
         assert!(TestCli::try_parse_from(["rst", "vault"]).is_err());
         assert!(TestCli::try_parse_from(["rst", "vault", "delete-everything"]).is_err());
+        // Removed actions must no longer parse; unlocking happens per command, not on demand.
+        assert!(TestCli::try_parse_from(["rst", "vault", "unlock"]).is_err());
+        assert!(TestCli::try_parse_from(["rst", "vault", "lock"]).is_err());
     }
 
     #[test]
