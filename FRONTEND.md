@@ -358,7 +358,7 @@ fail-closed pause on protected history is enforced by the storage
 | Per-monitor DPI | `--flash` UX smoke + native window handles; verify at integration time, not via `cargo test`. |
 | Single-instance IPC | `ipc::SingleInstance::acquire("rustickers")` in `src/rustickers.rs`. The secondary process `connect_and_signal`s the primary and exits. |
 | Global hotkeys | `src/native/hotkey.rs` dispatcher; routes through `IpcEvent` rather than per-window registration. |
-| WebView lifecycle | `SimpleWebView::try_new` is fallible (`Result<Entity<Self>, String>`); the file preview propagates `Err` into `this.error = Some(...)`. |
+| WebView lifecycle | `SimpleWebView::try_new` is fallible (`Result<Entity<Self>, String>`); the file preview propagates `Err` into `this.error = Some(...)`. The HTML preview also requires `GPUI_DISABLE_DIRECT_COMPOSITION=true` on Windows at startup; `run_native` sets it before `gpui::application()` constructs the platform so the embedded wry `WebView` composes into a visible slot. Skip the override if the operator already set the variable. |
 | Paste-destination restoration | The chooser captures the focused window id at hotkey time and passes it through `use_selected(...)` so `foreground(destination)` lands on the original app. |
 | Confirm-then-forget | `remove_selected` in `clipboard.rs` fans out a `confirm_remove(...)` dialog when the row is protected or retained; ordinary disposable rows delete instantly. |
 
@@ -370,7 +370,7 @@ Local baseline on a clean tree:
 
 ```
 cargo test --locked --features cli
-→ 190 lib + 18 storage + 3 palette + 1 placement = 212 passed
+→ 190 lib + 19 storage + 3 palette + 1 placement = 213 passed
                                                        + 1 ignored (interactive)
 ```
 

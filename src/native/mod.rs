@@ -30,6 +30,26 @@ pub fn run_native(
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
 ) {
+    // Required for the embedded wry WebView to render on Windows: the GPUI
+    // Windows platform reads `GPUI_DISABLE_DIRECT_COMPOSITION` once at
+    // construction (see `gpui-pre-windows-0.3.8/src/platform.rs`), so the
+    // variable must be set before `gpui::application()` returns. When
+    // direct-composition is on, the WebView's child surface paints behind
+    // a slot the GPUI compositor never redraws into, which is the
+    // "blank HTML preview" symptom the file sticker has on Windows.
+    // Carrying this from the kit's webview example verbatim. We don't
+    // override the variable if the operator already set it, so an
+    // environment with a known-good direct-composition build keeps
+    // its value.
+    #[cfg(target_os = "windows")]
+    {
+        if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
+            unsafe {
+                std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
+            }
+        }
+    }
+
     let app = gpui::application()
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
