@@ -492,17 +492,16 @@ impl MainWindow {
                     h_flex()
                         .justify_end()
                         .gap_2()
-                        .child(
-                            Button::new("cancel")
-                                .label("Cancel")
-                                .on_click(|_, window, cx| {
-                                    window.close_dialog(cx);
-                                }),
-                        )
+                        .child(Button::new("cancel").label("Cancel").small().on_click(
+                            |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
                         .child(
                             Button::new("delete-sticker")
                                 .danger()
                                 .label("Delete")
+                                .small()
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let store = store.clone();

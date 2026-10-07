@@ -1152,15 +1152,19 @@ impl ClipboardChooserWidget {
                     h_flex()
                         .gap_2()
                         .justify_end()
-                        .child(Button::new("cancel-forget").label("Cancel").on_click(
-                            |_, window, cx| {
-                                window.close_dialog(cx);
-                            },
-                        ))
+                        .child(
+                            Button::new("cancel-forget")
+                                .label("Cancel")
+                                .small()
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
                         .child(
                             Button::new("confirm-forget")
                                 .label("Forget")
                                 .danger()
+                                .small()
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let store = store.clone();
