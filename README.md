@@ -179,8 +179,7 @@ Log level precedence:
 cargo fmt          --all -- --check
 cargo check        --locked --features ui
 cargo clippy       --locked --features ui
-cargo test         --locked --features cli          # 212 passed, 1 ignored
-cargo build        --locked --features ui --example clipboard_ux_smoke
+cargo test         --locked --features cli          # 213 passed, 1 ignored
 ```
 
 CI also runs the same gates across Windows, Ubuntu, and macOS, plus a parity check that

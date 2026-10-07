@@ -80,10 +80,10 @@ src/
 tests/
   clipboard_storage.rs  ← 18 privacy regression tests -- DO NOT regress
   sticker_palette.rs    ← 3 StickerColor regression tests
-examples/
-  clipboard_ux_smoke.rs ← isolated visual smoke harness
 .github/workflows/ci.yml
 .cargo/                    (configurations, ignored by git)
+scripts/
+  screenshot.ps1        ← Windows capture helper for visual checks
 ```
 
 Adding a new family: drop `mod <family>;` into `src/native/components/stickers/mod.rs`,
@@ -386,7 +386,6 @@ cargo check        --locked --features ui
 cargo clippy       --locked --features ui
 cargo test         --locked --no-default-features --features cli
 cargo test         --locked --features cli
-cargo build        --locked --features ui --example clipboard_ux_smoke
 ```
 
 Plus a metalava-like check that `cargo tree --features ui` contains
@@ -395,17 +394,23 @@ exactly one `gpui-pre` family.
 UI integration tests via `#[gpui_kit::test]` are deferred:
 `gpui-kit`'s `test-support` depends on `gpui_web` (`wasm`) whose
 `unicode-properties = ^0.1.3` conflicts with the closure-locked
-`^0.1.4`. Visual flows are covered by `clipboard_ux_smoke.rs`.
+`^0.1.4`. Visual flows fall back to the dev-loop recipe under
+`.agents/skills/gpui-visual-check/` plus the bundled
+`scripts/screenshot.ps1`.
 
 ---
 
 ## 13. Reference skill catalog
 
 ```text
-.agents/skills/gpui-kit/                SKILL.md + references/
-                                       (coding-guides, conventions, recipes, gpui/**)
-.pi/skills/gpui-kit-design-guides/      SKILL.md + references/design-guides.md
-skills-lock.json                       source URL + computed hash per skill
+.agents/skills/
+  ├─ gpui-kit/                  SKILL.md + references/
+  │                             (coding-guides, conventions, recipes, gpui/**)
+  ├─ gpui-kit-design-guides/    SKILL.md + references/design-guides.md
+  └─ gpui-visual-check/         SKILL.md
+scripts/screenshot.ps1          Windows capture helper for the dev-loop
+                               recipes described by gpui-visual-check
+skills-lock.json                source URL + computed hash per skill
 docs/plans/gpui-kit-upgrade{,-goal}.md  (deleted; absorbed by this doc)
 docs/plans/clipboard-{coding,design}-guides.md  (deleted; absorbed by this doc)
 README.md, ARCHITECTURE.md             read these for what the app does and store/IPC contracts
