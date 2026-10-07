@@ -137,10 +137,9 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
         Commands::Show(args) => commands::show::run(app_paths, args, format),
         Commands::Cp { command } => match command {
             commands::cp::CpCommand::Ls(args) => commands::cp::run(app_paths, args, format),
-            commands::cp::CpCommand::Import(args) => commands::cp::import(app_paths, args, format),
-            commands::cp::CpCommand::Forget(args) => commands::cp::forget(app_paths, args, format),
+            commands::cp::CpCommand::Add(args) => commands::cp::add(app_paths, args, format),
+            commands::cp::CpCommand::Rm(args) => commands::cp::rm(app_paths, args, format),
             commands::cp::CpCommand::Show(args) => commands::cp::show(app_paths, args, format),
-            commands::cp::CpCommand::Vault(args) => commands::cp::vault(app_paths, args, format),
         },
         Commands::Result(args) => commands::result::run(app_paths, args, format),
         Commands::Open(args) => commands::window::open(app_paths, args, format),

@@ -30,13 +30,11 @@ rst cp ls --list -n 20                  # readable recent-history table
 rst cp ls --list --json                 # one machine-readable JSON object
 rst cp ls -- rg -F -- '{{cp}}' .         # pick and substitute into argv
 rst cp ls --id 42 -- my-tool            # append the exact text as one argument
-rst cp import 'text from a script'
-rst cp import --stdin                   # read a pipeline without trimming it
+rst cp add 'text from a script'
+rst cp add --stdin                      # read a pipeline without trimming it
 rst cp show --id 42                     # exact text, no extra newline
-rst cp forget 42                        # release ordinary saved/edit retention
-rst cp vault create                     # hidden master-password setup
-rst cp import --protect --stdin        # authorize, encrypt, then store piped text
-rst cp vault status
+rst cp rm 42                            # release ordinary saved/edit retention
+rst cp add --protect --stdin            # authorize, encrypt, then store piped text
 ```
 
 Quote `'{{cp}}'` in PowerShell/POSIX shells, or `"{{cp}}"` in Windows cmd. The CLI
@@ -56,10 +54,10 @@ and confirms irreversible deletes (pinned, edited, or protected rows) before app
 Verified automatic paste is currently Windows-only; unavailable or lost destinations fail
 closed and leave **Copy only** available.
 
-Protected imports are encrypted before insertion and never fall back to ordinary history.
-Protected text is not searchable; only an explicitly public alias is visible. CLI password
-authorization is scoped to that invocation, **not shared with the desktop process**;
-`cp vault unlock` verifies a password rather than unlocking subsequent commands. Automatic
+Protected adds are encrypted before insertion and never fall back to ordinary history.
+Protected text is not searchable; only an explicitly public alias is visible. The master
+password is created and managed in the desktop app; CLI password authorization is scoped
+to that invocation, **not shared with the desktop process**. Automatic
 collection pauses whenever protected history exists until safe protected recapture matching
 is implemented.
 

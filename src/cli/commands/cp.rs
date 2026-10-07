@@ -14,7 +14,7 @@ use crate::clipboard::{
     argv, filter,
     items::{ClipboardItem, ClipboardItemKind},
     storage::{ClipboardHistoryStore, RetentionFlag, SqliteClipboardStore, UpsertOutcome},
-    vault_controller::{VaultController, VaultState},
+    vault_controller::VaultController,
 };
 use crate::storage::paths::AppPaths;
 
@@ -34,13 +34,11 @@ pub enum CpCommand {
     #[command(visible_alias = "list")]
     Ls(CpArgs),
     /// Add text to history (or pipe text with --stdin).
-    Import(ImportArgs),
+    Add(AddArgs),
     /// Remove reservation/edit retention; protected items remain protected.
-    Forget(ForgetArgs),
+    Rm(RmArgs),
     /// Print live clipboard text, or an exact history value with --id.
     Show(ShowTextArgs),
-    /// Manage the master password for encrypted history.
-    Vault(VaultArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -67,19 +65,19 @@ pub struct CpArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ImportArgs {
+pub struct AddArgs {
     /// Read exact text from stdin.
     #[arg(long, conflicts_with = "value")]
     pub stdin: bool,
-    /// Text to record, unchanged.
-    #[arg(value_name = "VALUE", required_unless_present = "stdin")]
+    /// Text to record, unchanged. Values starting with `-` are kept as text.
+    #[arg(value_name = "VALUE", required_unless_present = "stdin", allow_hyphen_values = true)]
     pub value: Option<String>,
     /// Encrypt before writing; prompts for the master password on the terminal.
     #[arg(long)]
     pub protect: bool,
 }
 #[derive(clap::Args, Debug)]
-pub struct ForgetArgs {
+pub struct RmArgs {
     #[arg(value_name = "ID")]
     pub id: i64,
 }
@@ -88,22 +86,6 @@ pub struct ShowTextArgs {
     /// Print this history value instead of the live clipboard.
     #[arg(long, value_name = "ID")]
     pub id: Option<i64>,
-}
-#[derive(clap::Args, Debug)]
-pub struct VaultArgs {
-    #[command(subcommand)]
-    pub action: VaultAction,
-}
-#[derive(clap::Subcommand, Debug)]
-pub enum VaultAction {
-    /// Set up a master password (never overwrites an existing vault).
-    Create,
-    /// Check the password; authorization lasts only for this CLI invocation.
-    Unlock,
-    /// CLI invocations start locked; use the GUI to lock its own session.
-    Lock,
-    /// Show persisted configuration (CLI unlock state is never shared).
-    Status,
 }
 
 fn open_store(paths: &AppPaths) -> Result<Arc<dyn ClipboardHistoryStore>> {
@@ -118,7 +100,7 @@ fn require_password(prompt: &str) -> Result<Zeroizing<String>> {
 
 fn unlock(controller: &VaultController) -> Result<()> {
     if block_on(controller.envelope())?.is_none() {
-        bail!("no master password configured; run `rst cp vault create` first");
+        bail!("no master password configured; create one in the desktop app first");
     }
     let password = require_password("Master password: ")?;
     if !block_on(controller.unlock(&password))? {
@@ -163,7 +145,7 @@ pub fn run(paths: &AppPaths, args: CpArgs, format: Format) -> Result<()> {
     } else {
         if snapshot.is_empty() {
             bail!(
-                "no clipboard history yet; enable collection in the desktop app or use `rst cp import <TEXT>`"
+                "no clipboard history yet; enable collection in the desktop app or use `rst cp add <TEXT>`"
             );
         }
         choose(&snapshot, args.search.as_deref().unwrap_or(""))?.ok_or(ExitCode(130))?
@@ -252,7 +234,7 @@ fn run_list(
     })).collect();
     format.emit(json!({"items": payload, "count": rows.len(), "search": search}), || {
         if rows.is_empty() {
-            println!("{}", if search.is_some() { "No matching clipboard items." } else { "No clipboard history yet. Enable collection in the desktop app, or use cp import <TEXT>." });
+            println!("{}", if search.is_some() { "No matching clipboard items." } else { "No clipboard history yet. Enable collection in the desktop app, or use cp add <TEXT>." });
             return;
         }
         let cells: Vec<_> = rows.iter().map(|row| vec![row.id.to_string(), safe_preview(&row.preview_text(), 72), row.byte_size.to_string(), {
@@ -267,7 +249,7 @@ fn run_list(
     Ok(())
 }
 
-pub fn import(paths: &AppPaths, args: ImportArgs, format: Format) -> Result<()> {
+pub fn add(paths: &AppPaths, args: AddArgs, format: Format) -> Result<()> {
     let value = Zeroizing::new(if args.stdin {
         let mut text = String::new();
         io::stdin()
@@ -278,7 +260,7 @@ pub fn import(paths: &AppPaths, args: ImportArgs, format: Format) -> Result<()> 
         args.value.context("provide VALUE or --stdin")?
     });
     if !crate::clipboard::items::is_collectable(&value) {
-        bail!("cannot import empty or whitespace-only text");
+        bail!("cannot add empty or whitespace-only text");
     }
     if value.contains('\0') {
         bail!("clipboard text cannot contain a NUL byte");
@@ -305,7 +287,7 @@ pub fn import(paths: &AppPaths, args: ImportArgs, format: Format) -> Result<()> 
         let settings = block_on(store.settings())?;
         if settings.normal_byte_limit > 0 && bytes > settings.normal_byte_limit {
             bail!(
-                "text exceeds ordinary history byte limit ({} > {}); nothing imported",
+                "text exceeds ordinary history byte limit ({} > {}); nothing added",
                 bytes,
                 settings.normal_byte_limit
             );
@@ -328,7 +310,7 @@ pub fn import(paths: &AppPaths, args: ImportArgs, format: Format) -> Result<()> 
             println!(
                 "{} #{id} · {bytes} bytes{}",
                 if outcome == "inserted" {
-                    "Imported"
+                    "Added"
                 } else {
                     "Updated"
                 },
@@ -339,7 +321,7 @@ pub fn import(paths: &AppPaths, args: ImportArgs, format: Format) -> Result<()> 
     Ok(())
 }
 
-pub fn forget(paths: &AppPaths, args: ForgetArgs, format: Format) -> Result<()> {
+pub fn rm(paths: &AppPaths, args: RmArgs, format: Format) -> Result<()> {
     let store = open_store(paths)?;
     let row = block_on(store.get(args.id))?;
     if row.kind == ClipboardItemKind::Protected {
@@ -374,61 +356,15 @@ pub fn show(paths: &AppPaths, args: ShowTextArgs, format: Format) -> Result<()> 
     Ok(())
 }
 
-pub fn vault(paths: &AppPaths, args: VaultArgs, format: Format) -> Result<()> {
-    let controller = VaultController::new(open_store(paths)?);
-    match args.action {
-        VaultAction::Status => {
-            let configured = block_on(controller.envelope())?.is_some();
-            let state = if configured { "locked" } else { "unconfigured" };
-            format.emit(json!({"state": state, "has_master_password": configured, "scope": "this CLI invocation"}), || println!("Vault: {state}. CLI authorization is not shared with the desktop app."));
-        }
-        VaultAction::Create => {
-            if !matches!(block_on(controller.snapshot()), VaultState::Unconfigured) {
-                bail!(
-                    "master password already configured; change it in the desktop app (existing ciphertext must keep its data key)"
-                );
-            }
-            let password = require_password("New master password: ")?;
-            if password.is_empty() {
-                bail!("master password must not be empty");
-            }
-            let confirm = require_password("Confirm password: ")?;
-            if password != confirm {
-                bail!("passwords do not match; nothing changed");
-            }
-            block_on(controller.create(&password))?;
-            format.emit(json!({"state": "locked"}), || {
-                println!("Master password created. Protected commands will prompt when needed.")
-            });
-        }
-        VaultAction::Unlock => {
-            unlock(&controller)?;
-            format.emit(json!({"state": "verified", "scope": "this CLI invocation"}), || println!("Password verified. Each protected command authorizes separately; the desktop vault is unchanged."));
-        }
-        VaultAction::Lock => {
-            controller.lock();
-            format.emit(
-                json!({"state": "locked", "scope": "this CLI invocation"}),
-                || {
-                    println!(
-                        "This CLI invocation is locked. Lock the desktop vault from its chooser."
-                    )
-                },
-            );
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
 
     #[derive(Parser, Debug)]
-    struct TestCli {
+    pub(crate) struct TestCli {
         #[command(subcommand)]
-        command: CpCommand,
+        pub(crate) command: CpCommand,
     }
 
     #[test]
@@ -448,14 +384,43 @@ mod tests {
     fn parser_accepts_search_without_list_and_rejects_discarded_commands() {
         assert!(TestCli::try_parse_from(["cp", "ls", "-s", "rust"]).is_ok());
         assert!(TestCli::try_parse_from(["cp", "ls", "--list", "--", "echo"]).is_err());
-        assert!(TestCli::try_parse_from(["cp", "import"]).is_err());
-        assert!(TestCli::try_parse_from(["cp", "import", "--stdin"]).is_ok());
+        assert!(TestCli::try_parse_from(["cp", "add"]).is_err());
+        assert!(TestCli::try_parse_from(["cp", "add", "--stdin"]).is_ok());
+    }
+
+    #[test]
+    fn parser_keeps_flag_like_text_as_value() {
+        // Clipboard content very often starts with a dash; it must arrive as text, not as options.
+        for text in ["--json", "-n 5", "--protect-but-not"] {
+            let parsed = TestCli::try_parse_from(["cp", "add", text]).unwrap();
+            let CpCommand::Add(args) = parsed.command else {
+                panic!()
+            };
+            assert_eq!(args.value.as_deref(), Some(text));
+            assert!(!args.protect);
+        }
+    }
+
+    #[test]
+    fn parser_still_accepts_protect_and_stdin_flags() {
+        let parsed = TestCli::try_parse_from(["cp", "add", "--protect", "secret"]).unwrap();
+        let CpCommand::Add(args) = parsed.command else {
+            panic!()
+        };
+        assert!(args.protect);
+        assert_eq!(args.value.as_deref(), Some("secret"));
+        assert!(matches!(
+            TestCli::try_parse_from(["cp", "rm", "42"]).unwrap().command,
+            CpCommand::Rm(RmArgs { id: 42 })
+        ));
     }
 }
 
 #[cfg(test)]
 mod regression_tests {
+    use super::tests::TestCli;
     use super::*;
+    use clap::Parser;
 
     fn paths(tmp: &tempfile::TempDir) -> AppPaths {
         AppPaths {
@@ -463,13 +428,26 @@ mod regression_tests {
         }
     }
 
+    fn add_text(paths: &AppPaths, text: &str) {
+        add(
+            paths,
+            AddArgs {
+                stdin: false,
+                value: Some(text.into()),
+                protect: false,
+            },
+            Format::Json,
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn failed_protected_import_never_stores_plaintext() {
+    fn failed_protected_add_never_stores_plaintext() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths(&tmp);
-        let error = import(
+        let error = add(
             &paths,
-            ImportArgs {
+            AddArgs {
                 stdin: false,
                 value: Some("must remain secret".into()),
                 protect: true,
@@ -486,27 +464,18 @@ mod regression_tests {
     }
 
     #[test]
-    fn import_preserves_exact_payload_and_rejects_nul() {
+    fn add_preserves_exact_payload_and_rejects_nul() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths(&tmp);
         let text = "  Mixed CASE\n日本語\t\"$() & ;\"  ";
-        import(
-            &paths,
-            ImportArgs {
-                stdin: false,
-                value: Some(text.into()),
-                protect: false,
-            },
-            Format::Json,
-        )
-        .unwrap();
+        add_text(&paths, text);
         let rows = block_on(open_store(&paths).unwrap().snapshot()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].content, text);
         assert!(
-            import(
+            add(
                 &paths,
-                ImportArgs {
+                AddArgs {
                     stdin: false,
                     value: Some("bad\0text".into()),
                     protect: false
@@ -524,12 +493,68 @@ mod regression_tests {
     }
 
     #[test]
-    fn missing_program_preserves_127_and_does_not_promote() {
+    fn add_rejects_empty_and_whitespace_only_text() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths(&tmp);
-        import(
+        for blank in ["", "   ", "\n\t "] {
+            assert!(
+                add(
+                    &paths,
+                    AddArgs {
+                        stdin: false,
+                        value: Some(blank.into()),
+                        protect: false
+                    },
+                    Format::Json
+                )
+                .is_err(),
+                "expected rejection of {blank:?}"
+            );
+        }
+        assert!(
+            block_on(open_store(&paths).unwrap().snapshot())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn add_hyphen_prefixed_text_end_to_end() {
+        // The parser-level guarantee, verified through the real store: flag-like text lands verbatim.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths(&tmp);
+        let parsed = TestCli::try_parse_from(["cp", "add", "--grep --flags -x"]).unwrap();
+        let CpCommand::Add(args) = parsed.command else {
+            panic!()
+        };
+        add(&paths, args, Format::Json).unwrap();
+        let rows = block_on(open_store(&paths).unwrap().snapshot()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].content, "--grep --flags -x");
+    }
+
+    #[test]
+    fn add_moves_existing_duplicate_to_top() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths(&tmp);
+        add_text(&paths, "first");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        add_text(&paths, "second");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        add_text(&paths, "first"); // same text again: must refresh recency, not duplicate
+        let rows = block_on(open_store(&paths).unwrap().snapshot()).unwrap();
+        assert_eq!(rows.len(), 2, "duplicate text must upsert, not insert");
+        assert_eq!(rows[0].content, "first");
+        assert!(rows[0].last_copied_at >= rows[1].last_copied_at);
+    }
+
+    #[test]
+    fn add_reports_ids_and_json_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths(&tmp);
+        add(
             &paths,
-            ImportArgs {
+            AddArgs {
                 stdin: false,
                 value: Some("payload".into()),
                 protect: false,
@@ -537,6 +562,18 @@ mod regression_tests {
             Format::Json,
         )
         .unwrap();
+        let row = block_on(open_store(&paths).unwrap().snapshot())
+            .unwrap()
+            .remove(0);
+        assert_eq!(row.content, "payload");
+        assert_eq!(row.byte_size, 7);
+    }
+
+    #[test]
+    fn missing_program_preserves_127_and_does_not_promote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths(&tmp);
+        add_text(&paths, "payload");
         let store = open_store(&paths).unwrap();
         let row = block_on(store.snapshot()).unwrap().remove(0);
         let error = run(
@@ -561,7 +598,7 @@ mod regression_tests {
     }
 
     #[test]
-    fn forget_rejects_protected_ciphertext() {
+    fn rm_rejects_protected_ciphertext() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths(&tmp);
         let store = open_store(&paths).unwrap();
@@ -582,7 +619,7 @@ mod regression_tests {
         let id = match outcome {
             UpsertOutcome::Inserted { id } | UpsertOutcome::Updated { id } => id,
         };
-        assert!(forget(&paths, ForgetArgs { id }, Format::Json).is_err());
+        assert!(rm(&paths, RmArgs { id }, Format::Json).is_err());
         let row = block_on(store.get(id)).unwrap();
         assert_eq!(row.kind, ClipboardItemKind::Protected);
         assert!(row.retention.protected_);
@@ -594,16 +631,7 @@ mod regression_tests {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths(&tmp);
         let text = "日本語\nquotes \" ' ; $(not code) & --json";
-        import(
-            &paths,
-            ImportArgs {
-                stdin: false,
-                value: Some(text.into()),
-                protect: false,
-            },
-            Format::Json,
-        )
-        .unwrap();
+        add_text(&paths, text);
         let store = open_store(&paths).unwrap();
         let row = block_on(store.snapshot()).unwrap().remove(0);
         let output = tmp.path().join("received.txt");
