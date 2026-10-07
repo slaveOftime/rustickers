@@ -22,6 +22,7 @@ fn insert_then_snapshot_round_trips() {
         &SqliteClipboardStore::ordinary_digest("alpha content"),
         13,
         1_700_000_000_000,
+        None,
     ))
     .expect("insert first");
     let id_first = match first {
@@ -35,6 +36,7 @@ fn insert_then_snapshot_round_trips() {
         &SqliteClipboardStore::ordinary_digest("beta content"),
         12,
         1_700_000_001_000,
+        None,
     ))
     .expect("insert second");
     let id_second = match second {
@@ -56,14 +58,14 @@ fn digest_dedupe_returns_existing_row() {
     let store = block_on(SqliteClipboardStore::open(tmp.path().join("clip.db"))).expect("open");
 
     let digest = SqliteClipboardStore::ordinary_digest("dup");
-    let id1 = match block_on(store.upsert_ordinary("dup", "dup", &digest, 3, 1_700_000_000_000))
+    let id1 = match block_on(store.upsert_ordinary("dup", "dup", &digest, 3, 1_700_000_000_000, None))
         .expect("first")
     {
         rustickers::clipboard::storage::UpsertOutcome::Inserted { id } => id,
         other => panic!("expected Inserted, got {other:?}"),
     };
 
-    let id2 = match block_on(store.upsert_ordinary("dup", "dup", &digest, 3, 1_700_000_010_000))
+    let id2 = match block_on(store.upsert_ordinary("dup", "dup", &digest, 3, 1_700_000_010_000, None))
         .expect("second")
     {
         rustickers::clipboard::storage::UpsertOutcome::Updated { id } => id,
@@ -90,6 +92,7 @@ fn setting_retention_flags_protects_against_evict() {
         &SqliteClipboardStore::ordinary_digest("pinned"),
         "pinned".len() as i64,
         1_700_000_000_000,
+        None,
     ))
     .expect("insert")
     {
@@ -176,6 +179,7 @@ fn insert(store: &SqliteClipboardStore, text: &str, time: i64) -> i64 {
             &SqliteClipboardStore::ordinary_digest(text),
             text.len() as i64,
             time,
+            None,
         ))
         .unwrap(),
     )
@@ -302,7 +306,8 @@ fn protected_storage_never_exposes_plaintext_and_cannot_orphan_vault() {
             secret,
             &SqliteClipboardStore::ordinary_digest(secret),
             secret.len() as i64,
-            30
+            30,
+            None,
         ))
         .is_err()
     );
@@ -459,7 +464,8 @@ fn ordinary_upsert_and_lowered_limits_trim_atomically_without_touching_retained(
             "oversized",
             &SqliteClipboardStore::ordinary_digest("oversized"),
             9,
-            50
+            50,
+            None,
         ))
         .is_err()
     );
@@ -561,6 +567,7 @@ fn reset_generation_rejects_stale_insert_and_protection_without_mutation() {
             &sealed.ciphertext,
             &sealed.vault_envelope,
             None,
+            None,
         ))
         .is_err()
     );
@@ -575,6 +582,7 @@ fn reset_generation_rejects_stale_insert_and_protection_without_mutation() {
         "ordinary",
         &fresh.ciphertext,
         &fresh.vault_envelope,
+        None,
         Some("  Saved command  "),
     ))
     .unwrap();
@@ -619,6 +627,7 @@ fn protection_cas_preserves_identity_retention_and_recency_and_clears_live_plain
             &sealed.ciphertext,
             &sealed.vault_envelope,
             None,
+            None,
         ))
         .is_err()
     );
@@ -627,6 +636,7 @@ fn protection_cas_preserves_identity_retention_and_recency_and_clears_live_plain
         &before.content,
         &sealed.ciphertext,
         &sealed.vault_envelope,
+        None,
         None,
     ))
     .unwrap();
@@ -666,6 +676,7 @@ fn protection_cas_preserves_identity_retention_and_recency_and_clears_live_plain
             &sealed.ciphertext,
             &sealed.vault_envelope,
             None,
+            None,
         ))
         .is_err()
     );
@@ -676,6 +687,7 @@ fn protection_cas_preserves_identity_retention_and_recency_and_clears_live_plain
             &before.content,
             &sealed.ciphertext,
             &sealed.vault_envelope,
+            None,
             None,
         ))
         .is_err()
@@ -808,4 +820,134 @@ fn authenticated_unprotection_is_atomic_and_preserves_pin() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn authorized_recapture_promotes_protected_row_and_lets_new_text_through() {
+    use rustickers::clipboard::storage::UpsertOutcome;
+    use rustickers::clipboard::vault_controller::VaultController;
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let store: std::sync::Arc<dyn ClipboardHistoryStore> =
+        std::sync::Arc::new(block_on(SqliteClipboardStore::open(tmp.path().join("clip.db"))).expect("open"));
+    let controller = VaultController::new(store.clone());
+    block_on(controller.create("password")).unwrap();
+    assert!(block_on(controller.unlock("password")).unwrap());
+
+    let secret = "recapture secret";
+    let sealed = controller.seal_for_storage(secret.as_bytes()).unwrap().unwrap();
+    let token = controller.match_token(secret.as_bytes()).unwrap().unwrap();
+    let protected_id = inserted_id(
+        block_on(store.upsert_protected_bound(
+            None,
+            None,
+            Some(&token),
+            &sealed.ciphertext,
+            secret.len() as i64,
+            10,
+            &sealed.vault_envelope,
+        ))
+        .unwrap(),
+    );
+
+    // Without an authorized token the ordinary write still fails closed.
+    assert!(block_on(store.upsert_ordinary(
+        secret,
+        secret,
+        &SqliteClipboardStore::ordinary_digest(secret),
+        secret.len() as i64,
+        20,
+        None
+    ))
+    .is_err());
+
+    // Authorized and identical to the protected content: the protected row is promoted and no
+    // plaintext copy is ever written.
+    let outcome = block_on(store.upsert_ordinary(
+        secret,
+        secret,
+        &SqliteClipboardStore::ordinary_digest(secret),
+        secret.len() as i64,
+        30,
+        Some(&token),
+    ))
+    .unwrap();
+    match outcome {
+        UpsertOutcome::Updated { id } => assert_eq!(id, protected_id),
+        other => panic!("expected promotion of the protected row, got {other:?}"),
+    }
+    assert_eq!(block_on(store.snapshot()).unwrap().len(), 1);
+    assert!(block_on(store.get(protected_id)).unwrap().retention.protected_);
+
+    // Authorized and different: the token proves absence, so ordinary collection proceeds.
+    let fresh = "an ordinary later copy";
+    let fresh_token = controller.match_token(fresh.as_bytes()).unwrap().unwrap();
+    let outcome = block_on(store.upsert_ordinary(
+        fresh,
+        fresh,
+        &SqliteClipboardStore::ordinary_digest(fresh),
+        fresh.len() as i64,
+        40,
+        Some(&fresh_token),
+    ))
+    .unwrap();
+    match outcome {
+        UpsertOutcome::Inserted { .. } => {}
+        other => panic!("expected Inserted for non-matching text, got {other:?}"),
+    }
+    assert_eq!(block_on(store.snapshot()).unwrap().len(), 2);
+}
+
+#[test]
+fn protecting_a_row_stores_its_token_for_later_recapture() {
+    use rustickers::clipboard::vault_controller::VaultController;
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let store: std::sync::Arc<dyn ClipboardHistoryStore> =
+        std::sync::Arc::new(block_on(SqliteClipboardStore::open(tmp.path().join("clip.db"))).expect("open"));
+    let text = "about to be protected";
+    let id = {
+        use rustickers::clipboard::storage::UpsertOutcome;
+        match block_on(store.upsert_ordinary(
+            text,
+            text,
+            &SqliteClipboardStore::ordinary_digest(text),
+            text.len() as i64,
+            10,
+            None,
+        ))
+        .unwrap()
+        {
+            UpsertOutcome::Inserted { id } => id,
+            other => panic!("{other:?}"),
+        }
+    };
+    let controller = VaultController::new(store.clone());
+    block_on(controller.create("password")).unwrap();
+    assert!(block_on(controller.unlock("password")).unwrap());
+    let sealed = controller.seal_for_storage(text.as_bytes()).unwrap().unwrap();
+    let token = controller.match_token(text.as_bytes()).unwrap().unwrap();
+    block_on(store.compare_exchange_protection(
+        id,
+        text,
+        &sealed.ciphertext,
+        &sealed.vault_envelope,
+        Some(&token),
+        None,
+    ))
+    .unwrap();
+
+    // The token survived protecting, so an authorized recapture of the same text promotes the
+    // protected row instead of writing plaintext back.
+    let outcome = block_on(store.upsert_ordinary(
+        text,
+        text,
+        &SqliteClipboardStore::ordinary_digest(text),
+        text.len() as i64,
+        20,
+        Some(&token),
+    ))
+    .unwrap();
+    assert!(matches!(outcome, rustickers::clipboard::storage::UpsertOutcome::Updated { id: promoted } if promoted == id));
+    assert_eq!(block_on(store.get(id)).unwrap().content, sealed.ciphertext);
 }

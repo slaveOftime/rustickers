@@ -909,7 +909,11 @@ impl ClipboardChooserWidget {
                         anyhow::ensure!(current.kind == ClipboardItemKind::Plain && current.content == **expected, "Item changed; reload before protecting");
                         let sealed = vault_for_work.seal_for_storage(expected.as_bytes())?
                             .ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
-                        store_for_work.compare_exchange_protection(id, expected, &sealed.ciphertext, &sealed.vault_envelope, Some(&label)).await?;
+                        // Persist the keyed token so later authorized collection can recognise
+                        // this content and keep it out of ordinary plaintext rows.
+                        let token = vault_for_work.match_token(expected.as_bytes())?
+                            .ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
+                        store_for_work.compare_exchange_protection(id, expected, &sealed.ciphertext, &sealed.vault_envelope, Some(&token), Some(&label)).await?;
                         return Ok::<_, anyhow::Error>(AuthorizedResult::Protected);
                     }
                     anyhow::ensure!(current.kind == ClipboardItemKind::Protected, "Item changed; reload before use");
@@ -973,7 +977,7 @@ impl ClipboardChooserWidget {
                     }
                     Ok(AuthorizedResult::Protected) => {
                         this.cancel_prompt(window, cx);
-                        this.status_error = false; this.status = "Item protected. Collection is paused to prevent recapturing it.".into();
+                        this.status_error = false; this.status = "Item protected. Future copies need the vault unlocked to join ordinary history.".into();
                         // Erase the stale chooser snapshot before the asynchronous refresh.
                         for row in this.rows.iter_mut().filter(|row| row.id == id) {
                             row.content.clear(); row.plain_preview = None;

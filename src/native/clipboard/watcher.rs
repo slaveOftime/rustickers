@@ -135,6 +135,7 @@ pub async fn persist_capture(
     store: &dyn ClipboardHistoryStore,
     captured: &CapturedText,
     settings: &ClipboardSettings,
+    authorized_match_token: Option<&str>,
 ) -> anyhow::Result<Option<i64>> {
     if !settings.capture_enabled {
         return Ok(None);
@@ -157,7 +158,7 @@ pub async fn persist_capture(
     let digest = SqliteClipboardStore::ordinary_digest(&captured.content);
     let now = crate::utils::time::now_unix_millis();
     let outcome = store
-        .upsert_ordinary(&captured.content, &preview, &digest, byte_size, now)
+        .upsert_ordinary(&captured.content, &preview, &digest, byte_size, now, authorized_match_token)
         .await?;
     let id = match outcome {
         UpsertOutcome::Inserted { id } | UpsertOutcome::Updated { id } => id,
@@ -220,6 +221,7 @@ impl WatcherHandle {
         self,
         filter: Arc<CaptureFilter>,
         store: Arc<dyn ClipboardHistoryStore>,
+        vault: Option<Arc<crate::clipboard::vault_controller::VaultController>>,
     ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new().name("clipboard-watcher".into()).spawn(move || {
             let mut last_seen = LastSeenText::new();
@@ -234,7 +236,11 @@ impl WatcherHandle {
                     // capture-save path and from the chooser side, never from
                     // a poll gate.
                     let has_protected = futures::executor::block_on(store.has_protected_items())?;
-                    if !settings.capture_enabled || has_protected {
+                    // Protected history only pauses collection while the vault is locked: an
+                    // unlocked vault can produce the authorized match token that keeps recapture
+                    // safe (see SqliteClipboardStore::upsert_ordinary).
+                    let authorized = vault.as_ref().is_some_and(|vault| vault.is_unlocked());
+                    if !settings.capture_enabled || (has_protected && !authorized) {
                         active = false;
                         // Notify only on transitions: emitting the pause signal
                         // every tick would force the chooser to refresh
@@ -243,11 +249,11 @@ impl WatcherHandle {
                             last_has_protected = Some(has_protected);
                             push_watcher_signal(WatcherSignal::CapturePaused);
                         }
-                        set_capture_status(if has_protected { "Collection paused: protected history requires a safe recapture match check." }
+                        set_capture_status(if has_protected { "Collection paused: unlock the vault to keep collecting alongside protected history." }
                             else { "Collection paused. Enable to capture copied text (including secrets)." });
                         return Ok(());
                     }
-                    last_has_protected = Some(false);
+                    last_has_protected = Some(has_protected);
                     if !active { last_seen = LastSeenText::new(); last_generation = None; active = true; }
                     let transaction = filter.transaction();
                     let before = clipboard_generation();
@@ -275,7 +281,16 @@ impl WatcherHandle {
                             // writes. Update the returned id when persist_capture
                                 // exposes it; see the WatcherSignal::Captured
                                 // arm below for the queueing pattern.
-                            futures::executor::block_on(persist_capture(&*store, &captured, &settings))?;
+                            // With protected rows present the write must carry the keyed token;
+                            // the vault was verified unlocked at the gate above.
+                            let token = if has_protected {
+                                vault.as_ref().and_then(|vault| vault.match_token(captured.content.as_bytes()).ok().flatten())
+                            } else { None };
+                            if has_protected && token.is_none() {
+                                set_capture_status("Collection paused: the vault lock expired mid-copy; unlock it to keep collecting.");
+                                return Ok(());
+                            }
+                            futures::executor::block_on(persist_capture(&*store, &captured, &settings, token.as_deref()))?;
                             push_watcher_signal(WatcherSignal::Captured);
                         }
                     } else { last_seen = LastSeenText::new(); }

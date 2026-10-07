@@ -58,11 +58,13 @@ closed and leave **Copy only** available.
 
 Protected adds are encrypted before insertion and never fall back to ordinary history.
 Protected text is not searchable; only an explicitly public alias is visible. The master
-password is managed in the desktop app or with `rst vault create`; CLI password authorization
-is scoped to that invocation, **not shared with the desktop process** — a protected command
-prompts for the password when it needs it. Automatic
-collection pauses whenever protected history exists until safe protected recapture matching
-is implemented.
+password is shared between the CLI and the desktop app (one vault, created in either place);
+CLI password authorization is scoped to that invocation, **not shared with the desktop
+process** — a protected command prompts for the password when it needs it. While protected
+items exist, every ordinary add is checked against them with a key derived from that password:
+text identical to a protected item refreshes the protected row and never lands in ordinary
+history, and anything else collects normally. Unattended desktop collection stays paused until
+the vault is unlocked, so a background tick can never write a recaptured secret as plaintext.
 
 > Encryption does not erase copies held by other apps, the OS clipboard history, backups,
 > or pre-encryption database artifacts. Vault grace periods, audit trails, and rotation

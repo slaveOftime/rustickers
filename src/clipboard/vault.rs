@@ -121,6 +121,24 @@ impl UnlockedVault {
         Ok(format!("{}:{}", base64_nonce(nonce_bytes), encoded))
     }
 
+    /// Keyed duplicate-detection token: hex(HMAC-SHA256(data_key, domain || plaintext)). Only an
+    /// unlocked vault can produce or confirm one, so a protected row can be matched against a
+    /// candidate copy without decrypting anything and without a reusable content hash. Domain
+    /// separation keeps this token from ever being interchangeable with ciphertext.
+    pub fn match_token(&self, plaintext: &[u8]) -> String {
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.data_key.as_ref());
+        let mut context = ring::hmac::Context::with_key(&key);
+        context.update(b"rustickers-match-v1\n");
+        context.update(plaintext);
+        let tag = context.sign();
+        let mut out = String::with_capacity(64);
+        for byte in tag.as_ref() {
+            use std::fmt::Write;
+            let _ = write!(&mut out, "{byte:02x}");
+        }
+        out
+    }
+
     /// Inverse of [`seal`]. Returns the plaintext wrapped in a [`Zeroizing`] buffer; the caller
     /// is responsible for dropping the buffer (or moving it to a feature-gated scratch area).
     pub fn open(&self, sealed: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -307,6 +325,21 @@ impl Drop for UnlockedVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_token_is_keyed_stable_and_distinct() {
+        let vault = create_envelope("master").expect("create");
+        let token = vault.match_token(b"secret text");
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+        // Stable for the same key and content; different content never collides.
+        assert_eq!(token, vault.match_token(b"secret text"));
+        assert_ne!(token, vault.match_token(b"secret texu"));
+        // And only this vault's key can reproduce it: a second vault proves the token is keyed,
+        // not a plain content hash.
+        let other = create_envelope("master").expect("create");
+        assert_ne!(token, other.match_token(b"secret text"));
+    }
 
     #[test]
     fn create_then_unlock_round_trips() {

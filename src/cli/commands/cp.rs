@@ -254,44 +254,38 @@ pub fn add(paths: &AppPaths, args: AddArgs, format: Format) -> Result<()> {
     let store = open_store(paths)?;
     let bytes = value.len() as i64;
     let now = crate::utils::time::now_unix_millis();
-    let outcome = if args.protect {
+    let (outcome, protected_row) = if args.protect {
         let controller = VaultController::new(store.clone());
         unlock(&controller)?;
         let sealed = controller
             .seal_for_storage(value.as_bytes())?
             .context("vault locked before encryption")?;
-        block_on(store.upsert_protected_bound(
-            None,
-            None,
-            None,
-            &sealed.ciphertext,
-            bytes,
-            now,
-            &sealed.vault_envelope,
-        ))?
-    } else {
-        let settings = block_on(store.settings())?;
-        if settings.normal_byte_limit > 0 && bytes > settings.normal_byte_limit {
-            bail!(
-                "text exceeds ordinary history byte limit ({} > {}); nothing added",
+        // Store the keyed token with the ciphertext so later authorized ordinary writes can
+        // recognise this content without decrypting it.
+        let token = controller
+            .match_token(value.as_bytes())?
+            .context("vault locked before encryption")?;
+        (
+            block_on(store.upsert_protected_bound(
+                None,
+                None,
+                Some(&token),
+                &sealed.ciphertext,
                 bytes,
-                settings.normal_byte_limit
-            );
-        }
-        block_on(store.upsert_ordinary(
-            &value,
-            &safe_preview(&value, 240),
-            &SqliteClipboardStore::ordinary_digest(&value),
-            bytes,
-            now,
-        ))?
+                now,
+                &sealed.vault_envelope,
+            ))?,
+            true,
+        )
+    } else {
+        add_ordinary(store.clone(), &value, bytes, now)?
     };
     let (id, outcome) = match outcome {
         UpsertOutcome::Inserted { id } => (id, "inserted"),
         UpsertOutcome::Updated { id } => (id, "updated"),
     };
     format.emit(
-        json!({"id": id, "outcome": outcome, "protected": args.protect, "byte_size": bytes}),
+        json!({"id": id, "outcome": outcome, "protected": protected_row, "byte_size": bytes}),
         || {
             println!(
                 "{} #{id} · {bytes} bytes{}",
@@ -300,11 +294,89 @@ pub fn add(paths: &AppPaths, args: AddArgs, format: Format) -> Result<()> {
                 } else {
                     "Updated"
                 },
-                if args.protect { " · 🔒 Protected" } else { "" }
+                if protected_row { " · 🔒 Protected" } else { "" }
             )
         },
     );
     Ok(())
+}
+
+/// Write plain text into ordinary history. While protected rows exist the write is authorized
+/// through the shared vault — the same master password the desktop app uses — so the CLI and the
+/// desktop never diverge on what "collectable" means.
+fn add_ordinary(
+    store: Arc<dyn ClipboardHistoryStore>,
+    value: &str,
+    bytes: i64,
+    now: i64,
+) -> Result<(UpsertOutcome, bool)> {
+    let settings = block_on(store.settings())?;
+    if settings.normal_byte_limit > 0 && bytes > settings.normal_byte_limit {
+        bail!(
+            "text exceeds ordinary history byte limit ({} > {}); nothing added",
+            bytes,
+            settings.normal_byte_limit
+        );
+    }
+    let protected: Vec<_> = block_on(store.snapshot())?
+        .into_iter()
+        .filter(|row| row.kind == ClipboardItemKind::Protected)
+        .collect();
+    let token = if protected.is_empty() {
+        None
+    } else {
+        let controller = VaultController::new(store.clone());
+        unlock(&controller)?;
+        match authorize_recapture(&store, &controller, &protected, value, now)? {
+            Authorization::Promoted(outcome) => return Ok((outcome, true)),
+            Authorization::Token(token) => Some(token),
+        }
+    };
+    let outcome = block_on(store.upsert_ordinary(
+        value,
+        &safe_preview(value, 240),
+        &SqliteClipboardStore::ordinary_digest(value),
+        bytes,
+        now,
+        token.as_deref(),
+    ))?;
+    Ok((outcome, false))
+}
+
+enum Authorization {
+    /// The exact text already lives on a protected row; that row was promoted instead of a
+    /// plaintext copy being written.
+    Promoted(UpsertOutcome),
+    /// The text is proven absent from protected history; keyed token for the ordinary write.
+    Token(String),
+}
+
+/// Decide what an ordinary write means while protected rows exist, given an already-unlocked
+/// controller. Rows written before match tokens existed carry a NULL token, so each protected
+/// row is also decrypted and compared directly — with the vault unlocked that is exactly what
+/// "authorized" means, and it covers legacy rows. Split out from [`add_ordinary`] so tests can
+/// pass a pre-unlocked controller instead of hitting the terminal prompt.
+fn authorize_recapture(
+    store: &Arc<dyn ClipboardHistoryStore>,
+    controller: &VaultController,
+    protected: &[ClipboardItem],
+    value: &str,
+    now: i64,
+) -> Result<Authorization> {
+    for row in protected {
+        let bytes = controller
+            .open(&row.content)?
+            .context("vault locked before decrypting")?;
+        if std::str::from_utf8(&bytes).map(|text| text == value).unwrap_or(false) {
+            // Promote the protected row's recency; never write a plaintext copy.
+            block_on(store.mark_used(row.id, now))?;
+            return Ok(Authorization::Promoted(UpsertOutcome::Updated { id: row.id }));
+        }
+    }
+    let token = controller
+        .match_token(value.as_bytes())?
+        .context("vault locked during authorization")?;
+    Ok(Authorization::Token(token))
 }
 
 pub fn rm(paths: &AppPaths, args: RmArgs, format: Format) -> Result<()> {
@@ -581,6 +653,69 @@ mod regression_tests {
         .unwrap_err();
         assert_eq!(error.downcast_ref::<ExitCode>().unwrap().0, 127);
         assert_eq!(block_on(store.get(row.id)).unwrap().last_used_at, None);
+    }
+
+    #[test]
+    fn recapture_with_protected_history_promotes_or_authorizes() {
+        // The bug this guards: while any protected row existed, every ordinary `cp add` failed
+        // with "ordinary collection paused". The shared master password now authorizes the
+        // write: identical text promotes the protected row, anything else gets a keyed token.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = paths(&tmp);
+        let store = open_store(&paths).unwrap();
+        let controller = VaultController::new(store.clone());
+        block_on(controller.create("test-master-password")).unwrap();
+        assert!(block_on(controller.unlock("test-master-password")).unwrap());
+        let secret = "vaulted text";
+        let sealed = controller.seal_for_storage(secret.as_bytes()).unwrap().unwrap();
+        let token = controller.match_token(secret.as_bytes()).unwrap().unwrap();
+        let protected_id = match block_on(store.upsert_protected_bound(
+            None,
+            None,
+            Some(&token),
+            &sealed.ciphertext,
+            secret.len() as i64,
+            1,
+            &sealed.vault_envelope,
+        ))
+        .unwrap()
+        {
+            UpsertOutcome::Inserted { id } | UpsertOutcome::Updated { id } => id,
+        };
+        let protected: Vec<_> = block_on(store.snapshot())
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.kind == ClipboardItemKind::Protected)
+            .collect();
+
+        match authorize_recapture(&store, &controller, &protected, secret, 50).unwrap() {
+            Authorization::Promoted(UpsertOutcome::Updated { id }) => assert_eq!(id, protected_id),
+            other => panic!("expected the protected row to be promoted, got a token instead"),
+        }
+        assert!(block_on(store.get(protected_id)).unwrap().last_used_at.is_some());
+        assert_eq!(
+            block_on(store.snapshot()).unwrap().len(),
+            1,
+            "no plaintext copy of the protected text may exist"
+        );
+
+        let different = match authorize_recapture(&store, &controller, &protected, "brand new", 60)
+        {
+            Ok(Authorization::Token(token)) => token,
+            other => panic!("expected a keyed token for fresh text, got {other:?}"),
+        };
+        assert_eq!(different.len(), 64);
+        // And the storage layer accepts the ordinary write with that token.
+        block_on(store.upsert_ordinary(
+            "brand new",
+            "brand new",
+            &SqliteClipboardStore::ordinary_digest("brand new"),
+            9,
+            60,
+            Some(&different),
+        ))
+        .unwrap();
+        assert_eq!(block_on(store.snapshot()).unwrap().len(), 2);
     }
 
     #[test]

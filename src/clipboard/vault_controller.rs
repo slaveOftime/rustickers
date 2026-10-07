@@ -275,6 +275,29 @@ impl VaultController {
             vault_envelope: unlocked.envelope().serialize()?,
         }))
     }
+
+    /// Keyed match token for authorized recapture matching ([`UnlockedVault::match_token`] /
+    /// [`SqliteClipboardStore::upsert_ordinary`]). Returns `Ok(None)` when locked or expired,
+    /// exactly like [`seal`]: an unattended caller treats the absence of a token as
+    /// "not authorized" and fails closed.
+    ///
+    /// [`SqliteClipboardStore::upsert_ordinary`]: crate::clipboard::storage::SqliteClipboardStore::upsert_ordinary
+    pub fn match_token(&self, plaintext: &[u8]) -> Result<Option<String>> {
+        let mut guard = self
+            .unlocked
+            .lock()
+            .map_err(|_| anyhow!("vault mutex poisoned"))?;
+        if crate::utils::time::now_unix_millis() >= self.active_until_unix_ms.load(Ordering::SeqCst)
+        {
+            *guard = None;
+            return Ok(None);
+        }
+        let Some(unlocked) = guard.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(unlocked.match_token(plaintext)))
+    }
+
     /// Inverse of [`seal`]. Returns `Ok(None)` when the vault is currently locked so callers can
     /// distinguish *sealed-but-unavailable* from *sealed-and-decryptable*.
     pub fn open(&self, envelope: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {

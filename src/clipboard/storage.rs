@@ -35,6 +35,13 @@ pub trait ClipboardHistoryStore: Send + Sync {
     /// Insert or update a row by content identity. The implementation decides whether the content
     /// is already present (plain-text digest for ordinary rows, the supplied match token for
     /// protected rows). Returns the row id and whether the row was newly created.
+    ///
+    /// While any protected row exists, an ordinary write must carry `authorized_match_token`
+    /// (a keyed token from the unlocked vault, see [`super::vault::UnlockedVault::match_token`]).
+    /// A token that matches a protected row refreshes that row instead of storing a plaintext
+    /// copy; a non-matching token proves the content is absent from protected history and the
+    /// ordinary insert proceeds. Without a token the write fails closed, which is what pauses
+    /// unattended collection.
     async fn upsert_ordinary(
         &self,
         content: &str,
@@ -42,6 +49,7 @@ pub trait ClipboardHistoryStore: Send + Sync {
         plaintext_digest: &str,
         byte_size: i64,
         now_ms: i64,
+        authorized_match_token: Option<&str>,
     ) -> Result<UpsertOutcome>;
 
     /// Store ciphertext only. Plaintext previews are rejected. An optional caller-authenticated
@@ -73,12 +81,15 @@ pub trait ClipboardHistoryStore: Send + Sync {
     /// Protect an existing ordinary row without changing its identity, recency, or independent
     /// retention reasons. Rejects stale content, deletion, and concurrent vault reset/rewrap.
     /// Clears live plaintext columns only; this does not guarantee historical disk erasure.
+    /// `match_token` is the keyed token ([`super::vault::UnlockedVault::match_token`]) of the
+    /// protected content, so later authorized ordinary writes can recognise it without decrypting.
     async fn compare_exchange_protection(
         &self,
         id: i64,
         expected_plaintext: &str,
         envelope: &str,
         expected_vault_envelope: &str,
+        match_token: Option<&str>,
         public_label: Option<&str>,
     ) -> Result<()>;
     /// Restore authenticated plaintext against the exact ciphertext and vault generation.
@@ -442,6 +453,7 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         plaintext_digest: &str,
         byte_size: i64,
         now_ms: i64,
+        authorized_match_token: Option<&str>,
     ) -> Result<UpsertOutcome> {
         ensure!(
             plaintext_digest == Self::ordinary_digest(content),
@@ -465,16 +477,32 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
             byte_limit <= 0 || byte_size <= byte_limit,
             "clipboard content exceeds the ordinary byte limit"
         );
-        // No authorized keyed match check is supplied here: fail closed on recapture.
+        // Authorized recapture matching: while protected rows exist, an ordinary write must
+        // carry a keyed token from the unlocked vault. The token either promotes the matching
+        // protected row (no plaintext copy is ever written) or proves the content is absent.
         let protected: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE protected_envelope IS NOT NULL)",
         )
         .fetch_one(&mut *tx)
         .await?;
-        ensure!(
-            !protected,
-            "ordinary collection paused: protected history requires an authorized match check"
-        );
+        if protected {
+            let Some(token) = authorized_match_token else {
+                anyhow::bail!(
+                    "ordinary collection paused: protected history requires an authorized match \
+                     check; unlock the vault and retry (the desktop prompts, `rst vault create` \
+                     sets the shared master password)"
+                );
+            };
+            let matched: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM clipboard_items WHERE protected_envelope IS NOT NULL AND protected_match_token = ?1 LIMIT 1")
+                .bind(token).fetch_optional(&mut *tx).await?;
+            if let Some(id) = matched {
+                sqlx::query("UPDATE clipboard_items SET last_copied_at = MAX(last_copied_at, ?1) WHERE id = ?2")
+                    .bind(now_ms).bind(id).execute(&mut *tx).await?;
+                tx.commit().await?;
+                return Ok(UpsertOutcome::Updated { id });
+            }
+        }
         let existing: Option<(i64, i64)> = sqlx::query_as(
             "SELECT id, byte_size FROM clipboard_items
              WHERE plaintext_digest = ?1 AND protected_envelope IS NULL AND content = ?2
@@ -598,6 +626,7 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         expected_plaintext: &str,
         envelope: &str,
         expected_vault_envelope: &str,
+        match_token: Option<&str>,
         public_label: Option<&str>,
     ) -> Result<()> {
         if let Some(label) = public_label {
@@ -620,7 +649,7 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         );
         sqlx::query(
             "UPDATE clipboard_items SET protected_envelope = ?1, content = '',
-            plain_preview = NULL, plaintext_digest = NULL, protected_match_token = NULL,
+            plain_preview = NULL, plaintext_digest = NULL, protected_match_token = ?5,
             content_bytes = ?2, byte_size = ?2, retention_protected = 1, locked = 1, public_label = ?4
             WHERE id = ?3",
         )
@@ -628,6 +657,7 @@ impl ClipboardHistoryStore for SqliteClipboardStore {
         .bind(expected_plaintext.len() as i64)
         .bind(id)
         .bind(public_label.map(str::trim))
+        .bind(match_token)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
