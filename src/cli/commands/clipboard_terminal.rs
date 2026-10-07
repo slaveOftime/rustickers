@@ -17,6 +17,14 @@ use zeroize::Zeroizing;
 
 use crate::clipboard::{filter::filter_indices, items::ClipboardItem};
 
+/// The app's primary color, rgb(255, 218, 60) — the same yellow as the desktop `Button::primary()`
+/// and the `Icon::Locked` accent — so the terminal chooser reads as the same product.
+const PRIMARY: Color = Color::Rgb {
+    r: 255,
+    g: 218,
+    b: 60,
+};
+
 struct Terminal {
     output: File,
     alternate: bool,
@@ -128,7 +136,7 @@ pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Opti
         if colored {
             queue!(
                 terminal.output,
-                SetForegroundColor(Color::Cyan),
+                SetForegroundColor(PRIMARY),
                 SetAttribute(Attribute::Bold)
             )?;
         }
@@ -158,7 +166,7 @@ pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Opti
             let row = &rows[*index];
             let selected = start + offset == selection.selected;
             let badge = if row.retention.protected_ {
-                "  [Protected]"
+                "  [🔒 Protected]"
             } else if row.retention.explicit {
                 "  [Reserved]"
             } else if row.retention.edited {

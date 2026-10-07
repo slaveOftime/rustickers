@@ -239,7 +239,7 @@ fn run_list(
         }
         let cells: Vec<_> = rows.iter().map(|row| vec![row.id.to_string(), safe_preview(&row.preview_text(), 72), row.byte_size.to_string(), {
             let mut flags = Vec::new();
-            if row.retention.protected_ { flags.push("Protected"); }
+            if row.retention.protected_ { flags.push("🔒 Protected"); }
             if row.retention.explicit { flags.push("Reserved"); }
             if row.retention.edited { flags.push("Edited"); }
             flags.join(", ")
@@ -314,7 +314,7 @@ pub fn add(paths: &AppPaths, args: AddArgs, format: Format) -> Result<()> {
                 } else {
                     "Updated"
                 },
-                if args.protect { " · Protected" } else { "" }
+                if args.protect { " · 🔒 Protected" } else { "" }
             )
         },
     );
