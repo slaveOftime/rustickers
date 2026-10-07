@@ -12,5 +12,6 @@ pub mod markdown;
 pub mod result;
 pub mod show;
 pub mod skill;
+pub mod vault;
 pub mod view;
 pub mod window;

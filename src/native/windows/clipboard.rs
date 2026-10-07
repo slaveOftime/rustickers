@@ -1007,7 +1007,7 @@ impl ClipboardChooserWidget {
                     Err(err) => {
                         show_chooser(window);
                         this.password_error = Some(if err.to_string().contains("No master password") {
-                            "No clipboard vault yet. Use Protect on an item to set up your master password."
+                            "No clipboard vault yet. Protect an item here, or run: rst vault create."
                         } else if err.to_string() == "Wrong master password" {
                             "Incorrect master password. Try again."
                         } else if matches!(action, AuthorizedAction::Protect) {

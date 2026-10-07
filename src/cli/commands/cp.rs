@@ -5,7 +5,8 @@ use std::io::{self, Read, Write};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
-use super::clipboard_terminal::{choose, password, safe_preview};
+use super::clipboard_terminal::{choose, safe_preview};
+use super::vault::unlock;
 use crate::cli::{
     output::{Format, table},
     runtime::block_on,
@@ -88,25 +89,10 @@ pub struct ShowTextArgs {
     pub id: Option<i64>,
 }
 
-fn open_store(paths: &AppPaths) -> Result<Arc<dyn ClipboardHistoryStore>> {
+pub(super) fn open_store(paths: &AppPaths) -> Result<Arc<dyn ClipboardHistoryStore>> {
     Ok(Arc::new(block_on(SqliteClipboardStore::open(
         paths.db_path.with_file_name("clipboard.db"),
     ))?))
-}
-
-fn require_password(prompt: &str) -> Result<Zeroizing<String>> {
-    password(prompt)?.ok_or_else(|| ExitCode(130).into())
-}
-
-fn unlock(controller: &VaultController) -> Result<()> {
-    if block_on(controller.envelope())?.is_none() {
-        bail!("no master password configured; create one in the desktop app first");
-    }
-    let password = require_password("Master password: ")?;
-    if !block_on(controller.unlock(&password))? {
-        bail!("incorrect master password; nothing was changed");
-    }
-    Ok(())
 }
 
 fn row_text(

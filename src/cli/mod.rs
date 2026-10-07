@@ -89,6 +89,9 @@ enum Commands {
         command: commands::cp::CpCommand,
     },
 
+    /// Manage the master password behind protected clipboard history
+    Vault(commands::vault::VaultArgs),
+
     /// Print what a command sticker last produced
     Result(commands::result::ResultArgs),
 
@@ -142,6 +145,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
             commands::cp::CpCommand::Show(args) => commands::cp::show(app_paths, args, format),
         },
         Commands::Result(args) => commands::result::run(app_paths, args, format),
+        Commands::Vault(args) => commands::vault::run(app_paths, args, format),
         Commands::Open(args) => commands::window::open(app_paths, args, format),
         Commands::Close(args) => commands::window::close(app_paths, args, format),
         Commands::Delete(args) => commands::delete::run(app_paths, args, format),
@@ -166,7 +170,7 @@ mod tests {
         let names = subcommand_names();
         for expected in [
             "list", "show", "result", "open", "close", "delete", "view", "markdown", "cmd",
-            "skill", "cp",
+            "skill", "cp", "vault",
         ] {
             assert!(names.contains(&expected.to_owned()), "missing {expected}");
         }
