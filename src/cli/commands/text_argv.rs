@@ -1,9 +1,9 @@
 //! Argument-vector substitution for `rst cp ls -- <program> <args>...`.
 //!
 //! Rules ([`build`]):
-//! - The first token is the fixed executable. `{{cp}}` there is rejected so a malicious clipboard
+//! - The first token is the fixed executable. `{{txt}}` there is rejected so a malicious clipboard
 //!   cannot redirect the user to a different program.
-//! - Every `{{cp}}` in subsequent arguments is replaced with the exact selected text, without
+//! - Every `{{txt}}` in subsequent arguments is replaced with the exact selected text, without
 //!   recursive substitution.
 //! - When no argument contains the placeholder, the selected text is appended as one terminator
 //!   argument so it lands on argv unaltered.
@@ -15,7 +15,7 @@
 use anyhow::{Result, anyhow, bail};
 
 /// The placeholder token used in command templates.
-pub const PLACEHOLDER: &str = "{{cp}}";
+pub const PLACEHOLDER: &str = "{{txt}}";
 
 /// Return the substituted argv ready for `std::process::Command`.
 ///
@@ -144,19 +144,19 @@ mod tests {
 
     #[test]
     fn placeholder_in_program_is_rejected() {
-        let err = build(&args(&["{{cp}}", "arg"]), "value").unwrap_err();
+        let err = build(&args(&["{{txt}}", "arg"]), "value").unwrap_err();
         assert!(format!("{err:#}").contains("not allowed in the program"));
     }
 
     #[test]
     fn replaces_every_placeholder_in_arguments() {
-        let out = build(&args(&["rg", "--", "{{cp}}"]), "needle").unwrap();
+        let out = build(&args(&["rg", "--", "{{txt}}"]), "needle").unwrap();
         assert_eq!(out, vec!["rg", "--", "needle"]);
     }
 
     #[test]
     fn replaces_multiple_placeholders_in_one_argument() {
-        let out = build(&args(&["sh", "-c", "echo {{cp}} | {{cp}}"]), "abc").unwrap();
+        let out = build(&args(&["sh", "-c", "echo {{txt}} | {{txt}}"]), "abc").unwrap();
         assert_eq!(out, vec!["sh", "-c", "echo abc | abc"]);
     }
 
@@ -168,8 +168,8 @@ mod tests {
 
     #[test]
     fn does_not_recurse_into_selected_text() {
-        let out = build(&args(&["echo", "{{cp}}"]), "{{cp}}").unwrap();
-        assert_eq!(out, vec!["echo", "{{cp}}"]);
+        let out = build(&args(&["echo", "{{txt}}"]), "{{txt}}").unwrap();
+        assert_eq!(out, vec!["echo", "{{txt}}"]);
     }
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn validation_steps_match_run_steps() {
         validate_template(&args(&["prog", "arg"])).unwrap();
-        assert!(validate_template(&args(&["{{cp}}"])).is_err());
+        assert!(validate_template(&args(&["{{txt}}"])).is_err());
     }
 }
 

@@ -25,6 +25,11 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    /// Shared canonical pool for atomic text/capture operations.
+    pub(crate) fn pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
+
     pub async fn open(db_path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let db_path = db_path.as_ref().to_path_buf();
 
@@ -33,6 +38,8 @@ impl SqliteStore {
         }
         let options = SqliteConnectOptions::new()
             .filename(&db_path)
+            .busy_timeout(std::time::Duration::from_secs(10))
+            .pragma("secure_delete", "ON")
             .create_if_missing(true);
 
         let pool = SqlitePoolOptions::new()
@@ -338,12 +345,18 @@ impl super::StickerStore for SqliteStore {
 
         let now = crate::utils::time::now_unix_millis();
 
-        sqlx::query(
+        anyhow::ensure!(
+            !crate::text::protection::is_encrypted(&content),
+            "encrypted text must be saved through the text repository"
+        );
+        let result = sqlx::query(
             r#"
             UPDATE stickers
             SET content = ?1,
-                updated_at = ?2
-            WHERE id = ?3
+                updated_at = ?2,
+                text_modified_at = CASE WHEN type = 'markdown' THEN ?2 ELSE text_modified_at END,
+                text_revision = text_revision + 1
+            WHERE id = ?3 AND (type != 'markdown' OR content NOT GLOB 'RUSTICKERS_TEXT_*')
             "#,
         )
         .bind(content)
@@ -352,6 +365,10 @@ impl super::StickerStore for SqliteStore {
         .execute(&self.pool)
         .await
         .context("update sticker content")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "sticker disappeared or requires an authorized text save"
+        );
 
         Ok(())
     }

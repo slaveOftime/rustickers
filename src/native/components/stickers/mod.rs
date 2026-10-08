@@ -3,13 +3,12 @@ use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, Size, Window};
 use crate::model::sticker::StickerColor;
 
 pub mod command;
-mod content_lock;
 pub mod file;
 pub mod markdown;
 pub mod paint;
 pub mod timer;
 
-pub(crate) use content_lock::FOCUS_LOSS_RELOCK_DELAY;
+pub(crate) const FOCUS_LOSS_RELOCK_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub trait Sticker: Sized {
     fn id(&self) -> i64;
@@ -40,6 +39,8 @@ pub trait Sticker: Sized {
 
     fn relock_protected_content(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
 
+    fn begin_edit(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     fn handle_lock_shortcut(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
         false
     }
@@ -67,6 +68,7 @@ pub trait StickerView {
     fn suppress_window_escape(&self, cx: &App) -> bool;
     fn protected_content_visible(&self, cx: &App) -> bool;
     fn relock_protected_content(&self, window: &mut Window, cx: &mut App);
+    fn begin_edit(&self, window: &mut Window, cx: &mut App);
     fn handle_lock_shortcut(&self, window: &mut Window, cx: &mut App) -> bool;
     fn header_extension(&self, cx: &mut App) -> Option<AnyElement>;
     fn footer_extension(&self, cx: &mut App) -> Option<AnyElement>;
@@ -126,6 +128,11 @@ impl<T: Render + Sticker + 'static> StickerView for StickerViewEntity<T> {
         self.entity.update(cx, |this, cx| {
             this.relock_protected_content(window, cx);
         });
+    }
+
+    fn begin_edit(&self, window: &mut Window, cx: &mut App) {
+        self.entity
+            .update(cx, |this, cx| this.begin_edit(window, cx));
     }
 
     fn handle_lock_shortcut(&self, window: &mut Window, cx: &mut App) -> bool {

@@ -20,7 +20,7 @@ fn main() {
     let format = cli.format();
 
     if let Err(err) = cli::run(cli, &app_paths) {
-        if let Some(code) = err.downcast_ref::<cli::commands::cp::ExitCode>() {
+        if let Some(code) = err.downcast_ref::<cli::commands::text_execution::ExitCode>() {
             std::process::exit(code.0);
         }
         format.emit_error(&err);

@@ -89,7 +89,21 @@ impl StickerWindow {
         id: i64,
         open_in_settings: bool,
     ) -> anyhow::Result<()> {
-        if cx.update(|cx| activate_open_window(id, cx))? {
+        if cx.update(|cx| -> anyhow::Result<bool> {
+            if let Some(handle) = find_open_window(id) {
+                handle.update(cx, |_, window, cx| {
+                    window.activate_window();
+                    if open_in_settings
+                        && let Some(Some(root)) = window.root::<Root>()
+                        && let Ok(entity) = root.read(cx).view().clone().downcast::<StickerWindow>()
+                    {
+                        entity.update(cx, |this, cx| this.view.begin_edit(window, cx));
+                    }
+                })?;
+                return Ok(true);
+            }
+            Ok(false)
+        })? {
             return Ok(());
         }
 
@@ -211,6 +225,25 @@ impl StickerWindow {
             ..Default::default()
         };
         Self::open_with_options(cx, sticker_events_tx, store, detail, open_options)
+    }
+
+    /// Discard clean unlocked views after key rotation without saving stale ciphertext.
+    pub(crate) fn invalidate_protected_views(cx: &mut App) {
+        let handles = OPEN_STICKERS
+            .read()
+            .map(|rows| rows.clone())
+            .unwrap_or_default();
+        for (_, handle) in handles {
+            let _ = handle.update(cx, |_, window, cx| {
+                if let Some(Some(root)) = window.root::<Root>()
+                    && let Ok(entity) = root.read(cx).view().clone().downcast::<StickerWindow>()
+                {
+                    entity.update(cx, |this, cx| {
+                        this.view.relock_protected_content(window, cx)
+                    });
+                }
+            });
+        }
     }
 
     pub fn try_close(id: i64, cx: &mut App) -> bool {

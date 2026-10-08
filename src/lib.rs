@@ -6,6 +6,8 @@ pub mod model;
 #[cfg(feature = "ui")]
 pub mod native;
 pub mod storage;
+#[cfg(feature = "storage")]
+pub mod text;
 pub mod utils;
 
 // `--feature ui` brings in `gpui-kit` (the Kit facade). Existing modules

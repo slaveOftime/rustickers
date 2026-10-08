@@ -77,20 +77,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List stickers
+    /// List stickers or select text from TXTs
+    #[command(name = "ls", visible_alias = "list")]
     List(commands::list::ListArgs),
 
     /// Show everything stored about one sticker
     Show(commands::show::ShowArgs),
-
-    /// Browse and reuse past clipboard copies
-    Cp {
-        #[command(subcommand)]
-        command: commands::cp::CpCommand,
-    },
-
-    /// Manage the master password behind protected clipboard history
-    Vault(commands::vault::VaultArgs),
 
     /// Print what a command sticker last produced
     Result(commands::result::ResultArgs),
@@ -128,7 +120,8 @@ impl Cli {
 pub fn subcommand_names() -> Vec<String> {
     Cli::command()
         .get_subcommands()
-        .map(|sub| sub.get_name().to_owned())
+        .flat_map(|sub| std::iter::once(sub.get_name()).chain(sub.get_visible_aliases()))
+        .map(str::to_owned)
         .collect()
 }
 
@@ -138,14 +131,7 @@ pub fn run(cli: Cli, app_paths: &AppPaths) -> anyhow::Result<()> {
     match cli.command {
         Commands::List(args) => commands::list::run(app_paths, args, format),
         Commands::Show(args) => commands::show::run(app_paths, args, format),
-        Commands::Cp { command } => match command {
-            commands::cp::CpCommand::Ls(args) => commands::cp::run(app_paths, args, format),
-            commands::cp::CpCommand::Add(args) => commands::cp::add(app_paths, args, format),
-            commands::cp::CpCommand::Rm(args) => commands::cp::rm(app_paths, args, format),
-            commands::cp::CpCommand::Show(args) => commands::cp::show(app_paths, args, format),
-        },
         Commands::Result(args) => commands::result::run(app_paths, args, format),
-        Commands::Vault(args) => commands::vault::run(app_paths, args, format),
         Commands::Open(args) => commands::window::open(app_paths, args, format),
         Commands::Close(args) => commands::window::close(app_paths, args, format),
         Commands::Delete(args) => commands::delete::run(app_paths, args, format),
@@ -169,8 +155,7 @@ mod tests {
     fn the_subcommand_list_includes_every_command() {
         let names = subcommand_names();
         for expected in [
-            "list", "show", "result", "open", "close", "delete", "view", "markdown", "cmd",
-            "skill", "cp", "vault",
+            "ls", "show", "result", "open", "close", "delete", "view", "markdown", "cmd", "skill",
         ] {
             assert!(names.contains(&expected.to_owned()), "missing {expected}");
         }
@@ -194,17 +179,22 @@ mod tests {
     #[test]
     fn clipboard_child_json_flag_belongs_to_child_not_parent() {
         let cli = Cli::try_parse_from([
-            "rst", "cp", "ls", "--id", "42", "--", "tool", "--json", "{{cp}}",
+            "rst",
+            "ls",
+            "--cp",
+            "--id",
+            "clipboard:42",
+            "--",
+            "tool",
+            "--json",
+            "{{txt}}",
         ])
         .expect("parse child argv");
         assert!(!cli.format().is_json());
-        let Commands::Cp {
-            command: commands::cp::CpCommand::Ls(args),
-        } = cli.command
-        else {
+        let Commands::List(args) = cli.command else {
             panic!()
         };
-        assert_eq!(args.command, ["tool", "--json", "{{cp}}"]);
+        assert_eq!(args.command, ["tool", "--json", "{{txt}}"]);
     }
     #[test]
     fn colors_are_validated_against_the_real_palette() {

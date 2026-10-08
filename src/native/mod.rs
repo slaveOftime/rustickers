@@ -6,12 +6,11 @@ use std::{
 use crate::gpui_component::{Theme, ThemeMode};
 use gpui::{AnyWindowHandle, App};
 
-use crate::clipboard::vault_controller::VaultController;
 use crate::{
-    clipboard::storage::{ClipboardHistoryStore, SqliteClipboardStore},
     ipc::IpcEvent,
     native::windows::{StickerWindowEvent, main::MainWindow, sticker::StickerWindow},
     storage::{ArcStickerStore, open_sqlite, paths::AppPaths},
+    text::TextRepository,
 };
 
 pub mod clipboard;
@@ -60,16 +59,15 @@ pub fn run_native(
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
     let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());
-    let clipboard_handle_for_open: Arc<OnceLock<Arc<dyn ClipboardHistoryStore>>> =
-        Arc::new(OnceLock::new());
+    let clipboard_handle_for_open: Arc<OnceLock<Arc<TextRepository>>> = Arc::new(OnceLock::new());
     let clipboard_handle_for_ipc = clipboard_handle_for_open.clone();
     let clipboard_filter_for_open: Arc<
         OnceLock<std::sync::Arc<crate::native::clipboard::CaptureFilter>>,
     > = Arc::new(OnceLock::new());
     let clipboard_filter_for_ipc = clipboard_filter_for_open.clone();
-    let clipboard_vault_for_open: Arc<OnceLock<Arc<VaultController>>> = Arc::new(OnceLock::new());
 
     app.run(move |cx: &mut App| {
+        cx.on_app_quit(|_| async { crate::native::windows::clipboard::clear_owned_secret(); }).detach();
         crate::gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
 
@@ -242,21 +240,17 @@ pub fn run_native(
             tracing::info!("Sticker store opened");
 
             // Clipboard failure must not prevent the main window or stickers from opening.
-            let clipboard_db_path = sticker_db.with_file_name("clipboard.db");
-            match SqliteClipboardStore::open(&clipboard_db_path).await {
+            match TextRepository::open(&sticker_db).await {
                 Ok(backend) => {
-                    let clipboard_store: Arc<dyn ClipboardHistoryStore> = Arc::new(backend);
+                    let clipboard_store = Arc::new(backend);
                     let filter = crate::native::clipboard::CaptureFilter::new();
-                    let vault = Arc::new(VaultController::new(clipboard_store.clone()));
                     let _ = clipboard_handle_for_open.set(clipboard_store.clone());
                     let _ = clipboard_filter_for_open.set(filter.clone());
-                    let _ = clipboard_vault_for_open.set(vault.clone());
                     let (watcher, _stop) = crate::native::clipboard::watcher::WatcherHandle::new(Duration::from_millis(250));
-                    watcher.spawn(filter.clone(), clipboard_store.clone(), Some(vault.clone()));
-                    crate::native::windows::clipboard::set_global_store(clipboard_store);
+                    watcher.spawn(filter.clone(), clipboard_store.clone());
+                    crate::native::windows::clipboard::set_global_store(clipboard_store, store.clone());
                     cx.update(move |_cx| {
                         crate::native::windows::clipboard::set_global_capture_filter(filter);
-                        crate::native::windows::clipboard::set_global_vault_controller(vault);
                     });
                 }
                 Err(_) => tracing::error!("Clipboard backend unavailable; continuing sticker startup"),

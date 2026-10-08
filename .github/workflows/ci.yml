@@ -83,8 +83,8 @@ jobs:
       - name: cargo check --locked --no-default-features --features storage
         run: cargo check --locked --no-default-features --features storage
 
-      - name: cargo check --locked --no-default-features --features cli --bin rusticker
-        run: cargo check --locked --no-default-features --features cli --bin rusticker
+      - name: cargo check --locked --no-default-features --features cli --bin rst
+        run: cargo check --locked --no-default-features --features cli --bin rst
 
       - name: cargo check --locked --features ui
         run: cargo check --locked --features ui
@@ -94,9 +94,6 @@ jobs:
 
       - name: cargo test --locked --features cli (UI-feature baseline)
         run: cargo test --locked --features cli
-
-      - name: cargo build --locked --features ui --example clipboard_ux_smoke
-        run: cargo build --locked --features ui --example clipboard_ux_smoke
 
       - name: Verify zero duplicate GPUI families
         run: |

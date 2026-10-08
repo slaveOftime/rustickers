@@ -15,7 +15,7 @@ use crossterm::{
 };
 use zeroize::Zeroizing;
 
-use crate::clipboard::{filter::filter_indices, items::ClipboardItem};
+use crate::text::{TextEntry, TextEntryId, filter_indices};
 
 /// The app's primary color, rgb(255, 218, 60) — the same yellow as the desktop `Button::primary()`
 /// and the `Icon::Locked` accent — so the terminal chooser reads as the same product.
@@ -43,7 +43,7 @@ impl Terminal {
             .read(true)
             .write(true)
             .open(path)
-            .context("clipboard selection needs a terminal; use --list or --id <ID> for scripts")?;
+            .context("text selection needs a terminal; omit child command to list, or use --id <SOURCE:ID> for scripts")?;
         let mut terminal = Self {
             output,
             alternate: false,
@@ -120,7 +120,7 @@ impl Selection {
     }
 }
 
-pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Option<i64>> {
+pub(super) fn choose(rows: &[TextEntry], initial_query: &str) -> Result<Option<TextEntryId>> {
     let mut terminal = Terminal::open(true)?;
     let mut selection = Selection {
         query: initial_query.to_owned(),
@@ -142,7 +142,7 @@ pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Opti
         }
         queue!(
             terminal.output,
-            Print(" Clipboard history"),
+            Print(" TXTs"),
             ResetColor,
             SetAttribute(Attribute::Reset)
         )?;
@@ -165,17 +165,15 @@ pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Opti
         for (offset, index) in matches.iter().skip(start).take(page_size).enumerate() {
             let row = &rows[*index];
             let selected = start + offset == selection.selected;
-            let badge = if row.retention.protected_ {
-                "  [🔒 Protected]"
-            } else if row.retention.explicit {
-                "  [Reserved]"
-            } else if row.retention.edited {
-                "  [Edited]"
+            let badge = if row.is_encrypted() {
+                "  [Locked]"
+            } else if matches!(row.id(), TextEntryId::Sticker(_)) {
+                "  [Saved]"
             } else {
-                ""
+                "  [Clipboard]"
             };
             let available = usize::from(width.saturating_sub(5)).saturating_sub(badge.len());
-            let preview = safe_preview(&row.preview_text(), available);
+            let preview = safe_preview(row.preview(), available);
             queue!(terminal.output, MoveTo(0, (offset + 3) as u16))?;
             if selected {
                 queue!(terminal.output, SetAttribute(Attribute::Reverse))?;
@@ -221,7 +219,7 @@ pub(super) fn choose(rows: &[ClipboardItem], initial_query: &str) -> Result<Opti
                 match key.code {
                     KeyCode::Enter => {
                         if let Some(index) = matches.get(selection.selected) {
-                            return Ok(Some(rows[*index].id));
+                            return Ok(Some(rows[*index].id()));
                         }
                     }
                     KeyCode::Up => selection.move_by(-1, matches.len()),
@@ -360,31 +358,24 @@ mod tests {
 #[cfg(test)]
 mod interactive_smoke {
     use super::*;
-    use crate::clipboard::items::{ClipboardItemKind, RetentionState};
+    use crate::text::{TextRepository, TextSources};
 
     // Run in a real PTY: cargo test terminal_chooser_smoke -- --ignored --nocapture
     #[test]
     #[ignore = "requires an interactive terminal"]
     fn terminal_chooser_smoke() {
-        let rows = ["First copy", "日本語 second copy", "Third copy"]
-            .iter()
-            .enumerate()
-            .map(|(index, text)| ClipboardItem {
-                id: index as i64 + 1,
-                kind: ClipboardItemKind::Plain,
-                content: (*text).into(),
-                plain_preview: None,
-                public_label: None,
-                byte_size: text.len() as i64,
-                created_at: 1,
-                last_copied_at: 1,
-                last_used_at: None,
-                last_edited_at: None,
-                retention: RetentionState::default(),
-            })
-            .collect::<Vec<_>>();
+        let directory = tempfile::tempdir().unwrap();
+        let repository =
+            futures::executor::block_on(TextRepository::open(directory.path().join("stickers.db")))
+                .unwrap();
+        for text in ["First copy", "日本語 second copy", "Third copy"] {
+            futures::executor::block_on(repository.capture(text, 1)).unwrap();
+        }
+        let rows =
+            futures::executor::block_on(repository.snapshot(TextSources::new(false, true), ""))
+                .unwrap();
         let chosen = choose(&rows, "").unwrap();
         println!("TERMINAL_SELECTION={chosen:?}");
-        assert_eq!(chosen, Some(2));
+        assert_eq!(chosen, Some(TextEntryId::Clipboard(2)));
     }
 }

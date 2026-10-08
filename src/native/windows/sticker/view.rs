@@ -107,7 +107,16 @@ impl StickerWindow {
                 TimerSticker::new(id, color, store, content, window, cx, sticker_events_tx)
             }))),
             StickerType::Markdown => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                MarkdownSticker::new(id, color, store, content, window, cx, sticker_events_tx)
+                MarkdownSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx,
+                    options.open_in_settings,
+                )
             }))),
             StickerType::Command => {
                 let init = CommandStickerInit {
@@ -171,6 +180,59 @@ impl StickerWindow {
                     .flex_1()
                     .min_w_0()
                     .when_some(extension, |view, extension| view.child(extension)),
+            )
+            .when(
+                self.detail.sticker_type == StickerType::Markdown,
+                |header| {
+                    header.child(
+                        Button::new("rename-text")
+                            .icon(IconName::DocumentText)
+                            .ghost()
+                            .occlude()
+                            .tooltip("Rename text…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let Some(repo) =
+                                    crate::native::windows::clipboard::text_repository()
+                                else {
+                                    return;
+                                };
+                                let id = this.detail.id;
+                                let events = this.sticker_events_tx.clone();
+                                let weak = cx.weak_entity();
+                                crate::native::windows::text_title::prompt(
+                                    window,
+                                    cx,
+                                    false,
+                                    &this.detail.title,
+                                    Box::new(move |title, window, cx| {
+                                        window
+                                            .spawn(cx, async move |cx| {
+                                                if repo
+                                                    .update_title(
+                                                        crate::text::TextEntryId::Sticker(id),
+                                                        &title,
+                                                    )
+                                                    .await
+                                                    .is_ok()
+                                                {
+                                                    let _ = events.send(
+                                                        StickerWindowEvent::TitleChanged {
+                                                            id,
+                                                            title: title.clone(),
+                                                        },
+                                                    );
+                                                    let _ = weak.update_in(cx, |this, _, cx| {
+                                                        this.detail.title = title;
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            })
+                                            .detach();
+                                    }),
+                                );
+                            })),
+                    )
+                },
             )
             .child(self.create_button(cx))
             .child(

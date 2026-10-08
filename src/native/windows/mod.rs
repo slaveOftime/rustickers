@@ -6,6 +6,8 @@ pub mod main;
 pub mod placement;
 pub mod selection;
 pub mod sticker;
+pub(crate) mod text_password;
+pub(crate) mod text_title;
 mod transient_topmost;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

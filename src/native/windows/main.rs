@@ -118,9 +118,13 @@ impl MainWindow {
     ) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Rustickers"));
 
-        window.on_window_should_close(cx, |_, cx| {
-            cx.quit();
-            true
+        window.on_window_should_close(cx, |window, cx| {
+            if super::text_password::is_rotating() || super::text_password::has_dirty_editors() {
+                window.open_alert_dialog(cx, |dialog,_,_| dialog.title("Finish encrypted text edits").child("Save or discard encrypted drafts and wait for password changes before quitting."));
+                return false;
+            }
+            super::clipboard::clear_owned_secret();
+            cx.quit(); true
         });
 
         cx.spawn(async move |this, cx| {
@@ -163,6 +167,7 @@ impl MainWindow {
         cx: &mut AsyncApp,
     ) {
         let mut last_activity = command_activity::generation();
+        let mut last_text_version = -1i64;
 
         loop {
             cx.background_executor()
@@ -181,12 +186,25 @@ impl MainWindow {
             let activity_changed = activity != last_activity;
             last_activity = activity;
 
-            if events.is_empty() && !activity_changed {
+            // SQLite data_version changes for other connections/processes, including CLI
+            // writes. Poll the existing event pump without carrying plaintext notifications.
+            let text_version = if let Some(repository) = super::clipboard::text_repository() {
+                repository.data_version().await.unwrap_or(last_text_version)
+            } else {
+                last_text_version
+            };
+            let text_changed = text_version != last_text_version;
+            last_text_version = text_version;
+            if events.is_empty() && !activity_changed && !text_changed {
                 continue;
             }
 
             let updated = this.update(cx, |this, cx| {
                 let mut changed = activity_changed;
+                if text_changed {
+                    this.spawn_load_stickers(cx);
+                    changed = true;
+                }
                 for ev in events {
                     changed |= this.apply_event(ev, cx);
                 }
@@ -815,6 +833,17 @@ impl MainWindow {
             .child(
                 h_flex()
                     .child(
+                        Button::new("master-password")
+                            .icon(IconName::LockClosed)
+                            .tooltip("Master password…")
+                            .ghost()
+                            .on_click(|_, window, cx| {
+                                if let Some(repository) = super::clipboard::text_repository() {
+                                    super::text_password::settings(window, cx, repository);
+                                }
+                            }),
+                    )
+                    .child(
                         Button::new("minimize")
                             .icon(IconName::Minus)
                             .ghost()
@@ -828,8 +857,10 @@ impl MainWindow {
                             .icon(IconName::Close)
                             .ghost()
                             .occlude()
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.quit();
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                if super::text_password::is_rotating() || super::text_password::has_dirty_editors() {
+                                    window.open_alert_dialog(cx, |dialog,_,_| dialog.title("Finish encrypted text edits").child("Save or discard encrypted drafts and wait for password changes before quitting."));
+                                } else { super::clipboard::clear_owned_secret(); cx.quit(); }
                             })),
                     )
                     .child(self.create_button(cx)),

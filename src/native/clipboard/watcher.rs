@@ -14,23 +14,14 @@
 //! how the existing selection-capture helper ([`crate::native::selection`]) avoids polluting the
 //! history with the temporary marker it sets on the clipboard.
 //!
-//! # Idle cost
-//!
-//! The watcher's gate reads [`ClipboardHistoryStore::has_protected_items`] -- a single
-//! `SELECT EXISTS` -- rather than fetching the full [`ClipboardItem`] vec every tick. The
-//! full payload is only read from a single call site: when the watcher itself persists a
-//! newly captured row, and from the GUI chooser when it has been signalled that the visible
-//! state is stale.
-
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::clipboard::items::is_collectable;
 use crate::clipboard::settings::ClipboardSettings;
-use crate::clipboard::storage::{ClipboardHistoryStore, SqliteClipboardStore, UpsertOutcome};
+use crate::text::TextRepository;
 
 /// Per-capture flag — text the system clipboard just received.
 #[derive(Debug, Clone)]
@@ -132,57 +123,21 @@ impl LastSeenText {
 /// Persist [`CapturedText`] into the provided store. Returns the row id and outcome so the caller
 /// can update the GUI's chooser / settings in real time.
 pub async fn persist_capture(
-    store: &dyn ClipboardHistoryStore,
+    store: &TextRepository,
     captured: &CapturedText,
     settings: &ClipboardSettings,
-    authorized_match_token: Option<&str>,
 ) -> anyhow::Result<Option<i64>> {
-    if !settings.capture_enabled {
+    if !settings.capture_enabled
+        || captured.source != CaptureSource::UserCopy
+        || captured.content.trim().is_empty()
+    {
         return Ok(None);
     }
-    if captured.source != CaptureSource::UserCopy {
-        return Ok(None);
-    }
-    if !is_collectable(&captured.content) {
-        return Ok(None);
-    }
-    let byte_size = captured.byte_size;
-    let ordinary_byte_limit = settings.normal_byte_limit;
-    if ordinary_byte_limit > 0 && byte_size > ordinary_byte_limit {
-        // Single oversize capture: drop entirely rather than half-collecting something the user
-        // didn't intend and that eviction cannot hope to fit.
-        return Ok(None);
-    }
-
-    let preview = plain_preview(&captured.content);
-    let digest = SqliteClipboardStore::ordinary_digest(&captured.content);
-    let now = crate::utils::time::now_unix_millis();
-    let outcome = store
-        .upsert_ordinary(&captured.content, &preview, &digest, byte_size, now, authorized_match_token)
-        .await?;
-    let id = match outcome {
-        UpsertOutcome::Inserted { id } | UpsertOutcome::Updated { id } => id,
-    };
-    // The shared store trims atomically in upsert; never count incoming bytes twice.
-    Ok(Some(id))
-}
-
-fn plain_preview(content: &str) -> String {
-    let mut preview = String::with_capacity(240);
-    for character in content.chars() {
-        if character == '\n' || character == '\r' {
-            preview.push(' ');
-        } else {
-            preview.push(character);
-        }
-        if preview.len() >= 240 {
-            break;
-        }
-    }
-    if preview.len() < content.len() {
-        preview.push('…');
-    }
-    preview
+    Ok(Some(
+        store
+            .capture(&captured.content, crate::utils::time::now_unix_millis())
+            .await?,
+    ))
 }
 
 /// Drives the watcher loop. Designed for parking on a background thread; the GUI owns the
@@ -214,46 +169,27 @@ impl WatcherHandle {
     /// Note: the watcher no longer takes an mpsc Sender of `CapturedText`. The
     /// previous channel carried content the chooser already has access to, kept
     /// aliases inside `Arc<Mutex<Vec<CapturedText>>>` if the receiver was dropped,
-    /// and could outlive a vault reset on the way to a never-read endpoint.
+    /// and could outlive the picker on the way to a never-read endpoint.
     /// Replacing it with a content-free signal avoids the leak surface and keeps
     /// the chooser's snapshot read on its own schedule.
     pub fn spawn(
         self,
         filter: Arc<CaptureFilter>,
-        store: Arc<dyn ClipboardHistoryStore>,
-        vault: Option<Arc<crate::clipboard::vault_controller::VaultController>>,
+        store: Arc<TextRepository>,
     ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new().name("clipboard-watcher".into()).spawn(move || {
             let mut last_seen = LastSeenText::new();
             let mut last_generation = None;
             let mut active = false;
-            let mut last_has_protected: Option<bool> = None;
             while !self.stop.load(std::sync::atomic::Ordering::Relaxed) {
                 let tick = (|| -> anyhow::Result<()> {
                     let settings = futures::executor::block_on(store.settings())?;
-                    // Cheap existence query, not the full snapshot. The full
-                    // content-bearing vec is only read once, in this tick's
-                    // capture-save path and from the chooser side, never from
-                    // a poll gate.
-                    let has_protected = futures::executor::block_on(store.has_protected_items())?;
-                    // Protected history only pauses collection while the vault is locked: an
-                    // unlocked vault can produce the authorized match token that keeps recapture
-                    // safe (see SqliteClipboardStore::upsert_ordinary).
-                    let authorized = vault.as_ref().is_some_and(|vault| vault.is_unlocked());
-                    if !settings.capture_enabled || (has_protected && !authorized) {
+                    if !settings.capture_enabled {
+                        if active { push_watcher_signal(WatcherSignal::CapturePaused); }
                         active = false;
-                        // Notify only on transitions: emitting the pause signal
-                        // every tick would force the chooser to refresh
-                        // unnecessarily.
-                        if last_has_protected != Some(has_protected) {
-                            last_has_protected = Some(has_protected);
-                            push_watcher_signal(WatcherSignal::CapturePaused);
-                        }
-                        set_capture_status(if has_protected { "Collection paused: unlock the vault to keep collecting alongside protected history." }
-                            else { "Collection paused. Enable to capture copied text (including secrets)." });
+                        set_capture_status("Collection paused. Enable to capture copied text (including secrets).");
                         return Ok(());
                     }
-                    last_has_protected = Some(has_protected);
                     if !active { last_seen = LastSeenText::new(); last_generation = None; active = true; }
                     let transaction = filter.transaction();
                     let before = clipboard_generation();
@@ -276,21 +212,7 @@ impl WatcherHandle {
                                 set_capture_status("Capture skipped: text exceeds 1 MiB; nothing was truncated."); return Ok(());
                             }
                             let captured = CapturedText { byte_size: text.len() as i64, content: text, source: CaptureSource::UserCopy };
-                            // Capture read happens only on the persist path,
-                            // which already pays for one snapshot's worth of
-                            // writes. Update the returned id when persist_capture
-                                // exposes it; see the WatcherSignal::Captured
-                                // arm below for the queueing pattern.
-                            // With protected rows present the write must carry the keyed token;
-                            // the vault was verified unlocked at the gate above.
-                            let token = if has_protected {
-                                vault.as_ref().and_then(|vault| vault.match_token(captured.content.as_bytes()).ok().flatten())
-                            } else { None };
-                            if has_protected && token.is_none() {
-                                set_capture_status("Collection paused: the vault lock expired mid-copy; unlock it to keep collecting.");
-                                return Ok(());
-                            }
-                            futures::executor::block_on(persist_capture(&*store, &captured, &settings, token.as_deref()))?;
+                            futures::executor::block_on(persist_capture(&store, &captured, &settings))?;
                             push_watcher_signal(WatcherSignal::Captured);
                         }
                     } else { last_seen = LastSeenText::new(); }
@@ -565,13 +487,6 @@ mod tests {
         assert!(last.accept("first"));
         assert!(!last.accept("first"));
         assert!(last.accept("second"));
-    }
-
-    #[test]
-    fn preview_collapses_newlines_and_truncates() {
-        let preview = plain_preview(&"a".repeat(300));
-        assert!(preview.ends_with('…'));
-        assert_eq!(preview.chars().filter(|c| *c == '\n').count(), 0);
     }
 
     #[test]

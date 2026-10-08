@@ -1,72 +1,55 @@
-//! Keyboard-first retrieval with password-authorized use/edit of existing encrypted rows.
-//! Protect and encrypted edits use atomic, vault-generation-bound storage transitions.
-mod editor;
-
-use crate::clipboard::{
-    items::{ClipboardItem, ClipboardItemKind},
-    storage::{ClipboardHistoryStore, RetentionFlag},
-    vault_controller::VaultController,
-};
+//! TXTs: one keyboard-first picker over saved text stickers and disposable captures.
 use crate::gpui_component::{
     ActiveTheme, Disableable, Icon, Root, Selectable, Sizable, WindowExt,
-    alert::Alert,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
-use crate::native::clipboard::{CaptureFilter, foreground, paste_foreground, write_clipboard_text};
-use crate::native::components::IconName;
-use crate::utils::time::now_unix_millis;
+use crate::{
+    native::{
+        clipboard::{CaptureFilter, foreground, paste_foreground},
+        components::IconName,
+        windows::{StickerWindowEvent, sticker::StickerWindow},
+    },
+    storage::ArcStickerStore,
+    text::{TextEntry, TextEntryId, TextRepository, TextSources, filter_indices},
+};
 use gpui::{
-    App, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement, MouseButton,
-    MouseDownEvent, Render, ScrollStrategy, Subscription, UniformListScrollHandle, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowOptions, div,
-    prelude::*, px, size, uniform_list,
+    App, Bounds, Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, Render,
+    ScrollStrategy, Subscription, UniformListScrollHandle, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, size,
+    uniform_list,
 };
 use std::sync::{Arc, OnceLock, RwLock};
+use zeroize::Zeroizing;
 
-const WIDTH: f32 = 380.0;
-const HEIGHT: f32 = 520.0;
-const PAGE: isize = 6;
-#[derive(Clone, Copy)]
-enum AuthorizedAction {
-    Protect,
-    Unprotect,
-    Use(bool),
-    Edit,
+static GLOBAL_REPOSITORY: OnceLock<Arc<TextRepository>> = OnceLock::new();
+static GLOBAL_STORE: OnceLock<ArcStickerStore> = OnceLock::new();
+static OWNED_SECRET: std::sync::Mutex<Option<(Arc<CaptureFilter>, Option<u32>)>> =
+    std::sync::Mutex::new(None);
+pub(crate) fn clear_owned_secret() {
+    if let Some((filter, generation)) = OWNED_SECRET
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        let _ = crate::native::clipboard::watcher::clear_protected_if_owned(&filter, generation);
+    }
 }
-struct PasswordPrompt {
-    id: i64,
-    action: AuthorizedAction,
-    expected_plaintext: Option<zeroize::Zeroizing<String>>,
-    /// The label pre-filled into the dialog at open time. `submit_password`
-    /// forwards only typed differences into the editor so an untouched
-    /// input doesn't accidentally overwrite the row's stored label.
-    prefilled_label: Option<String>,
-}
-enum AuthorizedResult {
-    Protected,
-    Unprotected,
-    Use(ClipboardItem, zeroize::Zeroizing<String>, bool),
-    Edit(
-        ClipboardItem,
-        zeroize::Zeroizing<String>,
-        Arc<VaultController>,
-    ),
-}
-
 static GLOBAL_CAPTURE_FILTER: OnceLock<Arc<CaptureFilter>> = OnceLock::new();
+pub(crate) static CLIPBOARD_POPUP: RwLock<Option<gpui::AnyWindowHandle>> = RwLock::new(None);
+pub fn set_global_store(repository: Arc<TextRepository>, store: ArcStickerStore) {
+    let _ = GLOBAL_REPOSITORY.set(repository);
+    let _ = GLOBAL_STORE.set(store);
+}
 pub fn set_global_capture_filter(filter: Arc<CaptureFilter>) {
     let _ = GLOBAL_CAPTURE_FILTER.set(filter);
 }
-// Keep bootstrap integration; never use session-unlocked state to bypass row authorization.
-static GLOBAL_VAULT: OnceLock<Arc<VaultController>> = OnceLock::new();
-pub fn set_global_vault_controller(vault: Arc<VaultController>) {
-    let _ = GLOBAL_VAULT.set(vault);
+pub(crate) fn text_repository() -> Option<Arc<TextRepository>> {
+    GLOBAL_REPOSITORY.get().cloned()
 }
-pub(crate) static CLIPBOARD_POPUP: RwLock<Option<gpui::AnyWindowHandle>> = RwLock::new(None);
-
 fn clear_popup() {
     if let Ok(mut slot) = CLIPBOARD_POPUP.write() {
         *slot = None;
@@ -74,371 +57,221 @@ fn clear_popup() {
     super::set_clipboard_escape_target(false);
 }
 pub fn dispatch_escape(cx: &mut App) -> bool {
-    let handle = CLIPBOARD_POPUP.read().ok().and_then(|slot| *slot);
-    handle
+    CLIPBOARD_POPUP
+        .read()
+        .ok()
+        .and_then(|s| *s)
         .and_then(|h| {
             h.update(cx, |_, w, cx| {
-                w.dispatch_keystroke(gpui::Keystroke::parse("escape").expect("valid key"), cx)
+                w.dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), cx)
             })
             .ok()
         })
         .unwrap_or(false)
 }
-
 pub fn open_from_main(
     cx: &mut App,
-    events: std::sync::mpsc::Sender<super::StickerWindowEvent>,
+    events: std::sync::mpsc::Sender<StickerWindowEvent>,
 ) -> anyhow::Result<()> {
-    let vault = GLOBAL_VAULT
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("Clipboard backend unavailable"))?;
-    let _ = vault;
-    let store = GLOBAL_STORE
-        .get()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Clipboard backend unavailable"))?;
-    ClipboardChooserWindow::toggle(cx, events, store, None)
+    let repository =
+        text_repository().ok_or_else(|| anyhow::anyhow!("Text backend unavailable"))?;
+    ClipboardChooserWindow::toggle(cx, events, repository, None)
 }
-static GLOBAL_STORE: OnceLock<Arc<dyn ClipboardHistoryStore>> = OnceLock::new();
-pub fn set_global_store(store: Arc<dyn ClipboardHistoryStore>) {
-    let _ = GLOBAL_STORE.set(store);
-}
-
 pub struct ClipboardChooserWindow;
 impl ClipboardChooserWindow {
     pub fn toggle(
         cx: &mut App,
-        _events: std::sync::mpsc::Sender<super::StickerWindowEvent>,
-        store: Arc<dyn ClipboardHistoryStore>,
+        events: std::sync::mpsc::Sender<StickerWindowEvent>,
+        repository: Arc<TextRepository>,
         destination: Option<u64>,
     ) -> anyhow::Result<()> {
-        let existing = CLIPBOARD_POPUP.read().ok().and_then(|slot| *slot);
-        if let Some(handle) = existing {
-            if dispatch_escape(cx) {
-                return Ok(());
-            }
-            if handle.update(cx, |_, _, _| ()).is_ok() {
-                return Ok(());
-            }
-            clear_popup();
+        if CLIPBOARD_POPUP.read().ok().and_then(|s| *s).is_some() && dispatch_escape(cx) {
+            return Ok(());
         }
         let filter = GLOBAL_CAPTURE_FILTER
             .get()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Clipboard backend unavailable"))?;
-        let bounds = Bounds::centered(None, size(px(WIDTH), px(HEIGHT)), cx);
+            .ok_or_else(|| anyhow::anyhow!("Capture backend unavailable"))?;
+        let store = GLOBAL_STORE
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Sticker backend unavailable"))?;
+        // Physical window geometry is an OS boundary; internal layout uses rem helpers.
+        let bounds = Bounds::centered(None, size(px(440.), px(520.)), cx);
         let handle = cx.open_window(
             WindowOptions {
                 focus: true,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_background: WindowBackgroundAppearance::Transparent,
                 is_resizable: true,
-                window_min_size: Some(size(px(380.0), px(360.0))),
+                window_min_size: Some(size(px(380.), px(360.))),
                 kind: WindowKind::Floating,
                 titlebar: None,
                 ..Default::default()
             },
             move |window, cx| {
-                let view = cx
-                    .new(|cx| ClipboardChooserWidget::new(window, cx, store, filter, destination));
-                let surface = cx.new(|_| ClipboardChooserSurface { view });
-                cx.new(|cx| Root::new(surface, window, cx))
+                let view = cx.new(|cx| {
+                    TextPicker::new(repository, store, filter, events, destination, window, cx)
+                });
+                cx.new(|cx| Root::new(view, window, cx))
             },
         )?;
         if let Ok(mut slot) = CLIPBOARD_POPUP.write() {
             *slot = Some(handle.into());
         }
-        cx.defer(move |cx| {
-            let _ = handle.update(cx, |_, w, _| w.activate_window());
-        });
+        super::set_clipboard_escape_target(true);
         Ok(())
     }
 }
-
-// Dialog builders read the chooser: render them outside its mutable Render borrow.
-struct ClipboardChooserSurface {
-    view: Entity<ClipboardChooserWidget>,
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SourceFilter {
+    #[default]
+    All,
+    Saved,
+    Clipboard,
 }
-impl Render for ClipboardChooserSurface {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().relative().size_full().child(self.view.clone())
+impl SourceFilter {
+    fn includes(self, id: TextEntryId) -> bool {
+        matches!(
+            (self, id),
+            (Self::All, _)
+                | (Self::Saved, TextEntryId::Sticker(_))
+                | (Self::Clipboard, TextEntryId::Clipboard(_))
+        )
     }
 }
 
-fn validate_new_password(password: &str, confirmation: &str) -> Result<(), &'static str> {
-    if password.is_empty() {
-        return Err("Enter your master password.");
-    }
-    if password != confirmation {
-        return Err("Passwords do not match. Enter the same password in both fields.");
-    }
-    Ok(())
-}
-
-fn protected(item: &ClipboardItem) -> bool {
-    item.kind == ClipboardItemKind::Protected || item.retention.protected()
-}
-/// Never use a possibly stale plaintext preview of a protected row.
-fn display_preview(item: &ClipboardItem) -> String {
-    let text = if protected(item) {
-        item.public_label.as_deref().unwrap_or("Protected item")
-    } else {
-        &item.content
-    };
-    text.chars()
-        .take(120)
-        .flat_map(|c| {
-            if c.is_control() {
-                c.escape_default().collect::<Vec<_>>()
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
-}
-fn redact_protected_previews(rows: &mut [ClipboardItem]) {
-    for row in rows.iter_mut().filter(|r| protected(r)) {
-        row.plain_preview = None;
-        row.content.clear();
-        row.kind = ClipboardItemKind::Protected;
+// Display-only recency; never changes the stored timestamp or clipboard payload.
+fn recency_label(timestamp: i64, now: i64) -> String {
+    let seconds = now.saturating_sub(timestamp).max(0) / 1000;
+    match seconds {
+        0..60 => "Just now".into(),
+        60..3600 => format!("{}m ago", seconds / 60),
+        3600..86400 => format!("{}h ago", seconds / 3600),
+        86400..172800 => "Yesterday".into(),
+        _ => format!("{}d ago", seconds / 86400),
     }
 }
 
-pub struct ClipboardChooserWidget {
-    store: Arc<dyn ClipboardHistoryStore>,
+struct TextPicker {
+    repository: Arc<TextRepository>,
+    store: ArcStickerStore,
     filter: Arc<CaptureFilter>,
-    rows: Vec<ClipboardItem>,
+    events: std::sync::mpsc::Sender<StickerWindowEvent>,
+    rows: Vec<TextEntry>,
     filtered: Vec<usize>,
     selected: usize,
     query: Entity<InputState>,
     scroll: UniformListScrollHandle,
     destination: Option<u64>,
     busy: bool,
-    loading: bool,
     status: String,
-    status_error: bool,
-    status_warning: bool,
-    password_error: Option<String>,
-    password: Entity<InputState>,
-    confirmation: Entity<InputState>,
-    label: Entity<InputState>,
-    creating_vault: bool,
-    editor_open: bool,
-    hovered_row: Option<i64>,
-    prompt: Option<PasswordPrompt>,
     capture_enabled: bool,
-    capture_status: String,
-    query_version: u64,
-    _keys: Subscription,
-    _activation: Subscription,
+    source: SourceFilter,
+    loading: bool,
+    preferred_selection: Option<TextEntryId>,
+    _query: Subscription,
 }
-impl ClipboardChooserWidget {
+impl Drop for TextPicker {
+    fn drop(&mut self) {
+        clear_popup();
+    }
+}
+impl TextPicker {
     fn new(
+        repository: Arc<TextRepository>,
+        store: ArcStickerStore,
+        filter: Arc<CaptureFilter>,
+        events: std::sync::mpsc::Sender<StickerWindowEvent>,
+        destination: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
-        store: Arc<dyn ClipboardHistoryStore>,
-        filter: Arc<CaptureFilter>,
-        destination: Option<u64>,
     ) -> Self {
-        let query =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search clipboard history…"));
-        cx.subscribe_in(&query, window, |this, query, event, _, cx| {
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search TXTs…"));
+        let subscription = cx.subscribe(&query, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
-                this.filtered =
-                    crate::clipboard::filter::filter_indices(&this.rows, &query.read(cx).value());
+                this.refilter(cx);
                 this.selected = 0;
-                this.scroll_to_selection();
+                this.scroll.scroll_to_item(0, ScrollStrategy::Nearest);
+                this.status.clear();
                 cx.notify();
             }
-        })
-        .detach();
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder("Master password")
         });
-        cx.subscribe_in(&password, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) && this.password_error.take().is_some() {
-                cx.notify();
-            }
-        })
-        .detach();
-        let confirmation = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder("Confirm master password")
-        });
-        cx.subscribe_in(&confirmation, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) && this.password_error.take().is_some() {
-                cx.notify();
-            }
-        })
-        .detach();
-        let label = cx.new(|cx| InputState::new(window, cx).placeholder("Public label (required)"));
-        cx.subscribe_in(&label, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) && this.password_error.take().is_some() {
-                cx.notify();
-            }
-        })
-        .detach();
-        let own_id = window.window_handle().window_id();
-        let entity = cx.weak_entity();
-        let keys = cx.intercept_keystrokes(move |event, window, cx| {
-            if window.window_handle().window_id() != own_id || !window.is_window_active() {
-                return;
-            }
-            let Some(entity) = entity.upgrade() else {
-                return;
-            };
-            let key = event.keystroke.key.as_str();
-            let mods = &event.keystroke.modifiers;
-            let primary = if cfg!(target_os = "macos") {
-                mods.platform || mods.control
-            } else {
-                mods.control
-            };
-            let handled = entity.update(cx, |this, cx| {
-                if this.editor_open {
-                    return false;
-                }
-                if this.prompt.is_some() {
-                    if this
-                        .password
-                        .update(cx, |q, cx| q.marked_text_range(window, cx).is_some())
-                    {
-                        return false;
-                    }
-                    return match key {
-                        "escape" if !this.busy => {
-                            this.cancel_prompt(window, cx);
-                            true
-                        }
-                        "enter" if !this.busy => {
-                            this.submit_password(window, cx);
-                            true
-                        }
-                        _ => false,
-                    };
-                }
-                // IME candidate navigation/confirmation belongs to the text input.
-                let composing = this
-                    .query
-                    .update(cx, |q, cx| q.marked_text_range(window, cx).is_some());
-                if composing {
-                    return false;
-                }
-                match key {
-                    "escape" if !this.busy => {
-                        window.remove_window();
-                        clear_popup();
-                        true
-                    }
-                    "enter" if !mods.alt && !mods.shift => {
-                        this.use_selected(primary, window, cx);
-                        true
-                    }
-                    "r" if primary && !mods.alt => {
-                        this.reserve(window, cx);
-                        true
-                    }
-                    "l" if primary && !mods.alt => {
-                        this.protect_selected(window, cx);
-                        true
-                    }
-                    "f2" => {
-                        this.edit(window, cx);
-                        true
-                    }
-                    "up" | "down" | "pageup" | "pagedown"
-                        if !primary && !mods.alt && !mods.shift =>
-                    {
-                        let delta = match key {
-                            "up" => -1,
-                            "down" => 1,
-                            "pageup" => -PAGE,
-                            _ => PAGE,
-                        };
-                        this.selected = (this.selected as isize + delta)
-                            .clamp(0, this.filtered.len().saturating_sub(1) as isize)
-                            as usize;
-                        this.scroll_to_selection();
-                        cx.notify();
-                        true
-                    }
-                    // Delete/Home/End retain their normal search-field editing behavior.
-                    _ => false,
-                }
-            });
-            if handled {
-                cx.stop_propagation();
-                window.prevent_default();
-            }
-        });
-        let activation = cx.observe_window_activation(window, |_, window, _| {
-            super::set_clipboard_escape_target(window.is_window_active());
-        });
-        window.on_window_should_close(cx, |_, _| {
-            clear_popup();
-            true
-        });
-        query.update(cx, |q, cx| q.focus(window, cx));
-        let mut this = Self {
+        let this = Self {
+            repository,
             store,
             filter,
+            events,
             rows: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
-            query,
+            query: query.clone(),
             scroll: UniformListScrollHandle::new(),
             destination,
             busy: false,
-            loading: true,
             status: String::new(),
-            status_error: false,
-            status_warning: false,
-            password_error: None,
-            password,
-            confirmation,
-            label,
-            creating_vault: false,
-            editor_open: false,
-            hovered_row: None,
-            prompt: None,
             capture_enabled: false,
-            capture_status: "Collector starting…".into(),
-            query_version: 0,
-            _keys: keys,
-            _activation: activation,
+            source: SourceFilter::All,
+            loading: true,
+            preferred_selection: None,
+            _query: subscription,
         };
-        this.refresh(window, cx);
-        cx.spawn_in(window, async move |entity, cx| {
-            // Reconciliation cadence for cross-process changes (CLI rewrites,
-            // external vault edits). Local watcher events drain their own
-            // signal queue and trigger a near-instant refresh on the next
-            // tick; this loop only guarantees we catch up after the watcher
-            // misses a write -- once every five seconds is enough.
-            const RECONCILE_EVERY: u32 = 5;
-            let mut ticks_since_refresh: u32 = 0;
+        query.update(cx, |input, cx| input.focus(window, cx));
+        cx.spawn(async move |entity, cx| {
+            let mut last_version = -1;
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(1))
-                    .await;
+                let repository = match entity
+                    .update(cx, |this, _| (!this.busy).then(|| this.repository.clone()))
+                {
+                    Ok(repository) => repository,
+                    Err(_) => break,
+                };
+                let Some(repository) = repository else {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(400))
+                        .await;
+                    continue;
+                };
+                let version = repository.data_version().await.unwrap_or(-1);
+                if version == last_version && version >= 0 {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(400))
+                        .await;
+                    continue;
+                }
+                let result = repository.snapshot(TextSources::new(true, true), "").await;
+                if result.is_ok() {
+                    last_version = version;
+                }
+                let settings = repository.settings().await;
                 if entity
-                    .update_in(cx, |this, window, cx| {
-                        this.capture_status = crate::native::clipboard::watcher::capture_status();
-                        let drained = crate::native::clipboard::watcher::drain_watcher_signals();
-                        let signal_pushed_refresh = !drained.is_empty();
-                        ticks_since_refresh = ticks_since_refresh.saturating_add(1);
-                        let due_for_reconcile = ticks_since_refresh >= RECONCILE_EVERY;
-                        if !this.busy
-                            && this.prompt.is_none()
-                            && !this.editor_open
-                            && (signal_pushed_refresh || due_for_reconcile)
-                        {
-                            if signal_pushed_refresh {
-                                ticks_since_refresh = 0;
+                    .update(cx, |this, cx| {
+                        if this.busy {
+                            last_version = -1;
+                            return;
+                        }
+                        let id = this
+                            .preferred_selection
+                            .take()
+                            .or_else(|| this.selected_entry().map(|e| e.id()));
+                        this.loading = false;
+                        match result {
+                            Ok(rows) => {
+                                this.rows = rows;
+                                this.refilter(cx);
+                                if let Some(id) = id
+                                    && let Some(ix) = this
+                                        .filtered
+                                        .iter()
+                                        .position(|ix| this.rows[*ix].id() == id)
+                                {
+                                    this.selected = ix;
+                                }
                             }
-                            this.refresh(window, cx);
+                            Err(_) => this.status = "Could not load texts. Retrying.".into(),
+                        };
+                        if let Ok(settings) = settings {
+                            this.capture_enabled = settings.capture_enabled;
                         }
                         cx.notify();
                     })
@@ -446,1091 +279,795 @@ impl ClipboardChooserWidget {
                 {
                     break;
                 }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(400))
+                    .await;
             }
         })
         .detach();
         this
     }
-    fn scroll_to_selection(&self) {
+    fn refilter(&mut self, cx: &App) {
+        self.filtered = filter_indices(&self.rows, self.query.read(cx).value().as_ref())
+            .into_iter()
+            .filter(|ix| self.source.includes(self.rows[*ix].id()))
+            .collect();
+        self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+    }
+    fn selected_entry(&self) -> Option<TextEntry> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|ix| self.rows.get(*ix))
+            .cloned()
+    }
+    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        self.selected = self
+            .selected
+            .saturating_add_signed(delta)
+            .min(self.filtered.len().saturating_sub(1));
         self.scroll
-            .scroll_to_item(self.selected, ScrollStrategy::Top);
-    }
-    fn selected_item(&self) -> Option<ClipboardItem> {
-        self.rows.get(*self.filtered.get(self.selected)?).cloned()
-    }
-    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let store = self.store.clone();
-        let selected_id = self.selected_item().map(|r| r.id);
-        self.query_version += 1;
-        let version = self.query_version;
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = store.snapshot().await;
-            let settings = store.settings().await;
-            let _ = entity.update_in(cx, |this, _, cx| {
-                if version != this.query_version {
-                    return;
-                }
-                if let Ok(settings) = settings {
-                    this.capture_enabled = settings.capture_enabled;
-                }
-                this.loading = false;
-                match result {
-                    Ok(mut rows) => {
-                        redact_protected_previews(&mut rows);
-                        this.rows = rows;
-                        this.filtered = crate::clipboard::filter::filter_indices(
-                            &this.rows,
-                            &this.query.read(cx).value(),
-                        );
-                        this.selected = selected_id
-                            .and_then(|id| {
-                                this.filtered.iter().position(|i| this.rows[*i].id == id)
-                            })
-                            .unwrap_or_else(|| {
-                                this.selected.min(this.filtered.len().saturating_sub(1))
-                            });
-                        this.scroll_to_selection();
-                    }
-                    Err(_) => {
-                        this.status_error = true;
-                        this.status = "Could not load history. Try refreshing.".into();
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-    fn use_selected(&mut self, copy_only: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let Some(item) = self.selected_item() else {
-            return;
-        };
-        if protected(&item) {
-            self.request_password(item.id, AuthorizedAction::Use(copy_only), window, cx);
-            return;
-        }
-        self.busy = true;
-        self.status_error = false;
-        self.status = if copy_only {
-            "Copying…"
-        } else {
-            "Restoring destination…"
-        }
-        .into();
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         cx.notify();
-        let store = self.store.clone();
-        let filter = self.filter.clone();
-        let destination = self.destination;
-        cx.spawn_in(window, async move |entity, cx| {
-            // Re-read the chosen stable ID before any side effect; never use stale cached content.
-            let result = async {
-                let current = store.get(item.id).await?;
-                anyhow::ensure!(
-                    !protected(&current),
-                    "This item is now protected. Nothing was copied."
-                );
-                if !copy_only {
-                    entity.update_in(cx, |_, window, _| hide_chooser(window))??;
-                }
-                let dispatch = cx
-                    .background_executor()
-                    .spawn(async move {
-                        if !copy_only {
-                            crate::native::clipboard::paste::wait_for_modifiers()?;
-                            foreground(destination)?;
-                        }
-                        write_clipboard_text(&filter, &current.content)?;
-                        if !copy_only {
-                            paste_foreground(destination)?;
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    })
-                    .await;
-                dispatch?;
-                store.mark_used(item.id, now_unix_millis()).await?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            let _ = entity.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                match result {
-                    Ok(()) => {
-                        clear_popup();
-                        window.remove_window();
-                    }
-                    Err(err) => {
-                        show_chooser(window);
-                        this.status_error = true;
-                        this.status = format!("{err}");
-                        window.activate_window();
-                        this.query.update(cx, |q, cx| q.focus(window, cx));
-                        cx.notify();
-                    }
-                }
-            });
-        })
-        .detach();
     }
-    fn reserve(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn save(&mut self, encrypted: bool, edit: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        let Some(item) = self.selected_item() else {
-            return;
-        };
-        self.status.clear();
-        self.status_warning = false;
-        self.busy = true;
-        let store = self.store.clone();
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = async {
-                let current = store.get(item.id).await?;
-                store
-                    .set_retention_flag(
-                        item.id,
-                        RetentionFlag::Explicit,
-                        !current.retention.explicit(),
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>((
-                    !current.retention.explicit(),
-                    current.retention.edited() || protected(&current),
-                ))
-            }
-            .await;
-            let _ = entity.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                this.status_warning = false;
-                this.status_error = result.is_err();
-                this.status = match result {
-                    Ok((true, _)) => "Reserved. Kept outside ordinary history limits.".into(),
-                    Ok((false, true)) => {
-                        "Reservation removed; edited/protected retention still keeps this item."
-                            .into()
+        if encrypted
+            && let Some(entry) = self.selected_entry()
+            && !entry.is_encrypted()
+        {
+            let weak = cx.weak_entity();
+            let initial = if matches!(entry.id(), TextEntryId::Sticker(_)) {
+                entry.title()
+            } else {
+                ""
+            };
+            super::text_title::prompt(
+                window,
+                cx,
+                true,
+                initial,
+                Box::new(move |title, window, cx| {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(cx, |this, cx| {
+                            this.save_titled(encrypted, edit, Some(title), window, cx)
+                        });
                     }
-                    Ok((false, false)) => {
-                        "Reservation removed; ordinary history limits now apply.".into()
-                    }
-                    Err(_) => "Reservation failed; no successful change is claimed.".into(),
-                };
-                this.refresh(window, cx);
-                cx.notify();
-            });
-        })
-        .detach();
+                }),
+            );
+            return;
+        }
+        self.save_titled(encrypted, edit, None, window, cx);
     }
-    fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let Some(item) = self.selected_item() else {
-            return;
-        };
-        if protected(&item) {
-            self.request_password(item.id, AuthorizedAction::Edit, window, cx);
-            return;
-        }
-        self.editor_open = true;
-        let parent = cx.weak_entity();
-        if editor::open(window, cx, self.store.clone(), item, parent, None, None).is_err() {
-            self.status_error = true;
-            self.editor_open = false;
-            self.status = "Could not open the editor. Try again.".into();
-            cx.notify();
-        }
-    }
-    fn protect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.prompt.is_some() {
-            return;
-        }
-        let Some(item) = self.selected_item() else {
-            return;
-        };
-        if protected(&item) {
-            self.request_password(item.id, AuthorizedAction::Unprotect, window, cx);
-            return;
-        }
-        self.request_password(item.id, AuthorizedAction::Protect, window, cx);
-    }
-    fn request_password(
+    fn save_titled(
         &mut self,
-        id: i64,
-        action: AuthorizedAction,
+        encrypted: bool,
+        edit: bool,
+        title: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.busy {
             return;
         }
-        if GLOBAL_VAULT.get().is_none() {
-            self.status_error = true;
-            self.status = "Vault unavailable. Try reopening history.".into();
-            cx.notify();
+        let Some(entry) = self.selected_entry() else {
             return;
-        }
-        let expected_plaintext = if matches!(action, AuthorizedAction::Protect) {
-            self.selected_item()
-                .filter(|item| item.id == id)
-                .map(|item| zeroize::Zeroizing::new(item.content))
-        } else {
-            None
         };
-        self.status.clear();
-        self.status_warning = false;
-        self.password_error = None;
-        // Pre-fill the label input. Protect starts blank (user types fresh);
-        // Edit pre-fills with the row's current alias so the user only has to
-        // adjust when they want a change.
-        let preset_label = if matches!(action, AuthorizedAction::Edit) {
-            self.selected_item()
-                .filter(|item| item.id == id)
-                .and_then(|item| item.public_label.clone())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let placeholder = if matches!(action, AuthorizedAction::Edit) {
-            "Public label (optional)"
-        } else {
-            "Public label (required)"
-        };
-        self.label.update(cx, |p, cx| {
-            p.set_placeholder(gpui::SharedString::from(placeholder), window, cx);
-            p.set_value(&preset_label, window, cx);
-        });
-        self.prompt = Some(PasswordPrompt {
-            id,
-            action,
-            expected_plaintext,
-            prefilled_label: if matches!(action, AuthorizedAction::Edit) {
-                Some(preset_label)
-            } else {
-                Some(String::new())
-            },
-        });
-        self.password
-            .update(cx, |p, cx| p.set_value("", window, cx));
+        let repo = self.repository.clone();
+        let store = self.store.clone();
+        let events = self.events.clone();
+        let weak = cx.entity().downgrade();
         self.busy = true;
-        let vault = GLOBAL_VAULT.get().cloned().expect("vault checked above");
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = cx.background_executor().spawn(async move {
-                futures::executor::block_on(vault.envelope())
-            }).await;
-            let _ = entity.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                match result {
-                    Ok(envelope) => {
-                        this.creating_vault = envelope.is_none();
-                        if this.creating_vault && !matches!(action, AuthorizedAction::Protect) {
-                            this.clear_password_prompt(window, cx);
-                            this.status_error = true;
-                            this.status = "The original vault is missing. Restore it to unlock protected items; a new vault cannot decrypt them.".into();
-                        } else {
-                            this.open_password_dialog(window, cx);
-                            if matches!(action, AuthorizedAction::Protect) {
-                                this.label.update(cx, |p, cx| p.focus(window, cx));
-                            } else {
-                                this.password.update(cx, |p, cx| p.focus(window, cx));
+        cx.notify();
+        window
+            .spawn(cx, async move |cx| {
+                let probe = repo.clone();
+                if encrypted && !entry.is_encrypted() {
+                    let configured = cx
+                        .background_executor()
+                        .spawn(async move { futures::executor::block_on(probe.master_key()) })
+                        .await;
+                    if !matches!(configured, Ok(Some(_))) {
+                        if let Some(entity) = weak.upgrade() {
+                            let _ = entity.update_in(cx, |this, window, cx| {
+                                this.busy = false;
+                                super::text_password::settings(window, cx, repo);
+                                cx.notify();
+                            });
+                        }
+                        return;
+                    }
+                }
+                let operation = repo.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        futures::executor::block_on(async {
+                            match entry.id() {
+                                TextEntryId::Clipboard(_) => {
+                                    operation
+                                        .promote_titled(&entry, encrypted, title.as_deref())
+                                        .await
+                                }
+                                TextEntryId::Sticker(id) => {
+                                    if encrypted && !entry.is_encrypted() {
+                                        operation
+                                            .set_encryption_titled(
+                                                &entry,
+                                                true,
+                                                None,
+                                                title.as_deref(),
+                                            )
+                                            .await?;
+                                    }
+                                    Ok(id)
+                                }
                             }
+                        })
+                    })
+                    .await;
+                match result {
+                    Ok(id) => {
+                        if encrypted {
+                            let _ = cx.update(|_, cx| {
+                                StickerWindow::try_close(id, cx);
+                            });
+                        }
+                        let _ = events.send(StickerWindowEvent::Created { id });
+                        if edit {
+                            let _ = cx.update(|_, cx| {
+                                let events = events.clone();
+                                let store = store.clone();
+                                cx.spawn(async move |cx| {
+                                    let _ = StickerWindow::open_async_with_options(
+                                        cx, events, store, id, true,
+                                    )
+                                    .await;
+                                })
+                                .detach();
+                            });
+                        }
+                        if let Some(entity) = weak.upgrade() {
+                            let _ = entity.update_in(cx, |this, window, cx| {
+                                this.busy = false;
+                                this.preferred_selection = Some(TextEntryId::Sticker(id));
+                                this.status = if encrypted {
+                                    "Saved encrypted text"
+                                } else {
+                                    "Saved text"
+                                }
+                                .into();
+                                if edit {
+                                    clear_popup();
+                                    window.remove_window();
+                                }
+                                cx.notify();
+                            });
                         }
                     }
                     Err(_) => {
-                        this.clear_password_prompt(window, cx);
-                        this.status_error = true;
-                        this.status = "Could not read the clipboard vault. No changes were saved. Try reopening history.".into();
+                        if let Some(entity) = weak.upgrade() {
+                            let _ = entity.update_in(cx, |this, _, cx| {
+                                this.busy = false;
+                                this.status =
+                                    "Text changed or could not be saved. Select it again.".into();
+                                cx.notify();
+                            });
+                        }
                     }
                 }
-                cx.notify();
-            });
-        }).detach();
-        cx.notify();
+            })
+            .detach();
     }
-    fn open_password_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let entity = cx.entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let this = entity.read(cx);
-            let protecting = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Protect));
-            let editing = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Edit));
-            let unprotecting = this.prompt.as_ref().is_some_and(|p| matches!(p.action, AuthorizedAction::Unprotect));
-            let creating = this.creating_vault;
-            let label = this.label.clone();
-            let confirmation = this.confirmation.clone();
-            let busy = this.busy;
-            let password = this.password.clone();
-            let error = this.password_error.clone();
-            let submit = entity.clone();
-            let cancel = entity.clone();
-            let closed = entity.clone();
-            dialog
-                .title(
-                    if creating { "Set up clipboard vault" }
-                    else if protecting { "Protect clipboard item" }
-                    else if editing { "Edit clipboard item" }
-                    else if unprotecting { "Remove item protection" }
-                    else { "Unlock clipboard item" },
-                )
-                .w(window.viewport_size().width.min(px(400.0)) - px(32.0))
-                .text_sm()
-                .overlay_closable(false)
-                .keyboard(false)
-                .close_button(!busy)
-                .on_close(move |_, window, cx| {
-                    closed.update(cx, |this, cx| {
-                        if !this.busy && this.prompt.is_some() {
-                            this.clear_password_prompt(window, cx);
-                        }
-                    });
-                })
-                .child(v_flex().gap_3()
-                    .child(div().text_color(cx.theme().muted_foreground).child(
-                        if creating { "Choose a master password to securely encrypt your clipboard items." }
-                        else if protecting { "Enter your master password to encrypt this item." }
-                        else if editing { "Enter your master password to edit and (optionally) relabel this item." }
-                        else if unprotecting { "Enter your master password to remove encryption from this item." }
-                        else { "Enter your master password to use this protected item." }))
-                    .when(creating, |body| body.child(Alert::warning("clipboard-vault-setup", "No clipboard vault exists yet. Keep your master password safe: it cannot be recovered or reset to unlock existing items.").small()))
-                    // The label field is shared between Protect (required) and Edit
-                    // (optional). Same input, same hint, same style; only the
-                    // empty-check in `submit_password` differs.
-                    .when(protecting || editing, |body| body.child(Input::new(&label).disabled(busy).w_full()))
-                    .when(protecting || editing, |body| body.child(
-                        div().text_xs().text_color(cx.theme().muted_foreground)
-                            .child("Visible in history without unlocking. Do not include secrets."),
-                    ))
-                    .child(Input::new(&password).disabled(busy).w_full())
-                    .when(creating, |body| body.child(Input::new(&confirmation).disabled(busy).w_full()))
-                    .when(error.is_some(), |body| body.child(Alert::error("clipboard-password-error", error.unwrap_or_default()).small()))
-                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                        if protecting { "This item is encrypted only after you confirm. Existing backups may still contain the original text." }
-                        else if editing { "Authorization is temporary. The label persists with the row; leave empty to clear it." }
-                        else if unprotecting { "The item will be stored as plain text and ordinary history limits will apply unless pinned or edited." }
-                        else { "Authorization is temporary. Protected copies clear after 30 seconds if unchanged." })))
-                .footer(h_flex().items_center().gap_2()
-                    .child(div().flex_1().text_xs().text_color(cx.theme().muted_foreground).child("Enter confirm · Esc cancel"))
-                    .child(Button::new("cancel-authorization").label("Cancel").small().disabled(busy)
-                        .on_click(move |_, window, cx| cancel.update(cx, |this, cx| this.cancel_prompt(window, cx))))
-                    .child(Button::new("authorize-item").label(
-                        if creating { "Create vault & protect" }
-                        else if protecting { "Protect" }
-                        else if editing { "Edit" }
-                        else if unprotecting { "Remove protection" }
-                        else { "Unlock" },
-                    ).primary().small().loading(busy).disabled(busy)
-                        .on_click(move |_, window, cx| submit.update(cx, |this, cx| this.submit_password(window, cx)))))
-        });
-    }
-
-    fn clear_password_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.prompt = None;
-        self.creating_vault = false;
-        self.confirmation
-            .update(cx, |p, cx| p.set_value("", window, cx));
-        self.password_error = None;
-        self.password
-            .update(cx, |p, cx| p.set_value("", window, cx));
-        if let Some(vault) = GLOBAL_VAULT.get() {
-            vault.lock();
-        }
-        self.query.update(cx, |q, cx| q.focus(window, cx));
-        cx.notify();
-    }
-    fn cancel_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.close_dialog(cx);
-        self.clear_password_prompt(window, cx);
-    }
-    fn submit_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn use_selected(&mut self, copy_only: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        let Some(prompt) = &self.prompt else {
+        let Some(entry) = self.selected_entry() else {
             return;
         };
-        let id = prompt.id;
-        let action = prompt.action;
-        let expected_plaintext = prompt.expected_plaintext.clone();
-        let label = self.label.read(cx).value().trim().to_owned();
-        let prefilled_label = prompt
-            .prefilled_label
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_owned();
-        if matches!(action, AuthorizedAction::Protect) && label.is_empty() {
-            self.password_error = Some("Enter a public label for this item.".into());
-            self.label.update(cx, |p, cx| p.focus(window, cx));
-            cx.notify();
-            return;
+        if entry.is_encrypted() {
+            let weak = cx.entity().downgrade();
+            super::text_password::unlock(
+                window,
+                cx,
+                Box::new(move |password, window, cx| {
+                    if let Some(entity) = weak.upgrade() {
+                        entity.update(cx, |this, cx| {
+                            this.deliver(entry, copy_only, Some(password), window, cx)
+                        });
+                    }
+                }),
+            );
+        } else {
+            self.deliver(entry, copy_only, None, window, cx);
         }
-        let creating = self.creating_vault;
-        let password = zeroize::Zeroizing::new(self.password.read(cx).value().to_string());
-        if creating {
-            let confirmation =
-                zeroize::Zeroizing::new(self.confirmation.read(cx).value().to_string());
-            if let Err(message) = validate_new_password(&password, &confirmation) {
-                self.password_error = Some(message.into());
-                cx.notify();
-                return;
-            }
-        }
-        if password.is_empty() {
-            self.password_error = Some("Enter your master password.".into());
-            cx.notify();
-            return;
-        }
-        self.password
-            .update(cx, |p, cx| p.set_value("", window, cx));
-        self.confirmation
-            .update(cx, |p, cx| p.set_value("", window, cx));
-        self.busy = true;
-        self.password_error = None;
-        cx.notify();
-        let Some(vault) = GLOBAL_VAULT.get().cloned() else {
-            self.busy = false;
-            return;
-        };
-        let store = self.store.clone();
+    }
+    fn deliver(
+        &mut self,
+        entry: TextEntry,
+        copy_only: bool,
+        password: Option<Zeroizing<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let repo = self.repository.clone();
         let filter = self.filter.clone();
         let destination = self.destination;
-        cx.spawn_in(window, async move |entity, cx| {
-            let vault_for_work = vault.clone();
-            let store_for_work = store.clone();
-            let result = cx.background_executor().spawn(async move {
-                futures::executor::block_on(async {
-                    let failures = vault_for_work.failed_attempts().clamp(0, 5) as u64;
-                    if failures > 0 { std::thread::sleep(std::time::Duration::from_millis(250 * failures)); }
-                    if creating { vault_for_work.create(&password).await?; }
-                    anyhow::ensure!(vault_for_work.unlock(&password).await?, "Wrong master password");
-                    let current = store_for_work.get(id).await?;
-                    if matches!(action, AuthorizedAction::Protect) {
-                        let expected = expected_plaintext.as_ref().ok_or_else(|| anyhow::anyhow!("Original item unavailable; reload"))?;
-                        anyhow::ensure!(current.kind == ClipboardItemKind::Plain && current.content == **expected, "Item changed; reload before protecting");
-                        let sealed = vault_for_work.seal_for_storage(expected.as_bytes())?
-                            .ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
-                        // Persist the keyed token so later authorized collection can recognise
-                        // this content and keep it out of ordinary plaintext rows.
-                        let token = vault_for_work.match_token(expected.as_bytes())?
-                            .ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
-                        store_for_work.compare_exchange_protection(id, expected, &sealed.ciphertext, &sealed.vault_envelope, Some(&token), Some(&label)).await?;
-                        return Ok::<_, anyhow::Error>(AuthorizedResult::Protected);
-                    }
-                    anyhow::ensure!(current.kind == ClipboardItemKind::Protected, "Item changed; reload before use");
-                    let bytes = vault_for_work.open(&current.content)?.ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
-                    let text = zeroize::Zeroizing::new(std::str::from_utf8(&bytes)?.to_owned());
-                    if matches!(action, AuthorizedAction::Unprotect) {
-                        let binding = vault_for_work.seal_for_storage(text.as_bytes())?.ok_or_else(|| anyhow::anyhow!("Authorization expired"))?;
-                        store_for_work.compare_exchange_unprotection(id, &current.content, &text, &binding.vault_envelope).await?;
-                        return Ok(AuthorizedResult::Unprotected);
-                    }
-                    match action {
-                        AuthorizedAction::Protect | AuthorizedAction::Unprotect => unreachable!("protection returns before decryption"),
-                        AuthorizedAction::Use(copy_only) => {
-                            Ok::<_, anyhow::Error>(AuthorizedResult::Use(current, text, copy_only))
-                        }
-                        AuthorizedAction::Edit => Ok(AuthorizedResult::Edit(current, text, vault_for_work.clone())),
-                    }
-                })
-            }).await;
-            let result = match result {
-                Ok(AuthorizedResult::Use(item, text, copy_only)) => {
-                    let hidden = if copy_only { Ok(()) } else {
-                        entity.update_in(cx, |_, window, _| hide_chooser(window)).and_then(|r| r)
-                    };
-                    match hidden {
-                        Err(err) => Err(err),
-                        Ok(()) => {
-                            let store = store.clone();
-                            cx.background_executor().spawn(async move {
-                                dispatch_content(&filter, &text, destination, copy_only, true)?;
-                                futures::executor::block_on(store.mark_used(item.id, now_unix_millis()))?;
-                                Ok::<_, anyhow::Error>(AuthorizedResult::Use(item, text, copy_only))
-                            }).await
-                        }
-                    }
-                }
-                other => other,
-            };
-            // Creation can succeed before protection fails. Check persistence before
-            // deciding whether retry should create or unlock; never replace a vault.
-            let still_unconfigured = if creating {
-                let vault = vault.clone();
-                cx.background_executor().spawn(async move {
-                    matches!(futures::executor::block_on(vault.envelope()), Ok(None))
-                }).await
-            } else { false };
-            // One-shot use; only the protected editor retains a scoped key.
-            let editor_result = matches!(result, Ok(AuthorizedResult::Edit(..)));
-            if !editor_result { vault.lock(); }
-            let update = entity.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                // Creation may succeed even when subsequent protection fails. Never replace it on retry.
-                if creating { this.creating_vault = still_unconfigured; }
-                match result {
-                    Ok(AuthorizedResult::Unprotected) => {
-                        this.cancel_prompt(window, cx);
-                        this.status_error = false;
-                        this.status_warning = true;
-                        this.status = "Protection removed. This item is now stored as plain text.".into();
-                        this.refresh(window, cx);
-                    }
-                    Ok(AuthorizedResult::Protected) => {
-                        this.cancel_prompt(window, cx);
-                        this.status_error = false; this.status = "Item protected. Future copies need the vault unlocked to join ordinary history.".into();
-                        // Erase the stale chooser snapshot before the asynchronous refresh.
-                        for row in this.rows.iter_mut().filter(|row| row.id == id) {
-                            row.content.clear(); row.plain_preview = None;
-                            row.kind = ClipboardItemKind::Protected; row.retention.protected_ = true;
-                        }
-                        this.refresh(window, cx);
-                    }
-                    Ok(AuthorizedResult::Use(..)) => { this.cancel_prompt(window, cx); clear_popup(); window.remove_window(); }
-                    Ok(AuthorizedResult::Edit(item, text, vault)) => {
-                        window.close_dialog(cx);
-                        this.prompt = None; this.password_error = None;
-                        this.password.update(cx, |p, cx| p.set_value("", window, cx));
-                        this.editor_open = true;
-                        let parent = cx.weak_entity();
-                        // Forward the label only when it differs from the dialog's
-                        // pre-fill. An untouched input -> `None` so the editor
-                        // leaves the column alone (no overwrite). A clearance ->
-                        // `Some("")` so the store normalises it to NULL.
-                        let typed_label = this.label.read(cx).value().trim().to_owned();
-                        let prefilled_label = if typed_label == prefilled_label {
-                            None
-                        } else {
-                            Some(typed_label)
-                        };
-                        if editor::open(window, cx, this.store.clone(), item, parent, Some((text, vault.clone())), prefilled_label).is_err() { this.editor_open = false; vault.lock(); this.status_error = true; this.status = "Could not open the encrypted editor.".into(); }
-                        // Drop the dialog's label input back to empty so the next
-                        // protect/unprotect pass doesn't leak a stale draft into the
-                        // wrong prompt.
-                        this.label.update(cx, |p, cx| p.set_value("", window, cx));
-                    }
-                    Err(err) => {
-                        show_chooser(window);
-                        this.password_error = Some(if err.to_string().contains("No master password") {
-                            "No clipboard vault yet. Protect an item here, or run: rst vault create."
-                        } else if err.to_string() == "Wrong master password" {
-                            "Incorrect master password. Try again."
-                        } else if matches!(action, AuthorizedAction::Protect) {
-                            "Could not protect this item. If setup succeeded, use your new master password. Refresh history if the item changed."
-                        } else {
-                            "Could not unlock or use this item. Check your password, or cancel and try Copy only."
-                        }.into());
-                        window.activate_window(); this.password.update(cx, |p, cx| p.focus(window, cx));
-                    }
-                }
-                cx.notify();
-            });
-            if update.is_err() && editor_result { vault.lock(); }
+        let weak = cx.entity().downgrade();
+        self.busy = true;
+        cx.notify();
+        if !copy_only && hide_chooser(window).is_err() {
+            self.busy = false;
+            self.status = "Verified paste unavailable. Use Copy only.".into();
+            cx.notify();
+            return;
+        }
+        window.spawn(cx,async move|cx|{let result=cx.background_executor().spawn(async move{futures::executor::block_on(async{
+            let text=repo.resolve(&entry,password.as_ref().map(|p|p.as_str())).await?;
+            dispatch_content(&filter,&text,destination,copy_only,entry.is_encrypted())?;
+            let _=repo.mark_used(entry.id(),crate::utils::time::now_unix_millis()).await;anyhow::Ok(())
+        })}).await;
+        if let Some(entity)=weak.upgrade(){let _=entity.update_in(cx,|this,window,cx|{this.busy=false;match result{Ok(())=>{clear_popup();window.remove_window();},Err(_)=>{show_chooser(window);window.activate_window();this.status="Could not use text. Check the password or paste destination; try Copy only.".into();}}cx.notify();});}
         }).detach();
+    }
+    fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(entry) = self.selected_entry() else {
+            return;
+        };
+        let weak = cx.entity().downgrade();
+        if matches!(entry.id(), TextEntryId::Sticker(_)) {
+            window.open_alert_dialog(cx, move |dialog, _, _| {
+                let weak = weak.clone();
+                let entry = entry.clone();
+                dialog
+                    .title("Delete saved text?")
+                    .child("This permanently deletes the text sticker.")
+                    .on_ok(move |_, window, cx| {
+                        if let Some(entity) = weak.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                this.delete_entry(entry.clone(), window, cx)
+                            });
+                        }
+                        true
+                    })
+            });
+        } else {
+            self.delete_entry(entry, window, cx);
+        }
+    }
+    fn delete_entry(&mut self, entry: TextEntry, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let repo = self.repository.clone();
+        let events = self.events.clone();
+        let id = entry.id();
+        let entity = cx.entity().downgrade();
+        self.busy = true;
+        window
+            .spawn(cx, async move |cx| {
+                let result = repo.delete(id).await;
+                if let TextEntryId::Sticker(id) = id {
+                    let _ = events.send(StickerWindowEvent::Created { id });
+                    let _ = cx.update(|_, cx| StickerWindow::try_close(id, cx));
+                }
+                if let Some(entity) = entity.upgrade() {
+                    let _ = entity.update_in(cx, |this, _, cx| {
+                        this.busy = false;
+                        if result.is_err() {
+                            this.status = "Could not delete text.".into();
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
     }
     fn toggle_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        self.status.clear();
-        self.status_warning = false;
         self.busy = true;
-        let store = self.store.clone();
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = async {
-                let mut settings = store.settings().await?;
-                settings.capture_enabled = !settings.capture_enabled;
-                store.update_settings(&settings).await?;
-                Ok::<_, anyhow::Error>(settings.capture_enabled)
-            }
-            .await;
-            let _ = entity.update_in(cx, |this, _, cx| {
-                this.busy = false;
-                this.status_warning = false;
-                this.status_error = result.is_err();
-                match result {
-                    Ok(enabled) => {
-                        this.capture_enabled = enabled;
-                        this.status_warning = enabled;
-                        this.status = if enabled {
-                            "Collection enabled. Copied text, including secrets, will be saved."
-                        } else {
-                            "Collection paused. Your existing history is still available."
-                        }
-                        .into();
-                    }
-                    Err(_) => {
-                        this.status =
-                            "Could not update collection. Your previous setting is unchanged."
-                                .into()
-                    }
+        cx.notify();
+        let repo = self.repository.clone();
+        let entity = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let result = async {
+                    let mut settings = repo.settings().await?;
+                    settings.capture_enabled = !settings.capture_enabled;
+                    repo.update_settings(&settings).await?;
+                    anyhow::Ok(settings.capture_enabled)
                 }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-    fn remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.prompt.is_some() || self.editor_open {
-            return;
-        }
-        let Some(item) = self.selected_item() else {
-            return;
-        };
-        // Instant delete is fine for ordinary disposable items -- the
-        // chooser is keyboard-first and the user can always re-copy.
-        // Protected and explicitly retained items need a confirmation
-        // because the action is irreversible (a pinned note, an
-        // edited entry, or a protected envelope's plaintext cannot be
-        // recovered once the store drops them). The design-guide rule
-        // applies here: name the object, name the consequence, no
-        // blanket confirmation ritual.
-        if item.retention.is_retained() || protected(&item) {
-            self.confirm_remove(item, window, cx);
-            return;
-        }
-        self.busy = true;
-        let store = self.store.clone();
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = store.delete_row(item.id).await;
-            let _ = entity.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                this.status_error = result.is_err();
-                this.status_warning = false;
-                this.status = if result.is_ok() {
-                    "Item removed."
-                } else {
-                    "Could not remove this item. Try again."
+                .await;
+                if let Some(entity) = entity.upgrade() {
+                    let _ = entity.update_in(cx, |this, _, cx| {
+                        this.busy = false;
+                        match result {
+                            Ok(enabled) => {
+                                this.capture_enabled = enabled;
+                                this.status.clear();
+                            }
+                            Err(_) => this.status = "Could not update collection settings.".into(),
+                        };
+                        cx.notify();
+                    });
                 }
-                .into();
-                this.refresh(window, cx);
-            });
-        })
-        .detach();
-    }
-
-    /// Confirm-then-delete for items whose removal is irreversible from
-    /// the chooser's point of view. The body spells out the consequence
-    /// of the action -- "removes the pin", "removes your edit",
-    /// "removes the encryption envelope" -- rather than "Are you sure?"
-    /// so the user can decide without consulting a separate doc.
-    fn confirm_remove(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
-        let id = item.id;
-        let preview = item.preview_text();
-        let already_protected = protected(&item);
-        let retain_reasons = (
-            item.retention.explicit(),
-            item.retention.edited(),
-            already_protected,
-        );
-        let body: &'static str = match retain_reasons {
-            (true, _, true) => {
-                "This item is pinned and encrypted. Forgetting it removes both the pin and the encryption envelope -- it falls off your history and the plaintext is gone for good."
-            }
-            (true, _, false) => {
-                "This item is pinned. Forgetting it unpins the entry and removes it from your history."
-            }
-            (false, true, true) => {
-                "This item carries your edit and is encrypted. Forgetting it removes the edit and the encryption envelope -- the original captured text is gone for good."
-            }
-            (false, true, false) => {
-                "This item carries your edit. Forgetting it removes the edit and the entry from your history."
-            }
-            (false, false, true) => {
-                "This item is encrypted. Forgetting it removes the encryption envelope -- the plaintext is gone for good."
-            }
-            // Caller only routes here when at least one of those flags
-            // is true. The exhaustion arm here is defensive; if the
-            // route ever changes, the explanatory copy needs updating.
-            (false, false, false) => "This item's history entry will be removed.",
-        };
-
-        let entity = cx.entity();
-        let store = self.store.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let entity = entity.clone();
-            let store = store.clone();
-            dialog
-                .title(format!("Forget \"{preview}\"?"))
-                .child(div().text_sm().child(body))
-                .footer(
-                    h_flex()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            Button::new("cancel-forget")
-                                .label("Cancel")
-                                .small()
-                                .on_click(|_, window, cx| {
-                                    window.close_dialog(cx);
-                                }),
-                        )
-                        .child(
-                            Button::new("confirm-forget")
-                                .label("Forget")
-                                .danger()
-                                .small()
-                                .on_click(move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let store = store.clone();
-                                    let entity = entity.clone();
-                                    window
-                                        .spawn(cx, async move |cx| {
-                                            let result = store.delete_row(id).await;
-                                            let _ = entity.update_in(cx, |this, window, cx| {
-                                                this.busy = false;
-                                                this.status_error = result.is_err();
-                                                this.status_warning = false;
-                                                this.status = if result.is_ok() {
-                                                    "Item forgotten."
-                                                } else {
-                                                    "Could not forget this item. Try again."
-                                                }
-                                                .into();
-                                                this.refresh(window, cx);
-                                                cx.notify();
-                                            });
-                                        })
-                                        .detach();
-                                }),
-                        ),
-                )
-                .w(px(420.0))
-        });
-    }
-    fn row(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let item = &self.rows[self.filtered[index]];
-        let pinned = item.retention.explicit();
-        let locked = protected(item);
-        // The persistent pin badge: any reason retention holds (pinned OR
-        // edited) shows the pin icon -- unless the row is locked, in which
-        // case the lock icon wins. The badge is always visible regardless of
-        // hover; the existing actions row already disables the pin button on
-        // locked items, so there's no visual conflict.
-        let show_pin_badge = item.retention.is_retained() && !locked;
-        let disabled = self.busy || self.prompt.is_some() || self.editor_open;
-        let hovered = self.hovered_row == Some(item.id);
-        let id = item.id;
-        let actions = h_flex()
-            .gap_0()
-            .flex_shrink_0()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .when(!locked && hovered, |actions| {
-                actions.child(
-                    div().when(!hovered, |el| el.hidden()).child(
-                        Button::new(("row-pin", item.id as usize))
-                            .icon(IconName::Pin)
-                            .ghost()
-                            .small()
-                            .selected(pinned)
-                            .disabled(disabled)
-                            .tooltip(if pinned {
-                                "Unpin · Ctrl/Cmd+R"
-                            } else {
-                                "Pin · Ctrl/Cmd+R"
-                            })
-                            .on_click(cx.listener(move |this, _, w, cx| {
-                                cx.stop_propagation();
-                                this.selected = index;
-                                this.reserve(w, cx);
-                            })),
-                    ),
-                )
             })
+            .detach();
+    }
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        // Menus consume Escape first; toolbar focus must not strand the utility.
+        if key != "escape" && !self.query.focus_handle(cx).contains_focused(window, cx) {
+            return;
+        }
+        match key {
+            "escape" => {
+                if !self.busy {
+                    clear_popup();
+                    window.remove_window();
+                }
+            }
+            "up" => self.move_selection(-1, cx),
+            "down" => self.move_selection(1, cx),
+            "pageup" => self.move_selection(-6, cx),
+            "pagedown" => self.move_selection(6, cx),
+            "enter" => self.use_selected(command || self.destination.is_none(), window, cx),
+            "f2" => self.save(false, true, window, cx),
+            "delete" if self.query.read(cx).value().is_empty() => self.delete(window, cx),
+            "r" if command => self.save(false, false, window, cx),
+            "l" if command => self.save(true, false, window, cx),
+            _ => return,
+        };
+        cx.stop_propagation();
+    }
+}
+impl Focusable for TextPicker {
+    fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        self.query.focus_handle(cx)
+    }
+}
+impl TextPicker {
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .flex_shrink_0()
+            .px_2()
+            .py_2()
+            .gap_1()
+            .window_control_area(WindowControlArea::Drag)
             .child(
-                div().when(!hovered, |el| el.hidden()).child(
-                    Button::new(("row-copy", item.id as usize))
-                        .icon(IconName::Copy)
-                        .ghost()
-                        .small()
-                        .disabled(disabled)
-                        .tooltip("Copy only · Ctrl/Cmd+Enter")
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            cx.stop_propagation();
-                            this.selected = index;
-                            this.use_selected(true, w, cx);
-                        })),
+                div().flex_1().min_w_0().occlude().child(
+                    Input::new(&self.query)
+                        .prefix(Icon::new(IconName::Search))
+                        .cleanable(true)
+                        .border_0()
+                        .w_full()
+                        .disabled(self.busy),
                 ),
             )
+            .child(
+                Button::new("master-password")
+                    .icon(IconName::LockClosed)
+                    .ghost()
+                    .small()
+                    .occlude()
+                    .tooltip("Master password…")
+                    .disabled(self.busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        super::text_password::settings(window, cx, this.repository.clone())
+                    })),
+            )
+            .child(
+                Button::new("close-texts")
+                    .icon(IconName::Close)
+                    .ghost()
+                    .small()
+                    .occlude()
+                    .tooltip("Close · Esc")
+                    .disabled(self.busy)
+                    .on_click(|_, window, _| {
+                        clear_popup();
+                        window.remove_window();
+                    }),
+            )
+    }
+
+    fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .px_3()
+            .pb_2()
+            .gap_1()
+            .flex_shrink_0()
+            .children(
+                [
+                    (SourceFilter::All, "all-texts", "All"),
+                    (SourceFilter::Saved, "saved-texts", "Saved"),
+                    (SourceFilter::Clipboard, "clipboard-texts", "Clipboard"),
+                ]
+                .into_iter()
+                .map(|(source, id, label)| {
+                    Button::new(id)
+                        .label(label)
+                        .ghost()
+                        .small()
+                        .selected(self.source == source)
+                        .disabled(self.busy)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.source = source;
+                            this.selected = 0;
+                            this.refilter(cx);
+                            this.scroll.scroll_to_item(0, ScrollStrategy::Nearest);
+                            this.status.clear();
+                            this.query.update(cx, |query, cx| query.focus(window, cx));
+                            cx.notify();
+                        }))
+                }),
+            )
+            .child(div().flex_1())
             .child(
                 div()
-                    .when(!locked, |el| el.when(!hovered, |el| el.hidden()))
-                    .child(
-                        Button::new(("row-lock", item.id as usize))
-                            .icon(if locked {
-                                IconName::LockClosed
-                            } else {
-                                IconName::LockOpen
-                            })
-                            .ghost()
-                            .small()
-                            .selected(locked)
-                            .disabled(disabled)
-                            .tooltip(if locked {
-                                "Remove protection · master password required · Ctrl/Cmd+L"
-                            } else {
-                                "Protect with a public label · Ctrl/Cmd+L"
-                            })
-                            .on_click(cx.listener(move |this, _, w, cx| {
-                                cx.stop_propagation();
-                                this.selected = index;
-                                this.protect_selected(w, cx);
-                            })),
-                    ),
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{} {}",
+                        self.filtered.len(),
+                        if self.filtered.len() == 1 {
+                            "text"
+                        } else {
+                            "texts"
+                        }
+                    )),
             )
-            .child(
-                div().when(!hovered, |el| el.hidden()).child(
-                    Button::new(("row-remove", item.id as usize))
-                        .icon(IconName::Delete)
-                        .ghost()
-                        .small()
-                        .disabled(disabled)
-                        .tooltip("Delete this item from clipboard history")
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            cx.stop_propagation();
-                            this.selected = index;
-                            this.remove_selected(w, cx);
-                        })),
-                ),
-            );
+    }
+
+    fn render_row(&self, ix: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let entry = &self.rows[self.filtered[ix]];
+        let id = entry.id();
+        let encrypted = entry.is_encrypted();
+        let saved = matches!(id, TextEntryId::Sticker(_));
+        let selected = ix == self.selected;
+        let source = if encrypted {
+            "Saved · Locked"
+        } else if saved {
+            "Saved"
+        } else {
+            "Clipboard"
+        };
         h_flex()
-            .id(("clipboard-row", item.id as usize))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_row = Some(id);
-                } else if this.hovered_row == Some(id) {
-                    this.hovered_row = None;
-                }
-                cx.notify();
-            }))
+            .id(gpui::SharedString::from(id.to_string()))
             .w_full()
-            .items_center()
-            .h(px(44.0))
-            .px_2()
-            .gap_1()
+            .h_12()
+            .px_3()
+            .gap_3()
             .rounded_md()
             .border_1()
-            .border_color(if index == self.selected {
+            .border_color(if selected {
                 cx.theme().list_active_border
             } else {
                 cx.theme().transparent
             })
-            .bg(if index == self.selected {
+            .bg(if selected {
                 cx.theme().list_active
             } else {
                 cx.theme().transparent
             })
-            .hover(|row| row.bg(cx.theme().list_hover))
+            .when(!selected && !self.busy, |row| {
+                row.hover(|row| row.bg(cx.theme().list_hover))
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    if this.busy || this.prompt.is_some() || this.editor_open {
+                    if this.busy || window.has_active_dialog(cx) {
                         return;
                     }
-                    this.selected = index;
-                    this.query.update(cx, |q, cx| q.focus(window, cx));
+                    this.selected = ix;
+                    this.status.clear();
+                    this.query.update(cx, |query, cx| query.focus(window, cx));
                     if event.click_count == 2 {
-                        this.edit(window, cx);
+                        this.save(false, true, window, cx);
                     }
                     cx.notify();
                 }),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .truncate()
-                    .child(display_preview(item)),
-            )
-            .when(show_pin_badge, |row| {
-                row.child(
-                    Icon::new(IconName::Pin)
-                        .flex_shrink_0()
-                        .with_size(px(14.0))
-                        .text_color(cx.theme().muted_foreground),
-                )
-            })
-            .when(hovered || locked, |row| row.child(actions))
-            .into_any_element()
-    }
-}
-impl Focusable for ClipboardChooserWidget {
-    fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
-        self.query.read(cx).focus_handle(cx)
-    }
-}
-impl Render for ClipboardChooserWidget {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = cx.entity();
-        let count = self.filtered.len();
-        let disabled = self.busy || self.prompt.is_some() || self.editor_open;
-        let has_protected = self.rows.iter().any(protected);
-        let collector_label = if !self.capture_enabled {
-            "Collection paused"
-        } else if has_protected {
-            "Collection paused · protected history"
-        } else {
-            "Collecting"
-        };
-        v_flex()
-            .relative()
-            .size_full()
-            .rounded_lg()
-            .overflow_hidden()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .window_control_area(WindowControlArea::Drag)
-                    .child(div().flex_1().text_sm().child("Clipboard history"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{count} items")),
-                    )
-                    .child(
-                        Button::new("refresh")
-                            .icon(IconName::Refresh)
-                            .ghost()
-                            .small()
-                            .tooltip("Refresh history")
-                            .occlude()
-                            .disabled(disabled)
-                            .on_click(cx.listener(|this, _, w, cx| this.refresh(w, cx))),
-                    )
-                    .child(
-                        Button::new("close-clipboard")
-                            .icon(IconName::Close)
-                            .ghost()
-                            .small()
-                            .tooltip("Close · Esc")
-                            .occlude()
-                            .disabled(disabled)
-                            .on_click(cx.listener(|_, _, window, _| {
-                                clear_popup();
-                                window.remove_window();
-                            })),
-                    ),
-            )
-            .child(
-                div().px_3().pb_2().flex_shrink_0().child(
-                    Input::new(&self.query)
-                        .cleanable(true)
-                        .prefix(Icon::new(IconName::Search))
-                        .disabled(disabled)
-                        .w_full(),
-                ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .px_2()
-                    .overflow_hidden()
-                    .when(count > 0, |el| {
-                        el.child(
-                            uniform_list("clipboard-history", count, move |range, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    range.map(|index| this.row(index, cx)).collect::<Vec<_>>()
-                                })
-                            })
-                            .size_full()
-                            .track_scroll(&self.scroll),
-                        )
-                    })
-                    .when(count == 0, |el| {
-                        el.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .px_4()
-                                .child(Icon::new(IconName::DocumentText).with_size(px(24.0)))
-                                .child(div().text_sm().child(if self.loading {
-                                    "Loading history…"
-                                } else if self.rows.is_empty() {
-                                    "Your copied text will appear here"
-                                } else {
-                                    "No matching items"
-                                }))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(if self.rows.is_empty() {
-                                            "Enable collection below to get started."
-                                        } else {
-                                            "Try a different search or clear the filter."
-                                        }),
-                                ),
-                        )
-                    }),
+                Icon::new(if encrypted {
+                    IconName::LockClosed
+                } else if saved {
+                    IconName::DocumentText
+                } else {
+                    IconName::Copy
+                })
+                .size_4()
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground),
             )
             .child(
                 v_flex()
-                    .flex_shrink_0()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_sm().truncate().child(entry.preview().to_owned()))
                     .child(
                         h_flex()
-                            .items_center()
-                            .justify_between()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("↑↓ · Enter paste · F2 edit · Esc"),
-                            )
-                            .child(
-                                Button::new("toggle-collection")
-                                    .label(if self.capture_enabled {
-                                        "Pause"
-                                    } else {
-                                        "Collect"
-                                    })
-                                    .icon(if self.capture_enabled {
-                                        IconName::Pause
-                                    } else {
-                                        IconName::Play
-                                    })
-                                    .ghost()
-                                    .small()
-                                    .tooltip(if self.capture_enabled {
-                                        collector_label
-                                    } else {
-                                        "Enable collection. Copied secrets can enter history."
-                                    })
-                                    .disabled(disabled)
-                                    .on_click(
-                                        cx.listener(|this, _, w, cx| this.toggle_capture(w, cx)),
-                                    ),
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(source)
+                            .child(recency_label(
+                                entry.activity_at(),
+                                crate::utils::time::now_unix_millis(),
+                            )),
+                    ),
+            )
+            .child(
+                Button::new(gpui::SharedString::from(format!("copy-{id}")))
+                    .icon(IconName::Copy)
+                    .ghost()
+                    .small()
+                    .tooltip("Copy only · Ctrl+Enter")
+                    .disabled(self.busy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        // Use domain identity: refreshes can change a row's positional index.
+                        if let Some(ix) = this
+                            .filtered
+                            .iter()
+                            .position(|ix| this.rows[*ix].id() == id)
+                        {
+                            this.selected = ix;
+                            this.use_selected(true, window, cx);
+                        }
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(entry) = self.selected_entry() else {
+            return;
+        };
+        if !matches!(entry.id(), TextEntryId::Sticker(_)) {
+            return;
+        }
+        let repo = self.repository.clone();
+        let events = self.events.clone();
+        let weak = cx.weak_entity();
+        let initial = entry.title().to_owned();
+        super::text_title::prompt(
+            window,
+            cx,
+            false,
+            &initial,
+            Box::new(move |title, window, cx| {
+                window
+                    .spawn(cx, async move |cx| {
+                        let result = repo.update_title(entry.id(), &title).await;
+                        if result.is_ok()
+                            && let TextEntryId::Sticker(id) = entry.id()
+                        {
+                            let _ = events.send(StickerWindowEvent::TitleChanged { id, title });
+                        }
+                        let _ = weak.update_in(cx, |this, _, cx| {
+                            this.status = if result.is_ok() {
+                                "Title updated"
+                            } else {
+                                "Could not update title. Try again."
+                            }
+                            .into();
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+            }),
+        );
+    }
+    fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.selected_entry();
+        let capture = selected
+            .as_ref()
+            .is_some_and(|entry| matches!(entry.id(), TextEntryId::Clipboard(_)));
+        let encrypted = selected.as_ref().is_some_and(TextEntry::is_encrypted);
+        let disabled = self.busy || selected.is_none();
+        let view = cx.entity();
+        h_flex()
+            .flex_shrink_0()
+            .px_3()
+            .py_2()
+            .gap_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("text-actions")
+                    .label("Actions")
+                    .icon(IconName::Adjustments)
+                    .ghost()
+                    .small()
+                    .disabled(disabled)
+                    .dropdown_menu(move |menu, window, _| {
+                        menu.item(
+                            PopupMenuItem::new("Rename…").disabled(capture).on_click(
+                                window.listener_for(&view, |this, _, window, cx| {
+                                    this.rename(window, cx)
+                                }),
                             ),
-                    )
-                    .when(!self.status.is_empty() && self.prompt.is_none(), |footer| {
-                        footer.child(if self.status_error {
-                            Alert::error("clipboard-status", self.status.clone()).small()
-                        } else if self.status_warning {
-                            Alert::warning("clipboard-status", self.status.clone()).small()
-                        } else {
-                            Alert::info("clipboard-status", self.status.clone()).small()
-                        })
+                        )
+                        .item(
+                            PopupMenuItem::new("Edit…")
+                                .icon(IconName::DocumentText)
+                                .on_click(window.listener_for(&view, |this, _, window, cx| {
+                                    this.save(false, true, window, cx)
+                                })),
+                        )
+                        .item(
+                            PopupMenuItem::new("Save as sticker")
+                                .icon(IconName::Pin)
+                                .disabled(!capture)
+                                .on_click(window.listener_for(&view, |this, _, window, cx| {
+                                    this.save(false, false, window, cx)
+                                })),
+                        )
+                        .item(
+                            PopupMenuItem::new(if capture { "Save encrypted" } else { "Lock" })
+                                .icon(IconName::LockClosed)
+                                .disabled(encrypted)
+                                .on_click(window.listener_for(&view, |this, _, window, cx| {
+                                    this.save(true, false, window, cx)
+                                })),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(if capture {
+                                "Delete capture"
+                            } else {
+                                "Delete saved text…"
+                            })
+                            .icon(IconName::Delete)
+                            .on_click(
+                                window.listener_for(&view, |this, _, window, cx| {
+                                    this.delete(window, cx)
+                                }),
+                            ),
+                        )
                     }),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("copy-text")
+                    .label("Copy")
+                    .icon(IconName::Copy)
+                    .small()
+                    .ghost()
+                    .disabled(disabled)
+                    .tooltip("Copy only · Ctrl+Enter")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.use_selected(true, window, cx)),
+                    ),
+            )
+            .child(
+                Button::new("paste-text")
+                    .label("Paste")
+                    .icon(IconName::ArrowRight)
+                    .small()
+                    .primary()
+                    .disabled(disabled || self.destination.is_none())
+                    .tooltip(if self.destination.is_some() {
+                        "Paste to previous app · Enter"
+                    } else {
+                        "Open TXTs with the global shortcut to paste to another app"
+                    })
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.use_selected(false, window, cx)),
+                    ),
+            )
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .flex_shrink_0()
+            .px_3()
+            .pb_2()
+            .gap_1()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .truncate()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.busy {
+                        "Working…".to_owned()
+                    } else if !self.status.is_empty() {
+                        self.status.clone()
+                    } else {
+                        if self.destination.is_some() {
+                            "↑↓ select · Enter paste · F2 edit"
+                        } else {
+                            "↑↓ select · Enter copy · F2 edit"
+                        }
+                        .into()
+                    }),
+            )
+            .child(
+                Button::new("capture-toggle")
+                    .label(if self.capture_enabled {
+                        "Collecting"
+                    } else {
+                        "Paused"
+                    })
+                    .icon(if self.capture_enabled {
+                        IconName::Pause
+                    } else {
+                        IconName::Play
+                    })
+                    .ghost()
+                    .small()
+                    .disabled(self.busy)
+                    .tooltip(if self.capture_enabled {
+                        "Pause clipboard collection"
+                    } else {
+                        "Enable clipboard collection. Copied secrets can enter history."
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_capture(window, cx))),
             )
     }
 }
+impl Render for TextPicker {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let count = self.filtered.len();
+        v_flex().size_full().relative().rounded_lg().overflow_hidden()
+            .bg(cx.theme().background).text_color(cx.theme().foreground)
+            .track_focus(&self.query.focus_handle(cx)).on_key_down(cx.listener(Self::key))
+            .child(self.render_header(cx))
+            .child(self.render_filters(cx))
+            .child(div().flex_1().min_h_0().w_full().overflow_hidden()
+                .when(count > 0, |body| body.child(uniform_list("texts-list", count, move |range, _, cx| {
+                    view.update(cx, |this, cx| range.map(|ix| this.render_row(ix, cx)).collect::<Vec<_>>())
+                }).size_full().px_2().track_scroll(&self.scroll)))
+                .when(count == 0, |body| body.child(v_flex().size_full().items_center().justify_center().gap_2().px_4()
+                    .child(Icon::new(IconName::DocumentText).size_6().text_color(cx.theme().muted_foreground))
+                    .child(div().text_sm().child(if self.loading { "Loading texts…" } else if !self.query.read(cx).value().is_empty() { "No matching texts" } else if self.source == SourceFilter::Saved { "No saved texts yet" } else if self.source == SourceFilter::Clipboard { "No clipboard captures yet" } else { "Your text, within reach" }))
+                    .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground)
+                        .child(if !self.query.read(cx).value().is_empty() { "Try another search or clear the filter." } else if self.source == SourceFilter::Saved { "Save a capture from the Actions menu to keep it." } else if self.capture_enabled { "Copied text will appear here. Saved stickers are always kept." } else { "Enable collection below, or create a text sticker." })))))
+            .child(self.render_actions(cx))
+            .child(self.render_footer(cx))
+    }
+}
 
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    #[test]
+    fn source_filters_keep_typed_identity_separate() {
+        assert!(SourceFilter::All.includes(TextEntryId::Sticker(1)));
+        assert!(SourceFilter::All.includes(TextEntryId::Clipboard(1)));
+        assert!(SourceFilter::Saved.includes(TextEntryId::Sticker(1)));
+        assert!(!SourceFilter::Saved.includes(TextEntryId::Clipboard(1)));
+        assert!(SourceFilter::Clipboard.includes(TextEntryId::Clipboard(1)));
+        assert!(!SourceFilter::Clipboard.includes(TextEntryId::Sticker(1)));
+    }
+    #[test]
+    fn relative_time_handles_future_and_boundaries() {
+        assert_eq!(recency_label(10_000, 0), "Just now");
+        assert_eq!(recency_label(0, 60_000), "1m ago");
+        assert_eq!(recency_label(0, 3_600_000), "1h ago");
+        assert_eq!(recency_label(0, 86_400_000), "Yesterday");
+        assert_eq!(recency_label(0, 172_800_000), "2d ago");
+    }
+}
 fn dispatch_content(
     filter: &Arc<CaptureFilter>,
     content: &str,
@@ -1551,6 +1088,8 @@ fn dispatch_content(
     let generation =
         crate::native::clipboard::watcher::write_clipboard_text_owned(filter, content)?;
     if secret {
+        *OWNED_SECRET.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((filter.clone(), generation));
         let filter = filter.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(30));
@@ -1563,12 +1102,11 @@ fn dispatch_content(
     }
     Ok(())
 }
-
 #[cfg(target_os = "windows")]
 fn hide_chooser(window: &Window) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)?.as_raw() else {
-        anyhow::bail!("No native chooser handle");
+        anyhow::bail!("No native chooser handle")
     };
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
@@ -1596,63 +1134,7 @@ fn show_chooser(window: &Window) {
             );
         }
     }
+    super::set_clipboard_escape_target(true);
 }
 #[cfg(not(target_os = "windows"))]
 fn show_chooser(_: &Window) {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn item() -> ClipboardItem {
-        ClipboardItem {
-            id: 1,
-            kind: ClipboardItemKind::Plain,
-            content: "secret\n\t\u{1b}".into(),
-            plain_preview: Some("secret".into()),
-            public_label: None,
-            byte_size: 9,
-            created_at: 0,
-            last_copied_at: 0,
-            last_used_at: None,
-            last_edited_at: None,
-            retention: Default::default(),
-        }
-    }
-    #[test]
-    fn clipboard_action_icons_are_embedded() {
-        use crate::gpui_component::IconNamed;
-        for icon in [IconName::Copy, IconName::Delete] {
-            assert!(crate::native::components::Assets::get(icon.path().as_ref()).is_some());
-        }
-    }
-    #[test]
-    fn vault_setup_requires_matching_passwords() {
-        assert!(validate_new_password("", "").is_err());
-        assert!(validate_new_password("a", "a").is_ok());
-        assert!(validate_new_password(" ", " ").is_ok());
-        assert!(validate_new_password("long-password", "different-password").is_err());
-        assert!(validate_new_password("long-password", "long-password").is_ok());
-    }
-    #[test]
-    fn protected_preview_never_falls_back_to_content() {
-        let mut row = item();
-        row.kind = ClipboardItemKind::Protected;
-        assert_eq!(display_preview(&row), "Protected item");
-        redact_protected_previews(std::slice::from_mut(&mut row));
-        assert!(row.content.is_empty());
-        assert!(row.plain_preview.is_none());
-    }
-    #[test]
-    fn legacy_protection_flag_is_fail_closed() {
-        let mut row = item();
-        row.retention.protected_ = true;
-        assert!(protected(&row));
-        assert_eq!(display_preview(&row), "Protected item");
-    }
-    #[test]
-    fn previews_escape_controls_without_changing_payload() {
-        let row = item();
-        assert!(!display_preview(&row).chars().any(char::is_control));
-        assert!(row.content.contains('\n'));
-    }
-}

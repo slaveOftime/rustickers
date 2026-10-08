@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClipboardSettings {
-    /// Maximum number of *ordinary* rows. Retained rows do not count.
+    /// Maximum disposable clipboard captures. Saved stickers never count.
     pub normal_count_limit: i64,
-    /// Maximum total bytes of *ordinary* content. Retained rows do not count.
+    /// Maximum total UTF-8 bytes of disposable captures. Saved stickers never count.
     pub normal_byte_limit: i64,
     /// Whether the desktop collector is allowed to ingest.
     pub capture_enabled: bool,
