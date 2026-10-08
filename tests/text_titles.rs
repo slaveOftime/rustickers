@@ -20,6 +20,8 @@ fn required_titles_are_searchable_and_survive_edits_and_protection() -> anyhow::
             .await?;
         let entry = repo.get(TextEntryId::Sticker(id)).await?;
         assert_eq!(entry.title(), "Account notes");
+        assert_eq!(entry.multiline_preview(), "Account notes");
+        assert!(!entry.multiline_preview().contains("private"));
         assert!(entry.matches("account"));
         assert!(!entry.matches("private"));
         repo.save_text(&entry, "updated private content").await?;

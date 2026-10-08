@@ -67,7 +67,7 @@ pub fn run_native(
     let clipboard_filter_for_ipc = clipboard_filter_for_open.clone();
 
     app.run(move |cx: &mut App| {
-        cx.on_app_quit(|_| async { crate::native::windows::clipboard::clear_owned_secret(); }).detach();
+        cx.on_app_quit(|_| async { crate::native::windows::text::clear_owned_secret(); }).detach();
         crate::gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
 
@@ -202,7 +202,7 @@ pub fn run_native(
                             let filter = clipboard_filter_for_ipc.get().cloned();
                             if let (Some(store), Some(_filter)) = (store, filter) {
                                 cx.update(|cx| {
-                                    if let Err(err) = crate::native::windows::clipboard::ClipboardChooserWindow::toggle(
+                                    if let Err(err) = crate::native::windows::text::TextPickerWindow::toggle(
                                         cx,
                                         sticker_events_tx_for_ipc.clone(),
                                         store,
@@ -248,9 +248,9 @@ pub fn run_native(
                     let _ = clipboard_filter_for_open.set(filter.clone());
                     let (watcher, _stop) = crate::native::clipboard::watcher::WatcherHandle::new(Duration::from_millis(250));
                     watcher.spawn(filter.clone(), clipboard_store.clone());
-                    crate::native::windows::clipboard::set_global_store(clipboard_store, store.clone());
+                    crate::native::windows::text::set_global_store(clipboard_store, store.clone());
                     cx.update(move |_cx| {
-                        crate::native::windows::clipboard::set_global_capture_filter(filter);
+                        crate::native::windows::text::set_global_capture_filter(filter);
                     });
                 }
                 Err(_) => tracing::error!("Clipboard backend unavailable; continuing sticker startup"),

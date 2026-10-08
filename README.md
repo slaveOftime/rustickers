@@ -37,13 +37,13 @@ Command stickers support scheduled runs, including while their window is closed.
 
 ## TXTs: saved text and clipboard history
 
-TXTs combines Markdown stickers (open or closed) with disposable clipboard captures. Search, filter by **All / Saved / Clipboard**, and navigate with arrows or Page keys.
+TXTs combines Markdown stickers (open or closed) with disposable clipboard captures. Search, filter by **All / Text / Clipboard**, and navigate with arrows or Page keys. Each item shows up to three lines; hover its trailing actions to rename, edit, save, lock, or delete. TXTs closes when it loses focus.
 
 - **Enter** pastes to the previous app when opened through the global shortcut; from the manager, it copies instead. Ctrl/Cmd+Enter always copies.
 - **F2 / double-click** opens the normal sticker editor. Editing a capture first saves it as a sticker.
 - **Save as sticker** (Ctrl/Cmd+R) turns a capture into a closed sticker.
 - **Lock / Save encrypted** (Ctrl/Cmd+L) asks for a required public title, then encrypts without opening a sticker.
-- **Rename** changes a saved sticker's title; custom titles survive content edits.
+- **Rename** (Ctrl/Cmd+F2) changes a saved sticker's title; custom titles survive content edits. Locked stickers also show an editable public-title field above Unlock.
 - Deleting a capture is immediate; deleting a saved sticker requires confirmation.
 
 Clipboard collection starts **paused**. Enable it in TXTs. Captures preserve exact text and share a budget of 500 entries / 20 MiB; saved stickers are not evicted. Automatic paste and ownership-safe protected copying currently have a supported path only on Windows.

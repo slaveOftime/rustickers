@@ -97,6 +97,15 @@ impl TextEntry {
     pub fn preview(&self) -> &str {
         &self.preview
     }
+    /// Bounded multiline display text. Locked entries expose only their public title.
+    pub fn multiline_preview(&self) -> String {
+        let text = if self.encrypted {
+            &self.title
+        } else {
+            &self.content
+        };
+        text.chars().take(1024).collect()
+    }
     pub fn is_encrypted(&self) -> bool {
         self.encrypted
     }

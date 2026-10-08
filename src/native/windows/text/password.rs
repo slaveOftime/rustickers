@@ -97,7 +97,7 @@ impl PasswordForm {
                     cx.refresh_windows();
                     this.busy = false;
                     match result {
-                        Ok(()) => { this.clear(window, cx); window.close_dialog(cx); cx.defer(super::sticker::StickerWindow::invalidate_protected_views); }
+                        Ok(()) => { this.clear(window, cx); window.close_dialog(cx); cx.defer(super::super::sticker::StickerWindow::invalidate_protected_views); }
                         Err(_) => { this.clear(window,cx); this.error = Some("Could not change the master password. Check the current password and locked texts; nothing was changed.".into()); },
                     }
                     cx.notify();
@@ -157,7 +157,7 @@ fn open_form(
                 if event.keystroke.key == "enter" { form.update(cx,|this,cx|this.submit(window,cx)); cx.stop_propagation(); }
                 else if event.keystroke.key == "escape" { if !form.read(cx).busy { form.update(cx,|this,cx|{this.clear(window,cx);this.callback=None;});window.close_dialog(cx); } cx.stop_propagation(); }
             }})
-                .when(!settings || configured, |body| body.child(div().child("Master password")).child(Input::new(&state.password).disabled(busy)))
+                .when(!settings || configured, |body| body.child(Input::new(&state.password).disabled(busy)))
                 .when(settings, |body| body.child(div().child("New password")).child(Input::new(&state.new_password).disabled(busy))
                     .child(div().child("Confirm password")).child(Input::new(&state.confirmation).disabled(busy))
                     .child(div().text_sm().text_color(cx.theme().muted_foreground).child(if configured {
@@ -165,7 +165,7 @@ fn open_form(
                     } else { "Keep this password safe. Forgotten passwords cannot recover locked texts." })))
                 .when(busy, |body| body.child("Re-encrypting locked texts. Do not close the app."))
                 .when_some(state.error.clone(), |body, error| body.child(div().text_color(cx.theme().danger).child(error))))
-            .footer(h_flex().gap_2().child(Button::new("password-cancel").label("Cancel").disabled(busy)
+            .footer(h_flex().justify_end().gap_2().child(Button::new("password-cancel").label("Cancel").disabled(busy)
                 .on_click(move |_, window, cx| { cancel.update(cx, |this, cx| { this.clear(window,cx); this.callback=None; }); window.close_dialog(cx); }))
                 .child(Button::new("password-submit").label(if settings { if configured { "Change password" } else { "Set password" } } else { "Unlock" })
                     .primary().loading(busy).disabled(busy).on_click(move |_, window, cx| submit.update(cx, |this,cx| this.submit(window,cx)))))

@@ -119,11 +119,11 @@ impl MainWindow {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Rustickers"));
 
         window.on_window_should_close(cx, |window, cx| {
-            if super::text_password::is_rotating() || super::text_password::has_dirty_editors() {
+            if super::text::password::is_rotating() || super::text::password::has_dirty_editors() {
                 window.open_alert_dialog(cx, |dialog,_,_| dialog.title("Finish encrypted text edits").child("Save or discard encrypted drafts and wait for password changes before quitting."));
                 return false;
             }
-            super::clipboard::clear_owned_secret();
+            super::text::clear_owned_secret();
             cx.quit(); true
         });
 
@@ -188,7 +188,7 @@ impl MainWindow {
 
             // SQLite data_version changes for other connections/processes, including CLI
             // writes. Poll the existing event pump without carrying plaintext notifications.
-            let text_version = if let Some(repository) = super::clipboard::text_repository() {
+            let text_version = if let Some(repository) = super::text::text_repository() {
                 repository.data_version().await.unwrap_or(last_text_version)
             } else {
                 last_text_version
@@ -656,22 +656,6 @@ impl MainWindow {
                             this.create_sticker(cx, &StickerType::Paint);
                         })),
                 )
-                .separator()
-                .item(
-                    PopupMenuItem::new("Clipboard history")
-                        .icon(IconName::DocumentText)
-                        .on_click(window.listener_for(&root_entity, |this, _, _, cx| {
-                            if super::clipboard::open_from_main(
-                                cx,
-                                this.sticker_events_sender.clone(),
-                            )
-                            .is_err()
-                            {
-                                this.error = Some("Clipboard backend is unavailable".into());
-                                cx.notify();
-                            }
-                        })),
-                )
             })
             .into_any_element()
     }
@@ -821,12 +805,13 @@ impl MainWindow {
                     .gap_1()
                     .items_center()
                     .child(
-                        Input::new(&self.query)
+                        div().occlude().child(Input::new(&self.query)
                             .cleanable(true)
+                            .focus_bordered(false)
                             .border_0()
                             .w(px(160.0))
                             .tab_index(0)
-                            .prefix(Icon::new(IconName::Search)),
+                            .prefix(Icon::new(IconName::Search))),
                     )
                     .child(self.sort_button(cx)),
             )
@@ -837,9 +822,10 @@ impl MainWindow {
                             .icon(IconName::LockClosed)
                             .tooltip("Master password…")
                             .ghost()
+                            .occlude()
                             .on_click(|_, window, cx| {
-                                if let Some(repository) = super::clipboard::text_repository() {
-                                    super::text_password::settings(window, cx, repository);
+                                if let Some(repository) = super::text::text_repository() {
+                                    super::text::password::settings(window, cx, repository);
                                 }
                             }),
                     )
@@ -858,9 +844,9 @@ impl MainWindow {
                             .ghost()
                             .occlude()
                             .on_click(cx.listener(|_, _, window, cx| {
-                                if super::text_password::is_rotating() || super::text_password::has_dirty_editors() {
+                                if super::text::password::is_rotating() || super::text::password::has_dirty_editors() {
                                     window.open_alert_dialog(cx, |dialog,_,_| dialog.title("Finish encrypted text edits").child("Save or discard encrypted drafts and wait for password changes before quitting."));
-                                } else { super::clipboard::clear_owned_secret(); cx.quit(); }
+                                } else { super::text::clear_owned_secret(); cx.quit(); }
                             })),
                     )
                     .child(self.create_button(cx)),

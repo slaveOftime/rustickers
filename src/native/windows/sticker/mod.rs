@@ -16,8 +16,7 @@ mod view;
 
 use std::{sync::mpsc, time::Instant};
 
-use crate::gpui_component::input::{InputEvent, InputState};
-use gpui::{AppContext, Context, Subscription, Window};
+use gpui::{Context, Subscription, Window};
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState};
 use crate::native::components::stickers::{FOCUS_LOSS_RELOCK_DELAY, StickerView};
@@ -93,7 +92,6 @@ impl StickerWindow {
         );
         view.set_color(cx, detail.color);
 
-        Self::watch_title(&detail, window, cx);
         Self::watch_bounds(window, cx);
         Self::watch_close_request(open_id, window, cx);
         Self::watch_dismiss_keystrokes(window, cx);
@@ -124,33 +122,6 @@ impl StickerWindow {
             protected_relock_generation: 0,
             _window_activation_subscription: window_activation_subscription,
         }
-    }
-
-    /// Save the title as soon as the user confirms it with Enter.
-    fn watch_title(detail: &StickerDetail, window: &mut Window, cx: &mut Context<Self>) {
-        let title_value = detail.title.clone();
-        let title = cx.new(|cx| InputState::new(window, cx).default_value(title_value));
-
-        cx.subscribe_in(&title, window, |this, input_state, event, _, cx| {
-            let InputEvent::PressEnter { .. } = event else {
-                return;
-            };
-            let id = this.view.id(cx);
-            let text = input_state.read(cx).value().to_string();
-            let store = this.store.clone();
-            let events = this.sticker_events_tx.clone();
-            cx.spawn(async move |entity, cx| {
-                if let Err(err) = store.update_sticker_title(id, text.clone()).await {
-                    let _ = entity.update(cx, |this, cx| {
-                        this.set_error(format!("Failed to save title: {err}"), cx);
-                    });
-                } else {
-                    let _ = events.send(StickerWindowEvent::TitleChanged { id, title: text });
-                }
-            })
-            .detach();
-        })
-        .detach();
     }
 
     /// Poll the window's geometry so moves, resizes and monitor changes are noticed.

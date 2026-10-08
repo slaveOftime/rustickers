@@ -42,7 +42,7 @@ pub(crate) fn prompt(
         input: cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(initial.to_owned())
-                .placeholder("Give this text a name")
+                .placeholder("Give this text a title")
         }),
         error: false,
         callback: Some(callback),
@@ -51,18 +51,18 @@ pub(crate) fn prompt(
     window.open_dialog(cx, move |dialog, _, cx| {
         let submit = form.clone(); let cancel = form.clone(); let keys = form.clone();
         let state = form.read(cx);
-        dialog.title(if locking { "Name and lock text" } else { "Rename text" }).keyboard(false)
+        dialog.title(if locking { "Name and lock text" } else { "Rename title" }).keyboard(false)
             .child(v_flex().gap_2().on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" => keys.update(cx, |this,cx| this.submit(window,cx)),
                     "escape" => { window.close_dialog(cx); },
                     _ => return,
                 }; cx.stop_propagation();
-            }).child(div().child("Title (required)"))
+            })
               .child(Input::new(&state.input))
               .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Titles are public and searchable, even when the text is locked. Do not put secrets in the title."))
               .when(state.error, |body| body.child(div().text_sm().text_color(cx.theme().danger).child("Enter a title to continue."))))
-            .footer(h_flex().gap_2()
+            .footer(h_flex().gap_2().justify_end()
                 .child(Button::new("title-cancel").label("Cancel").on_click(move |_,window,cx| { cancel.update(cx, |this,_| this.callback=None); window.close_dialog(cx); }))
                 .child(Button::new("title-submit").label(if locking { "Lock text" } else { "Save title" }).primary().disabled(state.callback.is_none())
                     .on_click(move |_,window,cx| submit.update(cx, |this,cx| this.submit(window,cx)))))

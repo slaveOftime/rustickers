@@ -185,21 +185,20 @@ impl StickerWindow {
                 self.detail.sticker_type == StickerType::Markdown,
                 |header| {
                     header.child(
-                        Button::new("rename-text")
+                        Button::new("rename-title")
                             .icon(IconName::DocumentText)
                             .ghost()
                             .occlude()
-                            .tooltip("Rename text…")
+                            .tooltip("Rename title")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                let Some(repo) =
-                                    crate::native::windows::clipboard::text_repository()
+                                let Some(repo) = crate::native::windows::text::text_repository()
                                 else {
                                     return;
                                 };
                                 let id = this.detail.id;
                                 let events = this.sticker_events_tx.clone();
                                 let weak = cx.weak_entity();
-                                crate::native::windows::text_title::prompt(
+                                crate::native::windows::text::title::prompt(
                                     window,
                                     cx,
                                     false,
@@ -283,6 +282,7 @@ impl StickerWindow {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .occlude()
                     .when_some(extension, |view, extension| view.child(extension)),
             )
             .when(!self.view.disable_color_picker(cx), move |v| {

@@ -2,7 +2,7 @@ use crate::gpui_component::{
     ActiveTheme, Disableable,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{InputEvent, Textarea, TextareaState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     text::TextView,
     v_flex,
 };
@@ -11,7 +11,11 @@ use crate::{
     model::sticker::{StickerColor, StickerDetail, StickerState, StickerType},
     native::{
         components::IconName,
-        windows::{StickerWindowEvent, sticker::StickerWindow, text_password},
+        windows::{
+            StickerWindowEvent,
+            sticker::StickerWindow,
+            text::{password as text_password, text_repository},
+        },
     },
     storage::ArcStickerStore,
     text::{TextEntry, TextEntryId, protection},
@@ -28,6 +32,8 @@ pub struct MarkdownSticker {
     store: ArcStickerStore,
     sticker_events_tx: std::sync::mpsc::Sender<StickerWindowEvent>,
     editor: Entity<TextareaState>,
+    title: Entity<InputState>,
+    title_busy: bool,
     editing: bool,
     edit_snapshot: Option<Zeroizing<String>>,
     error: Option<String>,
@@ -68,6 +74,7 @@ impl MarkdownSticker {
                     content
                 })
         });
+        let title = cx.new(|cx| InputState::new(window, cx).placeholder("Public title (required)"));
         let changes = cx.subscribe(&editor, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) && this.encrypted && this.content_visible {
                 text_password::set_dirty(this.id, true);
@@ -80,6 +87,8 @@ impl MarkdownSticker {
             store,
             sticker_events_tx,
             editor,
+            title,
+            title_busy: false,
             editing: !encrypted && !unsupported && (edit || content.is_empty()),
             edit_snapshot: None,
             error: unsupported.then(|| {
@@ -98,13 +107,18 @@ impl MarkdownSticker {
             this.edit_snapshot = Some(Zeroizing::new(content.to_owned()));
             this.editor.focus_handle(cx).focus(window, cx);
         }
-        let repo = crate::native::windows::clipboard::text_repository();
+        let repo = text_repository();
         if let Some(repo) = repo {
-            cx.spawn(async move |entity, cx| {
+            cx.spawn_in(window, async move |entity, cx| {
                 let entry = repo.get(TextEntryId::Sticker(id)).await;
-                let _ = entity.update(cx, |this, cx| {
+                let _ = entity.update_in(cx, |this, window, cx| {
                     match entry {
-                        Ok(entry) => this.entry = Some(entry),
+                        Ok(entry) => {
+                            this.title.update(cx, |input, cx| {
+                                input.set_value(entry.title().to_owned(), window, cx)
+                            });
+                            this.entry = Some(entry);
+                        }
                         Err(_) => {
                             this.error = Some("Text is unavailable. Reopen the sticker.".into())
                         }
@@ -116,6 +130,42 @@ impl MarkdownSticker {
         }
         this
     }
+    fn save_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.title_busy || self.busy {
+            return;
+        }
+        let title = self.title.read(cx).value().to_string();
+        if title.trim().is_empty() {
+            self.error = Some("Enter a public title to continue.".into());
+            cx.notify();
+            return;
+        }
+        let Some(repo) = text_repository() else {
+            self.error = Some("Text storage unavailable.".into());
+            cx.notify();
+            return;
+        };
+        let id = self.id;
+        self.title_busy = true;
+        self.error = None;
+        cx.notify();
+        cx.spawn_in(window, async move |entity, cx| {
+            let result = repo.update_title(TextEntryId::Sticker(id), &title).await;
+            let _ = entity.update_in(cx, |this, _, cx| {
+                this.title_busy = false;
+                if result.is_ok() {
+                    let _ = this
+                        .sticker_events_tx
+                        .send(StickerWindowEvent::TitleChanged { id, title });
+                } else {
+                    this.error = Some("Could not save the title. Try again.".into());
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn reset_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editor = cx.new(|cx| TextareaState::new(window, cx).searchable(true));
         self._changes = cx.subscribe(&self.editor, |this, _, event: &InputEvent, cx| {
@@ -160,7 +210,7 @@ impl MarkdownSticker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(repo) = crate::native::windows::clipboard::text_repository() else {
+        let Some(repo) = text_repository() else {
             return;
         };
         let id = self.id;
@@ -188,9 +238,9 @@ impl MarkdownSticker {
                                 this.editor.update(cx, |input, cx| {
                                     input.set_value(text.to_string(), window, cx)
                                 });
-                                this.edit_snapshot = Some(text);
+                                this.edit_snapshot = None;
                                 this.content_visible = true;
-                                this.editing = true;
+                                this.editing = false;
                                 this.error = None;
                                 text_password::set_dirty(this.id, false);
                             }
@@ -214,7 +264,7 @@ impl MarkdownSticker {
         if self.busy || text_password::is_rotating() {
             return false;
         }
-        let Some(repo) = crate::native::windows::clipboard::text_repository() else {
+        let Some(repo) = text_repository() else {
             self.error = Some("Text storage unavailable.".into());
             cx.notify();
             return false;
@@ -274,7 +324,7 @@ impl MarkdownSticker {
         if !self.encrypted && !self.editing {
             let weak = cx.weak_entity();
             let title = self.entry.as_ref().map(|entry| entry.title()).unwrap_or("");
-            crate::native::windows::text_title::prompt(
+            crate::native::windows::text::title::prompt(
                 window,
                 cx,
                 true,
@@ -303,7 +353,7 @@ impl MarkdownSticker {
             cx.notify();
             return;
         }
-        let Some(repo) = crate::native::windows::clipboard::text_repository() else {
+        let Some(repo) = text_repository() else {
             return;
         };
         let Some(entry) = self.entry.clone() else {
@@ -329,6 +379,7 @@ impl MarkdownSticker {
                     }
                     return;
                 }
+                let public_title = title.clone();
                 let result = cx
                     .background_executor()
                     .spawn(async move {
@@ -349,6 +400,11 @@ impl MarkdownSticker {
                                 this.content_visible = false;
                                 this.edit_snapshot = None;
                                 this.reset_editor(window, cx);
+                                if let Some(title) = &public_title {
+                                    this.title.update(cx, |input, cx| {
+                                        input.set_value(title.clone(), window, cx)
+                                    });
+                                }
                                 this.error = None;
                                 let _ = this
                                     .sticker_events_tx
@@ -376,8 +432,7 @@ impl MarkdownSticker {
             Box::new(move |password, window, cx| {
                 if let Some(entity) = entity.upgrade() {
                     entity.update(cx, |this, cx| {
-                        let Some(repo) = crate::native::windows::clipboard::text_repository()
-                        else {
+                        let Some(repo) = text_repository() else {
                             return;
                         };
                         let id = this.id;
@@ -633,6 +688,7 @@ impl super::Sticker for MarkdownSticker {
                         })
                         .tooltip("Lock / unlock text (Ctrl+L)")
                         .ghost()
+                        .occlude()
                         .disabled(self.busy)
                         .on_click(cx.listener(|this, _, window, cx| this.lock(window, cx))),
                 )
@@ -645,24 +701,20 @@ impl super::Sticker for MarkdownSticker {
         }
         let mut controls = h_flex().gap_2();
         if self.editing {
-            controls = controls
-                .child(
-                    Button::new("text-save")
-                        .label("Save")
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.save_state(cx);
-                        })),
-                )
-                .child(
-                    Button::new("text-discard")
-                        .label("Discard edits")
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.cancel_edit(window, cx))),
-                );
+            controls = controls.child(
+                Button::new("text-save")
+                    .occlude()
+                    .label("Save")
+                    .disabled(self.busy)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.save_state(cx);
+                    })),
+            );
         } else if self.encrypted {
             controls = controls.child(
                 Button::new("text-unprotect")
+                    .occlude()
+                    .disabled(self.busy || text_password::is_rotating())
                     .label("Remove encryption…")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.remove_encryption(window, cx)),
@@ -671,6 +723,7 @@ impl super::Sticker for MarkdownSticker {
         } else {
             controls = controls.child(
                 Button::new("convert-to-file")
+                    .occlude()
                     .icon(IconName::DocumentText)
                     .tooltip("Convert to local file…")
                     .disabled(self.converting)
@@ -689,6 +742,28 @@ impl Render for MarkdownSticker {
         if !self.content_visible {
             return body
                 .p_4()
+                .justify_center()
+                .child(div().text_sm().child("Public title"))
+                .child(
+                    h_flex().gap_2().child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "enter" {
+                                    this.save_title(window, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .child(Input::new(&self.title).disabled(self.title_busy)),
+                    ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Public and searchable. Do not include secrets."),
+                )
                 .child(
                     Button::new("unlock-text")
                         .label("Unlock text…")
@@ -725,6 +800,7 @@ impl Render for MarkdownSticker {
         } else {
             body = body.child(
                 div()
+                    .p_2()
                     .flex_1()
                     .min_h_0()
                     .on_mouse_down(

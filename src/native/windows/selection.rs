@@ -5,13 +5,13 @@ use crate::gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    scroll::ScrollableElement,
     v_flex,
 };
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
-    Render, ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, div, prelude::*, px, size,
+    Render, ScrollStrategy, Subscription, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowOptions, div,
+    prelude::*, px, size, uniform_list,
 };
 
 #[cfg(target_os = "macos")]
@@ -68,7 +68,7 @@ pub struct SelectionPopup {
     view: SelectionView,
     input_error: Option<String>,
     resolving: bool,
-    scroll_handle: ScrollHandle,
+    scroll_handle: UniformListScrollHandle,
     closing: bool,
     _keystroke_subscription: Subscription,
     _window_activation_subscription: Subscription,
@@ -288,7 +288,7 @@ impl SelectionPopup {
             view,
             input_error: None,
             resolving: false,
-            scroll_handle: ScrollHandle::new(),
+            scroll_handle: UniformListScrollHandle::new(),
             closing: false,
             _keystroke_subscription: keystroke_subscription,
             _window_activation_subscription: window_activation_subscription,
@@ -352,7 +352,8 @@ impl SelectionPopup {
         self.stickers = Arc::new(stickers);
         self.selected = 0;
         self.view = SelectionView::Choose;
-        self.scroll_handle.scroll_to_item(0);
+        self.scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Nearest);
         self.query.update(cx, |query, cx| query.focus(window, cx));
         cx.notify();
     }
@@ -360,7 +361,8 @@ impl SelectionPopup {
     fn apply_filter(&mut self, query: &str, cx: &mut Context<Self>) {
         self.filtered = filtered_sticker_indices(&self.stickers, query);
         self.selected = 0;
-        self.scroll_handle.scroll_to_item(0);
+        self.scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Nearest);
         cx.notify();
     }
 
@@ -382,7 +384,8 @@ impl SelectionPopup {
         self.selected = (self.selected as isize + offset)
             .clamp(0, self.filtered.len().saturating_sub(1) as isize)
             as usize;
-        self.scroll_handle.scroll_to_item(self.selected);
+        self.scroll_handle
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         cx.notify();
     }
 
@@ -463,34 +466,32 @@ impl SelectionPopup {
         v_flex()
             .id(("selection-sticker", sticker.id as u64))
             .w_full()
+            .h_16()
+            .flex_shrink_0()
             .px_3()
             .py_2()
+            .overflow_hidden()
             .when(selected, |row| row.bg(cx.theme().list_active))
             .hover(|row| row.bg(cx.theme().list_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
             }))
-            .child(div().child(title))
+            .child(div().truncate().child(title))
             .when(!command.is_empty(), |row| {
-                row.child(
-                    div()
-                        .text_sm()
-                        .opacity(0.7)
-                        .overflow_hidden()
-                        .flex_wrap()
-                        .child(command),
-                )
+                row.child(div().text_sm().opacity(0.7).truncate().child(command))
             })
             .into_any_element()
     }
 
     fn choose_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let visible_count = self.filtered.len();
+        let view = cx.entity();
 
         v_flex()
             .size_full()
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .items_center()
                     .pb_2()
                     .window_control_area(WindowControlArea::Drag)
@@ -501,6 +502,7 @@ impl SelectionPopup {
                             Input::new(&self.query)
                                 .cleanable(true)
                                 .border_0()
+                                .focus_bordered(false)
                                 .w(px(200.0))
                                 .tab_index(0)
                                 .prefix(Icon::new(IconName::Search)),
@@ -517,17 +519,27 @@ impl SelectionPopup {
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     ),
             )
-            .child(h_flex().px_3().pb_2().text_sm().opacity(0.7).child(format!(
-                "{visible_count} matches · ↑/↓ select · Enter open · Esc close"
-            )))
             .child(
-                v_flex()
-                    .id("selection-popup-list")
+                div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll_handle)
-                    .vertical_scrollbar(&self.scroll_handle)
+                    .w_full()
+                    .overflow_hidden()
+                    .when(visible_count > 0, |body| {
+                        body.child(
+                            uniform_list(
+                                "selection-popup-list",
+                                visible_count,
+                                move |range, _, cx| {
+                                    view.update(cx, |this, cx| {
+                                        range.map(|ix| this.row(ix, cx)).collect::<Vec<_>>()
+                                    })
+                                },
+                            )
+                            .size_full()
+                            .track_scroll(&self.scroll_handle),
+                        )
+                    })
                     .when(visible_count == 0, |list| {
                         list.child(
                             div()
@@ -536,8 +548,18 @@ impl SelectionPopup {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("No matching command stickers"),
                         )
-                    })
-                    .children((0..visible_count).map(|index| self.row(index, cx))),
+                    }),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .justify_between()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .opacity(0.6)
+                    .child(format!("{visible_count} · ↑/↓ select"))
+                    .child("Enter/Esc"),
             )
             .into_any_element()
     }

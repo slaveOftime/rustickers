@@ -28,6 +28,21 @@ async fn sticker(pool: &SqlitePool, title: &str, text: &str, time: i64) -> anyho
 }
 
 #[test]
+fn multiline_preview_is_bounded_without_splitting_unicode() -> anyhow::Result<()> {
+    block_on(async {
+        let (_dir, repo, _) = fixture().await?;
+        let text = "界\n".repeat(600);
+        let id = repo.capture(&text, 1).await?;
+        let entry = repo.get(TextEntryId::Clipboard(id)).await?;
+        let preview = entry.multiline_preview();
+        assert_eq!(preview.chars().count(), 1024);
+        assert!(text.starts_with(&preview));
+        assert_eq!(repo.resolve(&entry, None).await?.as_str(), text);
+        Ok(())
+    })
+}
+
+#[test]
 fn exact_capture_dedupe_and_validation() -> anyhow::Result<()> {
     block_on(async {
         let (_dir, repo, pool) = fixture().await?;
@@ -37,6 +52,7 @@ fn exact_capture_dedupe_and_validation() -> anyhow::Result<()> {
         assert_eq!(repo.capture(text, 15).await?, id);
         let entry = repo.get(TextEntryId::Clipboard(id)).await?;
         assert_eq!(&*repo.resolve(&entry, None).await?, text);
+        assert_eq!(entry.multiline_preview(), text);
         assert_eq!(entry.activity_at(), 20);
         let row: (i64, i64, i64) = sqlx::query_as(
             "SELECT created_at,last_copied_at,byte_size FROM clipboard_captures WHERE id=?",

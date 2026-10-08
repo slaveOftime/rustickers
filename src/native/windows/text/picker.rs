@@ -4,7 +4,6 @@ use crate::gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
 use crate::{
@@ -39,7 +38,7 @@ pub(crate) fn clear_owned_secret() {
     }
 }
 static GLOBAL_CAPTURE_FILTER: OnceLock<Arc<CaptureFilter>> = OnceLock::new();
-pub(crate) static CLIPBOARD_POPUP: RwLock<Option<gpui::AnyWindowHandle>> = RwLock::new(None);
+static TEXT_POPUP: RwLock<Option<gpui::AnyWindowHandle>> = RwLock::new(None);
 pub fn set_global_store(repository: Arc<TextRepository>, store: ArcStickerStore) {
     let _ = GLOBAL_REPOSITORY.set(repository);
     let _ = GLOBAL_STORE.set(store);
@@ -51,13 +50,13 @@ pub(crate) fn text_repository() -> Option<Arc<TextRepository>> {
     GLOBAL_REPOSITORY.get().cloned()
 }
 fn clear_popup() {
-    if let Ok(mut slot) = CLIPBOARD_POPUP.write() {
+    if let Ok(mut slot) = TEXT_POPUP.write() {
         *slot = None;
     }
-    super::set_clipboard_escape_target(false);
+    super::super::set_text_escape_target(false);
 }
 pub fn dispatch_escape(cx: &mut App) -> bool {
-    CLIPBOARD_POPUP
+    TEXT_POPUP
         .read()
         .ok()
         .and_then(|s| *s)
@@ -75,17 +74,17 @@ pub fn open_from_main(
 ) -> anyhow::Result<()> {
     let repository =
         text_repository().ok_or_else(|| anyhow::anyhow!("Text backend unavailable"))?;
-    ClipboardChooserWindow::toggle(cx, events, repository, None)
+    TextPickerWindow::toggle(cx, events, repository, None)
 }
-pub struct ClipboardChooserWindow;
-impl ClipboardChooserWindow {
+pub struct TextPickerWindow;
+impl TextPickerWindow {
     pub fn toggle(
         cx: &mut App,
         events: std::sync::mpsc::Sender<StickerWindowEvent>,
         repository: Arc<TextRepository>,
         destination: Option<u64>,
     ) -> anyhow::Result<()> {
-        if CLIPBOARD_POPUP.read().ok().and_then(|s| *s).is_some() && dispatch_escape(cx) {
+        if TEXT_POPUP.read().ok().and_then(|s| *s).is_some() && dispatch_escape(cx) {
             return Ok(());
         }
         let filter = GLOBAL_CAPTURE_FILTER
@@ -97,7 +96,7 @@ impl ClipboardChooserWindow {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Sticker backend unavailable"))?;
         // Physical window geometry is an OS boundary; internal layout uses rem helpers.
-        let bounds = Bounds::centered(None, size(px(440.), px(520.)), cx);
+        let bounds = Bounds::centered(None, size(px(380.), px(520.)), cx);
         let handle = cx.open_window(
             WindowOptions {
                 focus: true,
@@ -116,10 +115,15 @@ impl ClipboardChooserWindow {
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )?;
-        if let Ok(mut slot) = CLIPBOARD_POPUP.write() {
+        if let Ok(mut slot) = TEXT_POPUP.write() {
             *slot = Some(handle.into());
         }
-        super::set_clipboard_escape_target(true);
+        // Reassert after native creation: the hotkey can arrive while another
+        // application is active, before the new window has been presented.
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, _| super::platform::raise(window));
+        });
+        super::super::set_text_escape_target(true);
         Ok(())
     }
 }
@@ -127,7 +131,7 @@ impl ClipboardChooserWindow {
 enum SourceFilter {
     #[default]
     All,
-    Saved,
+    Text,
     Clipboard,
 }
 impl SourceFilter {
@@ -135,7 +139,7 @@ impl SourceFilter {
         matches!(
             (self, id),
             (Self::All, _)
-                | (Self::Saved, TextEntryId::Sticker(_))
+                | (Self::Text, TextEntryId::Sticker(_))
                 | (Self::Clipboard, TextEntryId::Clipboard(_))
         )
     }
@@ -171,6 +175,7 @@ struct TextPicker {
     loading: bool,
     preferred_selection: Option<TextEntryId>,
     _query: Subscription,
+    _activation: Subscription,
 }
 impl Drop for TextPicker {
     fn drop(&mut self) {
@@ -187,7 +192,7 @@ impl TextPicker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search TXTs…"));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search texts ..."));
         let subscription = cx.subscribe(&query, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.refilter(cx);
@@ -195,6 +200,12 @@ impl TextPicker {
                 this.scroll.scroll_to_item(0, ScrollStrategy::Nearest);
                 this.status.clear();
                 cx.notify();
+            }
+        });
+        let activation = cx.observe_window_activation(window, |_, window, _| {
+            if !window.is_window_active() {
+                clear_popup();
+                window.remove_window();
             }
         });
         let this = Self {
@@ -215,6 +226,7 @@ impl TextPicker {
             loading: true,
             preferred_selection: None,
             _query: subscription,
+            _activation: activation,
         };
         query.update(cx, |input, cx| input.focus(window, cx));
         cx.spawn(async move |entity, cx| {
@@ -323,7 +335,7 @@ impl TextPicker {
             } else {
                 ""
             };
-            super::text_title::prompt(
+            super::title::prompt(
                 window,
                 cx,
                 true,
@@ -372,7 +384,7 @@ impl TextPicker {
                         if let Some(entity) = weak.upgrade() {
                             let _ = entity.update_in(cx, |this, window, cx| {
                                 this.busy = false;
-                                super::text_password::settings(window, cx, repo);
+                                super::password::settings(window, cx, repo);
                                 cx.notify();
                             });
                         }
@@ -469,7 +481,7 @@ impl TextPicker {
         };
         if entry.is_encrypted() {
             let weak = cx.entity().downgrade();
-            super::text_password::unlock(
+            super::password::unlock(
                 window,
                 cx,
                 Box::new(move |password, window, cx| {
@@ -498,19 +510,50 @@ impl TextPicker {
         let weak = cx.entity().downgrade();
         self.busy = true;
         cx.notify();
-        if !copy_only && hide_chooser(window).is_err() {
-            self.busy = false;
-            self.status = "Verified paste unavailable. Use Copy only.".into();
-            cx.notify();
-            return;
+        // Paste switches foreground windows. The authorized action is app-owned so
+        // closing this transient picker cannot cancel delivery or revive it on failure.
+        let handle = window.window_handle();
+        if !copy_only {
+            clear_popup();
+            window.remove_window();
         }
-        window.spawn(cx,async move|cx|{let result=cx.background_executor().spawn(async move{futures::executor::block_on(async{
-            let text=repo.resolve(&entry,password.as_ref().map(|p|p.as_str())).await?;
-            dispatch_content(&filter,&text,destination,copy_only,entry.is_encrypted())?;
-            let _=repo.mark_used(entry.id(),crate::utils::time::now_unix_millis()).await;anyhow::Ok(())
-        })}).await;
-        if let Some(entity)=weak.upgrade(){let _=entity.update_in(cx,|this,window,cx|{this.busy=false;match result{Ok(())=>{clear_popup();window.remove_window();},Err(_)=>{show_chooser(window);window.activate_window();this.status="Could not use text. Check the password or paste destination; try Copy only.".into();}}cx.notify();});}
-        }).detach();
+        App::spawn(cx, async move |cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    futures::executor::block_on(async {
+                        let text = repo
+                            .resolve(&entry, password.as_ref().map(|p| p.as_str()))
+                            .await?;
+                        dispatch_content(
+                            &filter,
+                            &text,
+                            destination,
+                            copy_only,
+                            entry.is_encrypted(),
+                        )?;
+                        let _ = repo
+                            .mark_used(entry.id(), crate::utils::time::now_unix_millis())
+                            .await;
+                        anyhow::Ok(())
+                    })
+                })
+                .await;
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.busy = false;
+                    if result.is_ok() {
+                        clear_popup();
+                        window.remove_window();
+                    } else {
+                        this.status =
+                            "Could not use text. Check the password or paste destination.".into();
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || window.has_active_dialog(cx) {
@@ -604,7 +647,7 @@ impl TextPicker {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
-        if window.has_active_dialog(cx) {
+        if window.has_active_dialog(cx) || self.busy {
             return;
         }
         // Menus consume Escape first; toolbar focus must not strand the utility.
@@ -620,9 +663,10 @@ impl TextPicker {
             }
             "up" => self.move_selection(-1, cx),
             "down" => self.move_selection(1, cx),
-            "pageup" => self.move_selection(-6, cx),
-            "pagedown" => self.move_selection(6, cx),
+            "pageup" => self.move_selection(-3, cx),
+            "pagedown" => self.move_selection(3, cx),
             "enter" => self.use_selected(command || self.destination.is_none(), window, cx),
+            "f2" if command => self.rename(window, cx),
             "f2" => self.save(false, true, window, cx),
             "delete" if self.query.read(cx).value().is_empty() => self.delete(window, cx),
             "r" if command => self.save(false, false, window, cx),
@@ -641,8 +685,8 @@ impl TextPicker {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .flex_shrink_0()
-            .px_2()
-            .py_2()
+            .justify_between()
+            .pb_2()
             .gap_1()
             .window_control_area(WindowControlArea::Drag)
             .child(
@@ -651,47 +695,51 @@ impl TextPicker {
                         .prefix(Icon::new(IconName::Search))
                         .cleanable(true)
                         .border_0()
+                        .focus_bordered(false)
                         .w_full()
+                        .max_w_64()
                         .disabled(self.busy),
                 ),
             )
             .child(
-                Button::new("master-password")
-                    .icon(IconName::LockClosed)
-                    .ghost()
-                    .small()
-                    .occlude()
-                    .tooltip("Master password…")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        super::text_password::settings(window, cx, this.repository.clone())
-                    })),
-            )
-            .child(
-                Button::new("close-texts")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .small()
-                    .occlude()
-                    .tooltip("Close · Esc")
-                    .disabled(self.busy)
-                    .on_click(|_, window, _| {
-                        clear_popup();
-                        window.remove_window();
-                    }),
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("master-password")
+                            .icon(IconName::LockClosed)
+                            .ghost()
+                            .occlude()
+                            .tooltip("Master password…")
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                super::password::settings(window, cx, this.repository.clone())
+                            })),
+                    )
+                    .child(
+                        Button::new("close-texts")
+                            .icon(IconName::Close)
+                            .ghost()
+                            .occlude()
+                            .tooltip("Close · Esc")
+                            .disabled(self.busy)
+                            .on_click(|_, window, _| {
+                                clear_popup();
+                                window.remove_window();
+                            }),
+                    ),
             )
     }
 
     fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
-            .px_3()
+            .px_2()
             .pb_2()
             .gap_1()
             .flex_shrink_0()
             .children(
                 [
                     (SourceFilter::All, "all-texts", "All"),
-                    (SourceFilter::Saved, "saved-texts", "Saved"),
+                    (SourceFilter::Text, "saved-texts", "Text"),
                     (SourceFilter::Clipboard, "clipboard-texts", "Clipboard"),
                 ]
                 .into_iter()
@@ -718,15 +766,7 @@ impl TextPicker {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "{} {}",
-                        self.filtered.len(),
-                        if self.filtered.len() == 1 {
-                            "text"
-                        } else {
-                            "texts"
-                        }
-                    )),
+                    .child(self.filtered.len().to_string()),
             )
     }
 
@@ -736,26 +776,14 @@ impl TextPicker {
         let encrypted = entry.is_encrypted();
         let saved = matches!(id, TextEntryId::Sticker(_));
         let selected = ix == self.selected;
-        let source = if encrypted {
-            "Saved · Locked"
-        } else if saved {
-            "Saved"
-        } else {
-            "Clipboard"
-        };
-        h_flex()
+        v_flex()
             .id(gpui::SharedString::from(id.to_string()))
+            .group("text-row")
             .w_full()
-            .h_12()
-            .px_3()
-            .gap_3()
-            .rounded_md()
-            .border_1()
-            .border_color(if selected {
-                cx.theme().list_active_border
-            } else {
-                cx.theme().transparent
-            })
+            .flex_shrink_0()
+            .px_2()
+            .py_2()
+            .gap_1()
             .bg(if selected {
                 cx.theme().list_active
             } else {
@@ -770,66 +798,122 @@ impl TextPicker {
                     if this.busy || window.has_active_dialog(cx) {
                         return;
                     }
-                    this.selected = ix;
-                    this.status.clear();
-                    this.query.update(cx, |query, cx| query.focus(window, cx));
-                    if event.click_count == 2 {
-                        this.save(false, true, window, cx);
+                    if this.select_id(id) {
+                        this.status.clear();
+                        this.query.update(cx, |query, cx| query.focus(window, cx));
+                        if event.click_count == 2 {
+                            this.save(false, true, window, cx);
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
                 }),
             )
             .child(
-                Icon::new(if encrypted {
-                    IconName::LockClosed
-                } else if saved {
-                    IconName::DocumentText
-                } else {
-                    IconName::Copy
-                })
-                .size_4()
-                .flex_shrink_0()
-                .text_color(cx.theme().muted_foreground),
+                div()
+                    .text_sm()
+                    .truncate()
+                    .child(entry.preview().trim().to_owned()),
             )
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
+                h_flex()
                     .gap_1()
-                    .child(div().text_sm().truncate().child(entry.preview().to_owned()))
+                    .flex_shrink_0()
+                    .items_center()
                     .child(
-                        h_flex()
-                            .gap_2()
+                        Icon::new(if encrypted {
+                            IconName::LockClosed
+                        } else if saved {
+                            IconName::DocumentText
+                        } else {
+                            IconName::Copy
+                        })
+                        .size_4()
+                        .flex_shrink_0()
+                        .text_color(if encrypted {
+                            cx.theme().warning
+                        } else if saved {
+                            cx.theme().primary
+                        } else {
+                            cx.theme().muted_foreground
+                        }),
+                    )
+                    .child(div().flex_1())
+                    .child(self.render_row_actions(id, saved, encrypted, cx))
+                    .child(
+                        div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(source)
                             .child(recency_label(
                                 entry.activity_at(),
                                 crate::utils::time::now_unix_millis(),
                             )),
                     ),
             )
-            .child(
-                Button::new(gpui::SharedString::from(format!("copy-{id}")))
-                    .icon(IconName::Copy)
-                    .ghost()
-                    .small()
-                    .tooltip("Copy only · Ctrl+Enter")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        // Use domain identity: refreshes can change a row's positional index.
-                        if let Some(ix) = this
-                            .filtered
-                            .iter()
-                            .position(|ix| this.rows[*ix].id() == id)
-                        {
-                            this.selected = ix;
-                            this.use_selected(true, window, cx);
-                        }
-                    })),
-            )
             .into_any_element()
+    }
+
+    fn select_id(&mut self, id: TextEntryId) -> bool {
+        let Some(ix) = self
+            .filtered
+            .iter()
+            .position(|ix| self.rows[*ix].id() == id)
+        else {
+            return false;
+        };
+        self.selected = ix;
+        true
+    }
+
+    fn render_row_actions(
+        &self,
+        id: TextEntryId,
+        saved: bool,
+        encrypted: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .gap_1()
+            .invisible()
+            .group_hover("text-row", |actions| actions.visible())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(
+                [
+                    (
+                        "rename",
+                        IconName::DocumentText,
+                        "Rename… · Ctrl+F2",
+                        !saved,
+                    ),
+                    ("edit", IconName::Adjustments, "Edit… · F2", false),
+                    ("save", IconName::Pin, "Save as sticker · Ctrl+R", saved),
+                    ("lock", IconName::LockClosed, "Lock… · Ctrl+L", encrypted),
+                    ("delete", IconName::Delete, "Delete · Delete", false),
+                ]
+                .into_iter()
+                .filter(|(action, _, _, disabled)| !*disabled || *action == "lock")
+                .map(|(action, icon, hint, disabled)| {
+                    Button::new(gpui::SharedString::from(format!("{action}-{id}")))
+                        .icon(icon)
+                        .ghost()
+                        .small()
+                        .tooltip(hint)
+                        .disabled(self.busy || disabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            if this.busy || !this.select_id(id) {
+                                return;
+                            }
+                            match action {
+                                "rename" => this.rename(window, cx),
+                                "edit" => this.save(false, true, window, cx),
+                                "save" => this.save(false, false, window, cx),
+                                "lock" => this.save(true, false, window, cx),
+                                "delete" => this.delete(window, cx),
+                                _ => unreachable!(),
+                            }
+                        }))
+                }),
+            )
     }
 
     fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -846,7 +930,7 @@ impl TextPicker {
         let events = self.events.clone();
         let weak = cx.weak_entity();
         let initial = entry.title().to_owned();
-        super::text_title::prompt(
+        super::title::prompt(
             window,
             cx,
             false,
@@ -874,114 +958,14 @@ impl TextPicker {
             }),
         );
     }
-    fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.selected_entry();
-        let capture = selected
-            .as_ref()
-            .is_some_and(|entry| matches!(entry.id(), TextEntryId::Clipboard(_)));
-        let encrypted = selected.as_ref().is_some_and(TextEntry::is_encrypted);
-        let disabled = self.busy || selected.is_none();
-        let view = cx.entity();
-        h_flex()
-            .flex_shrink_0()
-            .px_3()
-            .py_2()
-            .gap_1()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(
-                Button::new("text-actions")
-                    .label("Actions")
-                    .icon(IconName::Adjustments)
-                    .ghost()
-                    .small()
-                    .disabled(disabled)
-                    .dropdown_menu(move |menu, window, _| {
-                        menu.item(
-                            PopupMenuItem::new("Rename…").disabled(capture).on_click(
-                                window.listener_for(&view, |this, _, window, cx| {
-                                    this.rename(window, cx)
-                                }),
-                            ),
-                        )
-                        .item(
-                            PopupMenuItem::new("Edit…")
-                                .icon(IconName::DocumentText)
-                                .on_click(window.listener_for(&view, |this, _, window, cx| {
-                                    this.save(false, true, window, cx)
-                                })),
-                        )
-                        .item(
-                            PopupMenuItem::new("Save as sticker")
-                                .icon(IconName::Pin)
-                                .disabled(!capture)
-                                .on_click(window.listener_for(&view, |this, _, window, cx| {
-                                    this.save(false, false, window, cx)
-                                })),
-                        )
-                        .item(
-                            PopupMenuItem::new(if capture { "Save encrypted" } else { "Lock" })
-                                .icon(IconName::LockClosed)
-                                .disabled(encrypted)
-                                .on_click(window.listener_for(&view, |this, _, window, cx| {
-                                    this.save(true, false, window, cx)
-                                })),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new(if capture {
-                                "Delete capture"
-                            } else {
-                                "Delete saved text…"
-                            })
-                            .icon(IconName::Delete)
-                            .on_click(
-                                window.listener_for(&view, |this, _, window, cx| {
-                                    this.delete(window, cx)
-                                }),
-                            ),
-                        )
-                    }),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("copy-text")
-                    .label("Copy")
-                    .icon(IconName::Copy)
-                    .small()
-                    .ghost()
-                    .disabled(disabled)
-                    .tooltip("Copy only · Ctrl+Enter")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.use_selected(true, window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("paste-text")
-                    .label("Paste")
-                    .icon(IconName::ArrowRight)
-                    .small()
-                    .primary()
-                    .disabled(disabled || self.destination.is_none())
-                    .tooltip(if self.destination.is_some() {
-                        "Paste to previous app · Enter"
-                    } else {
-                        "Open TXTs with the global shortcut to paste to another app"
-                    })
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.use_selected(false, window, cx)),
-                    ),
-            )
-    }
-
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .flex_shrink_0()
-            .px_3()
-            .pb_2()
             .gap_1()
+            .pt_1()
             .child(
                 div()
+                    .px_3()
                     .flex_1()
                     .min_w_0()
                     .text_xs()
@@ -1036,13 +1020,12 @@ impl Render for TextPicker {
             .child(div().flex_1().min_h_0().w_full().overflow_hidden()
                 .when(count > 0, |body| body.child(uniform_list("texts-list", count, move |range, _, cx| {
                     view.update(cx, |this, cx| range.map(|ix| this.render_row(ix, cx)).collect::<Vec<_>>())
-                }).size_full().px_2().track_scroll(&self.scroll)))
+                }).size_full().track_scroll(&self.scroll)))
                 .when(count == 0, |body| body.child(v_flex().size_full().items_center().justify_center().gap_2().px_4()
                     .child(Icon::new(IconName::DocumentText).size_6().text_color(cx.theme().muted_foreground))
-                    .child(div().text_sm().child(if self.loading { "Loading texts…" } else if !self.query.read(cx).value().is_empty() { "No matching texts" } else if self.source == SourceFilter::Saved { "No saved texts yet" } else if self.source == SourceFilter::Clipboard { "No clipboard captures yet" } else { "Your text, within reach" }))
+                    .child(div().text_sm().child(if self.loading { "Loading texts…" } else if !self.query.read(cx).value().is_empty() { "No matching texts" } else if self.source == SourceFilter::Text { "No saved texts yet" } else if self.source == SourceFilter::Clipboard { "No clipboard captures yet" } else { "Your text, within reach" }))
                     .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground)
-                        .child(if !self.query.read(cx).value().is_empty() { "Try another search or clear the filter." } else if self.source == SourceFilter::Saved { "Save a capture from the Actions menu to keep it." } else if self.capture_enabled { "Copied text will appear here. Saved stickers are always kept." } else { "Enable collection below, or create a text sticker." })))))
-            .child(self.render_actions(cx))
+                        .child(if !self.query.read(cx).value().is_empty() { "Try another search or clear the filter." } else if self.source == SourceFilter::Text { "Save a capture with its pin button or Ctrl+R to keep it." } else if self.capture_enabled { "Copied text will appear here. Saved stickers are always kept." } else { "Enable collection below, or create a text sticker." })))))
             .child(self.render_footer(cx))
     }
 }
@@ -1054,8 +1037,8 @@ mod picker_tests {
     fn source_filters_keep_typed_identity_separate() {
         assert!(SourceFilter::All.includes(TextEntryId::Sticker(1)));
         assert!(SourceFilter::All.includes(TextEntryId::Clipboard(1)));
-        assert!(SourceFilter::Saved.includes(TextEntryId::Sticker(1)));
-        assert!(!SourceFilter::Saved.includes(TextEntryId::Clipboard(1)));
+        assert!(SourceFilter::Text.includes(TextEntryId::Sticker(1)));
+        assert!(!SourceFilter::Text.includes(TextEntryId::Clipboard(1)));
         assert!(SourceFilter::Clipboard.includes(TextEntryId::Clipboard(1)));
         assert!(!SourceFilter::Clipboard.includes(TextEntryId::Sticker(1)));
     }
@@ -1102,39 +1085,3 @@ fn dispatch_content(
     }
     Ok(())
 }
-#[cfg(target_os = "windows")]
-fn hide_chooser(window: &Window) -> anyhow::Result<()> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)?.as_raw() else {
-        anyhow::bail!("No native chooser handle")
-    };
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-            handle.hwnd.get() as _,
-            windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
-        );
-    }
-    super::set_clipboard_escape_target(false);
-    Ok(())
-}
-#[cfg(not(target_os = "windows"))]
-fn hide_chooser(_: &Window) -> anyhow::Result<()> {
-    anyhow::bail!("Verified paste unavailable; use Copy only")
-}
-#[cfg(target_os = "windows")]
-fn show_chooser(window: &Window) {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    if let Ok(handle) = HasWindowHandle::window_handle(window)
-        && let RawWindowHandle::Win32(handle) = handle.as_raw()
-    {
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                handle.hwnd.get() as _,
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOW,
-            );
-        }
-    }
-    super::set_clipboard_escape_target(true);
-}
-#[cfg(not(target_os = "windows"))]
-fn show_chooser(_: &Window) {}
