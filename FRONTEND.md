@@ -16,7 +16,7 @@ Use the current crate source for exact APIs. Do not invent GPUI methods from web
 | File / folder | Owns |
 | --- | --- |
 | `src/native/mod.rs` | Bootstrap, theme, services, clipboard watcher |
-| `src/native/windows/main.rs` | Sticker manager and event refresh |
+| `src/native/windows/main/` | Manager workspace: lifecycle/refresh, navigation, collection projection, settings |
 | `src/native/windows/sticker/` | Window lifecycle, chrome, placement, close/save |
 | `src/native/windows/selection.rs` | Compact search-first selection popup |
 | `src/native/windows/text/picker.rs` | TXTs list, filters, hover actions, and focus dismissal |
@@ -48,6 +48,17 @@ Start work from an event or lifecycle method. Run blocking I/O/crypto off the GU
 
 Use one owner method for each logical command across buttons, menus, and keyboard paths. Respect modal/menu focus; Escape dismisses the topmost surface and returns focus. Guard duplicate submissions, show recoverable errors, and never silently discard dirty encrypted drafts.
 
+## Manager workspace contracts
+
+- `main/mod.rs` owns lifecycle commands and revision-guarded refresh. `navigation.rs` owns destinations; `collection.rs` owns local filtering and virtual rows; `settings.rs` reuses shared text services.
+- Collection coordinates are not source coordinates. Preserve selection by domain ID before replacing either projection; keyboard scrolling uses the visible projection.
+- Parse command summaries at refresh, not in render. Search includes title, command, working directory, and cron without SQL on every keystroke. Command configuration commits must invalidate the manager after content is persisted.
+- The manager opens commands for inspection/settings, never implicit execution. Do not add a competing inline editor without a concurrency contract with the open sticker and scheduler.
+- The single page title/description belongs to the draggable header; do not repeat it in the toolbar. Brand uses embedded `assets/icon.png`. Settings is anchored at the sidebar bottom.
+- Manager row commands reveal as icon buttons on hover or selection; Enter/Open and Delete/confirmation share owner methods. Do not add a second per-row settings dropdown.
+- Sidebar collapses below 48 rem; test its icon tooltips and keyboard path. Uniform rows explicitly fill the width and scale their fixed height in rem. Trailing action/status lanes must stay aligned across types.
+- Settings toggles persist requested values, keep previous state on failure, reject stale loads, and share the master-password dialog rather than implementing a second protection flow. Global shortcuts are staged in retained Input entities and applied only by Save. Validation rejects duplicate/invalid chords; persistence must complete before publishing the runtime configuration. Escape dismissal is not rebindable. Hooks cannot establish ownership of shortcuts used by other applications, so do not claim OS-wide conflict detection.
+
 ## TXTs contracts to preserve
 
 - All / Text / Clipboard filters use the shared `TextRepository` projection. Rows show at most three lines; locked previews never contain plaintext.
@@ -72,8 +83,9 @@ Verify resizing, DPI, keyboard navigation, focus restoration, long text, empty/e
 2. For a dead click, check drag hit testing/occlusion, disabled/busy guards, modal guards, then callback/async completion. A working keyboard path does not prove a working button.
 3. For clipped tail rows, bound the **viewport**, not the content: fixed header/footer use `flex_shrink_0()`, list body uses `flex_1().min_h_0().overflow_hidden()`, and `uniform_list` fills that body. Give every virtual row the same height; release long text's width with `min_w_0()`. Check the first and last item with wheel and keyboard navigation.
 4. Multiline previews must preserve line breaks and Unicode in display data, then use `line_clamp(3)` in the view. A single-line sanitized preview cannot become multiline through styling. Budget row height for three text lines, metadata, actions, padding, and rem zoom.
-5. Hotkey presentation needs both native z-order and activation. `WindowKind::Floating` alone does not guarantee topmost ordering; raise after native creation through `text/platform.rs`. Test from another app, including one with topmost windows, not only from the manager.
-6. Use an isolated temporary database/window to exercise actual pointer paths. Assert the outcome (dialog displayed, content saved, encryption removed, window closed), not merely event delivery. Capture preview/edit/locked states, hover actions, and scroll tails in one bounded pass; fix in a batch, then confirm once.
+5. DPI is a measurement boundary: native coordinates and screenshots are physical, GPUI layout is logical. Check `viewport_size`, `scale_factor`, and actual client bounds before diagnosing clipping. Windows borderless creation may need `window.resize` to reapply logical size. Screenshot/input scripts must set their own thread DPI awareness; do not compensate by scaling product spacing.
+6. Hotkey presentation needs both native z-order and activation. `WindowKind::Floating` alone does not guarantee topmost ordering; raise after native creation through `text/platform.rs`. Test from another app, including one with topmost windows, not only from the manager.
+7. Use an isolated temporary database/window to exercise actual pointer paths. Assert the outcome (dialog displayed, content saved, encryption removed, window closed), not merely event delivery. Capture preview/edit/locked states, hover actions, and scroll tails in one bounded pass; fix in a batch, then confirm once.
 
 Keep evidence precise: repository tests prove storage contracts; native-event probes prove their specific event paths; screenshots prove only what was inspected. A synthetic Windows `WM_ACTIVATE` check is not proof of normal foreground switching. If the host blocks foreground transfer or images cannot be inspected, report that limitation. Remove temporary probes, debug instrumentation, and stale documentation references before committing.
 
@@ -91,4 +103,4 @@ cargo test --locked --features cli
 
 Keep one compatible `gpui-pre` family in the dependency tree. Focused tests cover text repository/protection/titles/CLI, clipboard import, palette, placement, and scheduling. Use temporary databases.
 
-GPUI Kit 0.7.1 has documented Windows headless/test-support limitations; do not label compile checks as UI integration coverage. For optional OS-level captures, see [the visual-check recipe](.agents/skills/gpui-visual-check/SKILL.md) and `scripts/screenshot.ps1`. Use an isolated test setup, not the user's live data.
+GPUI Kit 0.7.1 has documented Windows headless/test-support limitations; do not label compile checks as UI integration coverage. For optional OS-level captures, see [the visual-check recipe](.agents/skills/gpui-visual-check/SKILL.md) and `scripts/screenshot.ps1`. Keep temporary screenshots, snapshot reports, fixture databases, and local probes under `tests/visual/` (Git-ignored). Use an isolated test setup, not the user's live data. A successful `read` call does not establish image inspection if the harness omits the attachment; report that limitation and distinguish OCR/pixel checks from visual review.

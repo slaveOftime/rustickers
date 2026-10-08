@@ -22,7 +22,7 @@ cargo build --release --no-default-features --features cli --bin rst
 
 ## Desktop shortcuts
 
-Use Cmd instead of Ctrl for global shortcuts on macOS.
+These are the defaults. Edit and save the four global shortcuts in **Settings**; changes take effect immediately and survive restart. Use Cmd instead of Ctrl on macOS.
 
 | Shortcut | Action |
 | --- | --- |
@@ -34,6 +34,12 @@ Use Cmd instead of Ctrl for global shortcuts on macOS.
 | Ctrl+S | Save editor content |
 
 Command stickers support scheduled runs, including while their window is closed. File previews never encrypt or overwrite the source file.
+
+## Manager
+
+The manager organizes stickers by **Text / Commands / Timers / Sketches / Files**, with dedicated **Scheduled** and **Selection commands** views. Search titles, command lines, folders, and cron expressions instantly. Hover a row for Open/Delete icon actions; Enter opens and Delete asks for confirmation. Command stickers open for inspection/settings without automatically rerunning.
+
+**Settings**, at the bottom of the sidebar, brings together master-password management, clipboard collection, and editable global shortcuts. Shortcut changes are staged until **Save shortcuts**; **Use defaults** fills the defaults without applying them. The sidebar collapses in narrow windows; Ctrl/Cmd+F focuses search, and arrows/Enter navigate and open the collection.
 
 ## TXTs: saved text and clipboard history
 
