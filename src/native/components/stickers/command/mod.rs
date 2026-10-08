@@ -118,7 +118,8 @@ impl CommandSticker {
         } = init;
 
         let cmd = serde_json::from_str::<CommandContent>(&content).unwrap_or_default();
-        let open_in_settings = open_in_settings && (cmd.auto_close || cmd.run_without_window);
+        // Opening from the manager is inspection, never implicit execution.
+        let open_in_settings = open_in_settings && selection.is_none();
 
         let title = cx.new(|cx| {
             InputState::new(window, cx)
@@ -317,6 +318,7 @@ impl CommandSticker {
                 return;
             }
 
+            let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
             let _ = entity.update(cx, |this, cx| {
                 this.error = None;
                 cx.notify();
@@ -369,6 +371,15 @@ impl super::Sticker for CommandSticker {
 
     fn use_default_bg(&self) -> bool {
         self.show_editing_view()
+    }
+
+    fn begin_edit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.process.is_some() {
+            return;
+        }
+        self.stop_schedule();
+        self.open_in_settings = true;
+        cx.notify();
     }
 
     fn disable_color_picker(&self) -> bool {

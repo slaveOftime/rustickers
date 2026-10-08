@@ -10,6 +10,7 @@ pub mod webview;
 #[derive(RustEmbed)]
 #[folder = "./assets"]
 #[include = "icons/**/*.svg"]
+#[include = "icon.png"]
 pub struct Assets;
 
 impl AssetSource for Assets {

@@ -57,6 +57,13 @@ pub trait StickerStore: Send + Sync {
     /// Get command stickers with accept_selection=true, ordered by LRU (most recently used first).
     async fn get_accept_selection_stickers(&self) -> anyhow::Result<Vec<StickerDetail>>;
 
+    /// Every Command sticker, open or closed, for the redesigned manager.
+    ///
+    /// A plain projection: content is returned exactly as stored, even when it is not valid
+    /// JSON, and placements are loaded alongside each sticker. Ordering is deterministic:
+    /// most recently updated first, ties broken by descending id.
+    async fn get_command_stickers(&self) -> anyhow::Result<Vec<StickerDetail>>;
+
     /// Command stickers armed with a cron expression, whether their window is open or not.
     ///
     /// This is what lets a schedule keep ticking after the sticker has been closed.

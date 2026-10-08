@@ -548,6 +548,26 @@ ORDER BY l.last_used_at DESC NULLS LAST, s.updated_at DESC, s.id DESC"#
         Ok(rows)
     }
 
+    async fn get_command_stickers(&self) -> anyhow::Result<Vec<StickerDetail>> {
+        // No `json_valid` guard here, unlike the accept-selection query: the manager must show
+        // every command sticker, malformed or raw content included, exactly as stored.
+        let mut rows = sqlx::query_as::<_, StickerDetail>(
+            r#"SELECT s.id, s.title, s.state, s.left, s.top, s.width, s.height, s.top_most, s.color, s.type, s.content, s.created_at, s.updated_at,             s.display_id, s.display_uuid, s.virtual_desktop_id,             s.native_left, s.native_top, s.native_width, s.native_height, s.preferred_display_uuid
+FROM stickers s
+WHERE s.type = 'command'
+ORDER BY s.updated_at DESC, s.id DESC"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("query command stickers")?;
+
+        for row in rows.iter_mut() {
+            row.placements = self.get_sticker_placements(row.id).await?;
+        }
+
+        Ok(rows)
+    }
+
     async fn get_scheduled_command_stickers(&self) -> anyhow::Result<Vec<ScheduledCommand>> {
         // `started_at` is the arming flag and `scheduler.Cron` the expression; a sticker needs
         // both to be due for a background run. `state` is deliberately not filtered on, that is

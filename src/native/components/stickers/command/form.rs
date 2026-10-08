@@ -55,7 +55,7 @@ impl CommandSticker {
             .child(
                 field().label("Selected text").child(
                     Switch::new("accept_selection")
-                        .label("Open and run from Ctrl/Cmd + Alt + C")
+                        .label("Open and run with the selection shortcut")
                         .small()
                         .checked(self.accept_selection)
                         .on_click(cx.listener(|this, _, _, _| {
