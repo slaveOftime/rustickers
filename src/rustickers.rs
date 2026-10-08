@@ -45,6 +45,11 @@ fn main() {
         instance.start_ipc_server(ipc_events_tx.clone());
     }
 
+    let hotkey_path = app_paths.db_path.with_file_name("hotkeys.json");
+    if let Err(err) = native::hotkey::configure(&hotkey_path) {
+        tracing::error!(error = %err, "Could not load saved shortcuts; using defaults");
+    }
+
     if let Err(err) = native::hotkey::start_global_hotkey_listener(ipc_events_tx.clone()) {
         tracing::error!(error = %err, "Failed to start global hotkey listener");
     }
