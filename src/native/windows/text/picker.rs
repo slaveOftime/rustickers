@@ -814,7 +814,16 @@ impl TextPicker {
                 div()
                     .text_sm()
                     .truncate()
-                    .child(entry.preview().trim().to_owned()),
+                    .child(
+                        entry
+                            .preview()
+                            .replace(['\r', '\n'], "↩")
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_owned(),
+                    ),
             )
             .child(
                 h_flex()
