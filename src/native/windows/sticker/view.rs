@@ -59,7 +59,7 @@ impl Render for StickerWindow {
                     this.change_bounds(window, cx);
                 }),
             )
-            .when(self.view.use_default_bg(cx), |view| {
+            .when(true, |view| {
                 view.bg(Rgba {
                     a: 0.85,
                     ..self.detail.color.bg()

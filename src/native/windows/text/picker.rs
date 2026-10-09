@@ -781,14 +781,16 @@ impl TextPicker {
             .group("text-row")
             .w_full()
             .flex_shrink_0()
-            .px_2()
+            .gap_0p5()
+            .px_3()
             .py_2()
-            .gap_1()
             .bg(if selected {
                 cx.theme().list_active
             } else {
                 cx.theme().transparent
             })
+            .border_b_1()
+            .border_color(cx.theme().border)
             .when(!selected && !self.busy, |row| {
                 row.hover(|row| row.bg(cx.theme().list_hover))
             })
@@ -837,8 +839,8 @@ impl TextPicker {
                             cx.theme().muted_foreground
                         }),
                     )
-                    .child(div().flex_1())
                     .child(self.render_row_actions(id, saved, encrypted, cx))
+                    .child(div().flex_1())
                     .child(
                         div()
                             .text_xs()

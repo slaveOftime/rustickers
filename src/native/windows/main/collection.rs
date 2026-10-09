@@ -144,21 +144,16 @@ impl MainWindow {
         let title = if sticker.title.is_empty() {
             "Untitled sticker".to_string()
         } else {
-            sticker.title.clone()
+            sticker.title.trim().to_string()
         };
         let selected = self.selected_index == Some(ix);
         let command = self.commands.get(&id);
         let running = command_activity::is_running(id);
         let activity = CardActivity::of_command(running, command_activity::next_run(id));
-        let status = activity.status_line(if sticker.state == StickerState::Open {
-            "On desktop"
-        } else {
-            "Closed"
-        });
+        let status = activity.status_line("");
         let subtitle = command.map(CommandSummary::subtitle).unwrap_or_else(|| {
             format!(
-                "{}  ·  {}",
-                type_label(sticker.sticker_type),
+                "{}",
                 crate::utils::time::format_unix_millis(sticker.updated_at)
             )
         });
@@ -167,9 +162,9 @@ impl MainWindow {
             .w_full()
             .id(("sticker-row", id as usize))
             .group("manager-row")
-            .h(gpui::rems(ROW_HEIGHT))
             .px_5()
-            .gap_3()
+            .py_1()
+            .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(if selected {
@@ -177,7 +172,23 @@ impl MainWindow {
             } else {
                 cx.theme().background
             })
-            .when(!selected, |v| v.hover(|v| v.bg(cx.theme().list_hover)))
+            .opacity(
+                if sticker.state == StickerState::Open
+                    || matches!(self.section, Section::Scheduled | Section::Selection)
+                {
+                    0.9
+                } else {
+                    0.5
+                },
+            )
+            .hover(|v| {
+                let v = v.opacity(0.9);
+                if !selected {
+                    v.bg(cx.theme().list_hover)
+                } else {
+                    v
+                }
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
@@ -196,7 +207,7 @@ impl MainWindow {
             )
             .child(
                 div()
-                    .size_8()
+                    .size_10()
                     .flex_shrink_0()
                     .rounded_md()
                     .bg(cx.theme().muted)
@@ -214,7 +225,6 @@ impl MainWindow {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
                     .child(div().text_sm().font_medium().truncate().child(title))
                     .child(
                         div()
@@ -240,9 +250,6 @@ impl MainWindow {
                                             "Schedule not armed"
                                         }
                                     )))
-                                })
-                                .when(c.accept_selection, |v| {
-                                    v.child(div().flex_shrink_0().child("Selection input"))
                                 }),
                         )
                     }),
@@ -277,19 +284,6 @@ impl MainWindow {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
-                                Button::new(("open-sticker", id as u64))
-                                    .small()
-                                    .ghost()
-                                    .icon(IconName::ArrowRight)
-                                    .accessibility_label("Open sticker")
-                                    .tooltip("Open sticker (Enter)")
-                                    .on_click(
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.open_sticker(id, cx)
-                                        }),
-                                    ),
-                            )
-                            .child(
                                 Button::new(("delete-sticker", id as u64))
                                     .small()
                                     .ghost()
@@ -303,15 +297,6 @@ impl MainWindow {
                     ),
             )
             .into_any_element()
-    }
-}
-fn type_label(kind: StickerType) -> &'static str {
-    match kind {
-        StickerType::Markdown => "Text",
-        StickerType::Command => "Command",
-        StickerType::Timer => "Timer",
-        StickerType::Paint => "Sketch",
-        StickerType::File => "File",
     }
 }
 

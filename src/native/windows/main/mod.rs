@@ -42,8 +42,6 @@ use std::{collections::HashMap, sync::mpsc, time::Duration};
 
 const STICKER_LOAD_LIMIT: i64 = 10000;
 const STICKER_EVENT_PUMP_INTERVAL: Duration = Duration::from_millis(120);
-/// Virtual rows scale with Root's rem size; all types reserve the same three-line budget.
-const ROW_HEIGHT: f32 = 5.5;
 const PAGE_STEP: usize = 6;
 
 pub struct MainWindow {
@@ -145,7 +143,7 @@ impl MainWindow {
             stickers: Vec::new(),
             commands: HashMap::new(),
             visible: Vec::new(),
-            section: Section::All,
+            section: Section::Text,
             selected_index: None,
             list_focus: cx.focus_handle().tab_index(1).tab_stop(true),
             list_scroll: UniformListScrollHandle::default(),
@@ -481,7 +479,6 @@ impl MainWindow {
     fn sort_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let owner = cx.entity();
         Button::new("sort")
-            .small()
             .ghost()
             .icon(match self.order {
                 StickerOrderBy::CreatedAsc | StickerOrderBy::UpdatedAsc => IconName::SortAscending,
@@ -513,8 +510,7 @@ impl MainWindow {
     fn create_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let owner = cx.entity();
         Button::new("create")
-            .small()
-            .label("New sticker…")
+            .ghost()
             .icon(IconName::Plus)
             .disabled(self.creating)
             .dropdown_menu(move |mut menu, window, _| {
@@ -537,35 +533,57 @@ impl MainWindow {
             .into_any_element()
     }
     fn title_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        h_flex()
-            .min_h(gpui::rems(4.5))
-            .py_3()
+        div()
             .flex_shrink_0()
-            .px_5()
-            .gap_3()
+            .relative()
             .border_b_1()
             .border_color(cx.theme().border)
             .window_control_area(WindowControlArea::Drag)
             .child(
                 v_flex()
+                    .py_3()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
-                    .child(div().text_lg().font_semibold().child(self.section.label()))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.section.description()),
+                            .px_5()
+                            .text_lg()
+                            .font_semibold()
+                            .child(self.section.label()),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_5()
+                            .pl_5()
+                            .pr_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.section.description()),
+                            )
+                            .when(self.section != Section::Settings, |v| {
+                                v.child(
+                                    div().flex_1().min_w_40().max_w_64().child(
+                                        Input::new(&self.query)
+                                            .cleanable(true)
+                                            .prefix(Icon::new(IconName::Search))
+                                            .tab_index(0),
+                                    ),
+                                )
+                            }),
                     ),
             )
             .child(
                 h_flex()
+                    .absolute()
+                    .top_0()
+                    .right_0()
                     .occlude()
                     .gap_1()
                     .child(
                         Button::new("refresh-manager")
-                            .small()
                             .ghost()
                             .occlude()
                             .icon(IconName::Refresh)
@@ -582,7 +600,6 @@ impl MainWindow {
                     )
                     .child(
                         Button::new("minimize")
-                            .small()
                             .ghost()
                             .occlude()
                             .icon(IconName::Minus)
@@ -592,7 +609,6 @@ impl MainWindow {
                     )
                     .child(
                         Button::new("close")
-                            .small()
                             .ghost()
                             .occlude()
                             .icon(IconName::Close)
@@ -601,32 +617,11 @@ impl MainWindow {
                             .on_click(|_, window, cx| {
                                 Self::request_quit(window, cx);
                             }),
-                    ),
+                    )
+                    .when(self.section != Section::Settings, |v| {
+                        v.child(self.sort_button(cx)).child(self.create_button(cx))
+                    }),
             )
-            .into_any_element()
-    }
-    fn toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        v_flex()
-            .flex_shrink_0()
-            .px_5()
-            .py_3()
-            .when(self.section != Section::Settings, |v| {
-                v.child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&self.query)
-                                    .small()
-                                    .cleanable(true)
-                                    .prefix(Icon::new(IconName::Search))
-                                    .tab_index(0),
-                            ),
-                        )
-                        .child(self.sort_button(cx))
-                        .child(self.create_button(cx)),
-                )
-            })
             .into_any_element()
     }
 }
@@ -657,7 +652,6 @@ impl Render for MainWindow {
                     .min_w_0()
                     .h_full()
                     .child(self.title_bar(cx))
-                    .when(self.section != Section::Settings, |v| v.child(self.toolbar(cx)))
                     .when_some(self.error.as_ref(), |v, error| {
                         v.child(
                             div()

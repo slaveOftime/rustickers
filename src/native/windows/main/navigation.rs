@@ -7,7 +7,6 @@ use crate::gpui_component::sidebar::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Section {
     #[default]
-    All,
     Text,
     Commands,
     Timers,
@@ -18,8 +17,7 @@ pub(super) enum Section {
     Settings,
 }
 impl Section {
-    pub(super) const COLLECTIONS: [Self; 6] = [
-        Self::All,
+    pub(super) const COLLECTIONS: [Self; 5] = [
         Self::Text,
         Self::Commands,
         Self::Timers,
@@ -28,7 +26,6 @@ impl Section {
     ];
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::All => "All stickers",
             Self::Text => "Text",
             Self::Commands => "Commands",
             Self::Timers => "Timers",
@@ -41,7 +38,6 @@ impl Section {
     }
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::All => "Your desktop tools, together in one place.",
             Self::Text => "Notes and protected text. Clipboard history lives in TXTs.",
             Self::Commands => "Commands, output, and the routines you rely on.",
             Self::Timers => "A little structure for your time.",
@@ -64,7 +60,6 @@ impl Section {
     }
     pub(super) fn icon(self) -> IconName {
         match self {
-            Self::All => IconName::Folder,
             Self::Scheduled => IconName::Loop,
             Self::Selection => IconName::Forward,
             Self::Settings => IconName::Adjustments,
@@ -131,6 +126,7 @@ impl MainWindow {
             .header(
                 h_flex()
                     .h_10()
+                    .pl_1()
                     .gap_2()
                     .child(gpui::img("icon.png").size_6().flex_shrink_0())
                     .when(!compact, |v| {
@@ -152,21 +148,25 @@ impl MainWindow {
                     .w_full()
                     .gap_2()
                     .child(
-                        Button::new("manager-txts")
-                            .ghost()
-                            .icon(IconName::Copy)
-                            .when(!compact, |v| v.label("Open TXTs…"))
-                            .accessibility_label("Open TXTs")
-                            .tooltip("Saved text and clipboard history")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Err(error) = super::super::text::open_from_main(
-                                    cx,
-                                    this.sticker_events_sender.clone(),
-                                ) {
-                                    this.error = Some(format!("Could not open TXTs: {error}"));
-                                    cx.notify();
-                                }
-                            })),
+                        SidebarMenu::new()
+                            .collapsed(compact)
+                            .child(
+                                SidebarMenuItem::new("Open TXT")
+                                    .icon(IconName::Copy)
+                                    .collapsed(compact)
+                                    .active(false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Err(error) = super::super::text::open_from_main(
+                                            cx,
+                                            this.sticker_events_sender.clone(),
+                                        ) {
+                                            this.error =
+                                                Some(format!("Could not open TXTs: {error}"));
+                                            cx.notify();
+                                        }
+                                    })),
+                            )
+                            .render("manager-open-txt-menu", window, cx),
                     )
                     .child(
                         SidebarMenu::new()
