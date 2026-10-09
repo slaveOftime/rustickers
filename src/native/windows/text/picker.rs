@@ -1030,27 +1030,6 @@ impl Render for TextPicker {
     }
 }
 
-#[cfg(test)]
-mod picker_tests {
-    use super::*;
-    #[test]
-    fn source_filters_keep_typed_identity_separate() {
-        assert!(SourceFilter::All.includes(TextEntryId::Sticker(1)));
-        assert!(SourceFilter::All.includes(TextEntryId::Clipboard(1)));
-        assert!(SourceFilter::Text.includes(TextEntryId::Sticker(1)));
-        assert!(!SourceFilter::Text.includes(TextEntryId::Clipboard(1)));
-        assert!(SourceFilter::Clipboard.includes(TextEntryId::Clipboard(1)));
-        assert!(!SourceFilter::Clipboard.includes(TextEntryId::Sticker(1)));
-    }
-    #[test]
-    fn relative_time_handles_future_and_boundaries() {
-        assert_eq!(recency_label(10_000, 0), "Just now");
-        assert_eq!(recency_label(0, 60_000), "1m ago");
-        assert_eq!(recency_label(0, 3_600_000), "1h ago");
-        assert_eq!(recency_label(0, 86_400_000), "Yesterday");
-        assert_eq!(recency_label(0, 172_800_000), "2d ago");
-    }
-}
 fn dispatch_content(
     filter: &Arc<CaptureFilter>,
     content: &str,
@@ -1084,4 +1063,26 @@ fn dispatch_content(
         paste_foreground(destination)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    #[test]
+    fn source_filters_keep_typed_identity_separate() {
+        assert!(SourceFilter::All.includes(TextEntryId::Sticker(1)));
+        assert!(SourceFilter::All.includes(TextEntryId::Clipboard(1)));
+        assert!(SourceFilter::Text.includes(TextEntryId::Sticker(1)));
+        assert!(!SourceFilter::Text.includes(TextEntryId::Clipboard(1)));
+        assert!(SourceFilter::Clipboard.includes(TextEntryId::Clipboard(1)));
+        assert!(!SourceFilter::Clipboard.includes(TextEntryId::Sticker(1)));
+    }
+    #[test]
+    fn relative_time_handles_future_and_boundaries() {
+        assert_eq!(recency_label(10_000, 0), "Just now");
+        assert_eq!(recency_label(0, 60_000), "1m ago");
+        assert_eq!(recency_label(0, 3_600_000), "1h ago");
+        assert_eq!(recency_label(0, 86_400_000), "Yesterday");
+        assert_eq!(recency_label(0, 172_800_000), "2d ago");
+    }
 }
