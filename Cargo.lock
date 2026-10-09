@@ -7873,12 +7873,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "shlex 2.0.1",
  "sqlx",
  "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-error",
  "tracing-subscriber",
+ "unicode-width",
  "url",
  "urlencoding",
  "webbrowser",
@@ -7886,7 +7888,6 @@ dependencies = [
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "winres",
- "winsplit",
  "zeroize",
 ]
 
@@ -11546,12 +11547,6 @@ checksum = "b68db261ef59e9e52806f688020631e987592bd83619edccda9c47d42cde4f6c"
 dependencies = [
  "toml 0.5.11",
 ]
-
-[[package]]
-name = "winsplit"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab703352da6a72f35c39a533526393725640575bb211f61987a2748323ad956"
 
 [[package]]
 name = "wio"

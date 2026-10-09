@@ -1,4 +1,9 @@
 //! Scoped text authorization and safe direct child execution.
+//!
+//! One entry is resolved — by ID or by the terminal chooser — then handed to a child program
+//! through [`super::text_argv`]. Scripts pass `non_interactive`: they must already know the ID,
+//! and locked entries are refused here rather than met with a password prompt that would hang an
+//! unattended run.
 use super::{text_argv, text_terminal};
 use crate::{
     cli::runtime::block_on,
@@ -16,6 +21,7 @@ impl std::fmt::Display for ExitCode {
 }
 impl std::error::Error for ExitCode {}
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run(
     repository: &TextRepository,
     sources: TextSources,
@@ -23,8 +29,11 @@ pub(super) fn run(
     id: Option<TextEntryId>,
     query: &str,
     command: &[String],
+    non_interactive: bool,
 ) -> Result<()> {
     text_argv::validate_template(command)?;
+    use std::io::IsTerminal as _;
+    let terminal_available = std::io::stdin().is_terminal() || std::io::stdout().is_terminal();
     let rows = block_on(repository.snapshot(sources, ""))?
         .into_iter()
         .filter(|e| state.is_none() || e.state().is_none() || e.state() == state)
@@ -33,12 +42,29 @@ pub(super) fn run(
         ensure!(sources.includes(id), "ID is outside selected text sources");
         id
     } else {
+        ensure!(
+            !rows.is_empty(),
+            "no text entries to choose from; run `rst text list` or pass --id <SOURCE:ID>"
+        );
+        ensure!(
+            terminal_available,
+            "text chooser needs an interactive terminal; use --id SOURCE:ID --non-interactive for scripts"
+        );
         text_terminal::choose(&rows, query)?.ok_or(ExitCode(130))?
     };
     let selected = rows
         .iter()
         .find(|e| e.id() == id)
         .context("text not available in selected sources/state")?;
+    ensure!(
+        !non_interactive || !selected.is_encrypted(),
+        "entry {id} is encrypted; --non-interactive never prompts for the master password — \
+         unlock it in Rustickers or run without --non-interactive"
+    );
+    ensure!(
+        !selected.is_encrypted() || terminal_available,
+        "unlocking text needs an interactive terminal; encrypted entries cannot be used unattended"
+    );
     let password = if selected.is_encrypted() {
         Some(text_terminal::password("Master password: ")?.ok_or(ExitCode(130))?)
     } else {

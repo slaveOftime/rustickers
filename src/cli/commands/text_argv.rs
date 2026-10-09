@@ -1,4 +1,4 @@
-//! Argument-vector substitution for `rst cp ls -- <program> <args>...`.
+//! Argument-vector substitution for `rst text exec -- <program> <args>...`.
 //!
 //! Rules ([`build`]):
 //! - The first token is the fixed executable. `{{txt}}` there is rejected so a malicious clipboard
@@ -56,7 +56,10 @@ pub fn build(template: &[String], selected: &str) -> Result<Vec<String>> {
 /// to give a fast error before opening the chooser.
 pub fn validate_template(template: &[String]) -> Result<()> {
     if template.is_empty() {
-        bail!("cp ls requires a program after `--`. Usage: rst cp ls -- <program> <args>...");
+        bail!(
+            "text exec requires a program after `--`. \
+             Usage: rst text exec --id <SOURCE:ID> -- <program> [args...]"
+        );
     }
     let program = &template[0];
     if program.is_empty() {
@@ -97,7 +100,8 @@ fn validate_windows_size(argv: &[String]) -> Result<()> {
         units = units.saturating_add(backslashes); // escaping before closing quote
         if units > LIMIT {
             bail!(
-                "resulting Windows command exceeds the safe UTF-16 command-line limit; use a shorter clip or pipe `rst cp show --id <id>` to a program that accepts stdin"
+                "resulting Windows command exceeds the safe UTF-16 command-line limit; use a \
+                 shorter entry, or write the text to a file and pass that path to the program"
             );
         }
     }

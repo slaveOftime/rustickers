@@ -1,13 +1,24 @@
-//! `rst skill` — browse and run the worked examples.
+//! `rst skill` — discover, preview and create the built-in recipes.
+//!
+//! Discovery (`list`, `show`, `guide`) never touches the database and never depends on what is
+//! installed on the machine: `show` parser-validates its expansion, but does not resolve
+//! programs on PATH, so a missing `copilot` cannot break browsing the catalogue. Creating
+//! (`run`) re-parses the expansion into the ordinary [`Cli`] and executes it on the caller's
+//! [`Runtime`], which is what keeps `--offline` and `--data-dir` isolation intact: a skill can
+//! only do things the CLI can already do, exactly as `skill show` advertised them.
 
 use anyhow::bail;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::storage::paths::AppPaths;
-
+use crate::cli::Cli;
 use crate::cli::output::{Format, table};
+use crate::cli::runtime::Runtime;
 use crate::cli::skills::{self, Skill};
+
+/// The operational guide, shipped inside the binary so `skill guide` works with no database,
+/// no desktop app and no network.
+pub const GUIDE: &str = include_str!("../agent-guide.md");
 
 #[derive(clap::Args, Debug)]
 pub struct SkillArgs {
@@ -33,21 +44,36 @@ pub enum SkillAction {
 
         /// Override one of the skill's variables, repeatable
         #[arg(long, value_name = "KEY=VALUE")]
-        var: Vec<String>,
+        set: Vec<String>,
 
-        /// Print the command that would run, without creating anything
+        /// Validate the expansion, including command semantics, without creating anything
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Print the operational guide for agents (Markdown, no database needed)
+    Guide,
 }
 
-fn parse_vars(pairs: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
+/// Turn `--set KEY=VALUE` arguments into overrides.
+///
+/// Split on the *first* `=` so values may contain `=`. A repeated key is an error: silently
+/// keeping one of two contradictory values is the worst option available.
+fn parse_sets(pairs: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
     let mut vars = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for pair in pairs {
         let Some((key, value)) = pair.split_once('=') else {
-            bail!("--var expects KEY=VALUE, got '{pair}'");
+            bail!("--set expects KEY=VALUE, got '{pair}'");
         };
-        vars.insert(key.trim().to_owned(), value.to_owned());
+        let key = key.trim();
+        if key.is_empty() {
+            bail!("--set has an empty variable name in '{pair}'");
+        }
+        if !seen.insert(key.to_owned()) {
+            bail!("--set '{key}' was given more than once");
+        }
+        vars.insert(key.to_owned(), value.to_owned());
     }
     Ok(vars)
 }
@@ -57,6 +83,24 @@ fn lookup(name: &str) -> anyhow::Result<&'static Skill> {
         anyhow::anyhow!(
             "there is no '{name}' skill. Available: {}",
             skills::names().join(", ")
+        )
+    })
+}
+
+/// Rebuild a full CLI invocation from a skill's expansion, exactly as `run` would.
+///
+/// Global flags (`--json`, `--data-dir`, `--offline`) stay at the outer level; the runtime
+/// carries isolation, so only `--json` is replayed here.
+fn build_cli(skill: &Skill, argv: &[String], json: bool) -> anyhow::Result<Cli> {
+    let mut full: Vec<String> = vec!["rst".to_owned()];
+    if json {
+        full.push("--json".to_owned());
+    }
+    full.extend_from_slice(argv);
+    Cli::try_parse_from(&full).map_err(|err| {
+        anyhow::anyhow!(
+            "the '{}' skill produced arguments the parser rejects: {err}",
+            skill.name
         )
     })
 }
@@ -85,19 +129,25 @@ fn list(format: Format) {
                 .collect();
             table(&["SKILL", "WHAT IT DOES"], &rows);
             println!(
-                "\n`rst skill show <name>` explains one; `rst skill run <name>` \
-                 creates it."
+                "\n`rst skill show <name>` explains one; `rst skill run <name>` creates it; \
+                 `rst skill guide` is the operational handbook."
             );
         },
     );
 }
 
+/// Show one skill. A skill with a required variable cannot be fully expanded, so its template
+/// is shown as written and clearly marked as not runnable — no fabricated, misleading
+/// invocation. Only the parser is consulted; PATH and the database are not.
 fn show(name: &str, format: Format) -> anyhow::Result<()> {
     let skill = lookup(name)?;
-    let vars = skill.resolve_vars(&BTreeMap::new()).unwrap_or_default();
-    // A skill with a required variable cannot be fully expanded, so show the template as written.
-    let expanded = if vars.len() == skill.vars.len() {
-        skill.expand(&vars)
+    let missing = skill.missing(&BTreeMap::new());
+    let complete = missing.is_empty();
+
+    let argv = if complete {
+        let expanded = skill.expand(&skill.resolve_vars(&BTreeMap::new())?);
+        build_cli(skill, &expanded, false)?;
+        expanded
     } else {
         skill
             .template
@@ -105,10 +155,13 @@ fn show(name: &str, format: Format) -> anyhow::Result<()> {
             .map(|part| (*part).to_owned())
             .collect()
     };
+    let line = skills::human_command_line(&argv);
 
     let mut payload = skill_json(skill);
-    payload["command"] = json!(expanded);
-    payload["command_line"] = json!(skills::command_line(&expanded));
+    payload["complete"] = json!(complete);
+    payload["missing"] = json!(missing);
+    payload["argv"] = json!(argv);
+    payload["command_line"] = json!(line);
 
     format.emit(payload, || {
         println!("{}  —  {}\n", skill.name, skill.summary);
@@ -133,69 +186,87 @@ fn show(name: &str, format: Format) -> anyhow::Result<()> {
             println!();
         }
 
-        println!("Equivalent command:");
-        println!("  {}", skills::command_line(&expanded));
-        println!("\nRun it with:");
-        println!("  rst skill run {}", skill.name);
+        if complete {
+            println!("Equivalent command (host-quoted for pasting; --json carries the canonical argv array):");
+            println!("  {line}");
+            println!("\nRun it with:");
+            println!("  rst skill run {}", skill.name);
+        } else {
+            println!("Template — NOT runnable until every required variable is set:");
+            println!("  {line}");
+            println!("\nSet them with:");
+            println!(
+                "  rst skill run {} {}",
+                skill.name,
+                missing
+                    .iter()
+                    .map(|name| format!("--set {name}=..."))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
     });
 
     Ok(())
 }
 
 fn run_skill(
-    app_paths: &AppPaths,
+    runtime: &Runtime,
     name: &str,
-    var: &[String],
+    set: &[String],
     dry_run: bool,
     format: Format,
 ) -> anyhow::Result<()> {
     let skill = lookup(name)?;
-    let vars = skill.resolve_vars(&parse_vars(var)?)?;
+    let vars = skill.resolve_vars(&parse_sets(set)?)?;
     let expanded = skill.expand(&vars);
+    let cli = build_cli(skill, &expanded, format.is_json())?;
 
     if dry_run {
+        // The same semantic checks `command` performs before storing (program on PATH,
+        // selection contract, cron) — through `Cli::validate`, which reaches `CommandArgs::validate`
+        // and writes nothing anywhere.
+        cli.validate()?;
+        let line = skills::human_command_line(&expanded);
         format.emit(
             json!({
                 "skill": skill.name,
                 "vars": vars,
-                "command": expanded,
-                "command_line": skills::command_line(&expanded),
+                "argv": expanded,
+                "command_line": line,
                 "dry_run": true,
             }),
-            || println!("{}", skills::command_line(&expanded)),
+            || {
+                println!("{line}");
+                println!("note: dry run — validated, nothing created");
+            },
         );
         return Ok(());
     }
 
-    format.note(format!("Running: {}", skills::command_line(&expanded)));
+    format.note(format!(
+        "Creating: {}",
+        skills::human_command_line(&expanded)
+    ));
 
-    // Feeding the expansion back through the ordinary parser is what keeps a skill honest: it can
-    // only do things the CLI can already do, and it does them exactly as `skill show` advertised.
-    let mut argv = vec!["rst".to_owned()];
-    if format.is_json() {
-        argv.push("--json".to_owned());
-    }
-    argv.extend(expanded);
-
-    let cli = <crate::cli::Cli as clap::Parser>::try_parse_from(&argv).map_err(|err| {
-        anyhow::anyhow!(
-            "the '{}' skill produced invalid arguments: {err}",
-            skill.name
-        )
-    })?;
-
-    crate::cli::run(cli, app_paths)
+    // Executing the re-parsed CLI on the caller's runtime keeps the skill inside the ordinary
+    // command path and inside whatever isolation (--offline, --data-dir) that runtime has.
+    cli.execute(runtime)
 }
 
-pub fn run(app_paths: &AppPaths, args: SkillArgs, format: Format) -> anyhow::Result<()> {
+pub(crate) fn run(runtime: &Runtime, args: SkillArgs, format: Format) -> anyhow::Result<()> {
     match args.action {
         None | Some(SkillAction::List) => {
             list(format);
             Ok(())
         }
         Some(SkillAction::Show { name }) => show(&name, format),
-        Some(SkillAction::Run { name, var, dry_run }) => {
-            run_skill(app_paths, &name, &var, dry_run, format)
+        Some(SkillAction::Run { name, set, dry_run }) => {
+            run_skill(runtime, &name, &set, dry_run, format)
+        }
+        Some(SkillAction::Guide) => {
+            format.emit(json!({ "guide": GUIDE }), || print!("{GUIDE}"));
+            Ok(())
         }
     }
 }
@@ -205,14 +276,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn var_pairs_are_split_on_the_first_equals_sign() {
-        let vars = parse_vars(&["engine=https://x/?q=".into()]).unwrap();
+    fn set_pairs_split_on_the_first_equals_sign() {
+        let vars = parse_sets(&["engine=https://x/?q=".into()]).unwrap();
         assert_eq!(vars["engine"], "https://x/?q=");
     }
 
     #[test]
-    fn a_var_without_an_equals_sign_is_rejected() {
-        assert!(parse_vars(&["engine".into()]).is_err());
+    fn a_set_without_an_equals_sign_is_rejected() {
+        assert!(parse_sets(&["engine".into()]).is_err());
+    }
+
+    #[test]
+    fn a_repeated_set_key_is_rejected() {
+        let err = parse_sets(&["a=1".into(), "a=2".into()]).unwrap_err();
+        assert!(format!("{err:#}").contains("more than once"));
+    }
+
+    #[test]
+    fn an_empty_set_key_is_rejected() {
+        assert!(parse_sets(&["=1".into()]).is_err());
     }
 
     #[test]
@@ -221,5 +303,59 @@ mod tests {
         let message = format!("{err:#}");
         assert!(message.contains("no 'nope' skill"), "{message}");
         assert!(message.contains("ask"), "{message}");
+    }
+
+    fn guide_rst_lines() -> Vec<&'static str> {
+        let mut inside_fence = false;
+        GUIDE
+            .lines()
+            .filter(|line| {
+                if line.trim_start().starts_with("```") {
+                    inside_fence = !inside_fence;
+                    return false;
+                }
+                inside_fence && line.starts_with("rst ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_guide_ships_the_whole_catalogue_and_the_safety_contract() {
+        for skill in skills::SKILLS {
+            assert!(
+                GUIDE.contains(skill.name),
+                "guide never mentions {}",
+                skill.name
+            );
+        }
+        for anchor in [
+            "{{RUSTICKERS_SELECTION}}",
+            "{{txt}}",
+            "--set",
+            "--shell",
+            "--data-dir",
+            "--non-interactive",
+            "PowerShell",
+            "0 */5 * * * *",
+        ] {
+            assert!(GUIDE.contains(anchor), "guide is missing {anchor}");
+        }
+    }
+
+    #[test]
+    fn every_guide_command_line_parses() {
+        let lines = guide_rst_lines();
+        assert!(
+            lines.len() >= 5,
+            "the guide needs at least 5 rst lines, found {}",
+            lines.len()
+        );
+        for line in lines {
+            let parts =
+                shlex::split(line).unwrap_or_else(|| panic!("guide line must split:\n  {line}"));
+            assert_eq!(parts.first().map(String::as_str), Some("rst"), "{line}");
+            Cli::try_parse_from(&parts)
+                .unwrap_or_else(|err| panic!("guide line does not parse:\n  {line}\n  {err}"));
+        }
     }
 }

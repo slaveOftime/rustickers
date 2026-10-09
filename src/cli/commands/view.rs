@@ -12,7 +12,7 @@ use crate::ipc::PreviewFileRequest;
 use crate::model::sticker::StickerColor;
 
 use crate::cli::output::Format;
-use crate::cli::runtime;
+use crate::cli::runtime::Runtime;
 
 #[derive(clap::Args, Debug)]
 pub struct ViewArgs {
@@ -21,11 +21,11 @@ pub struct ViewArgs {
     pub source: String,
 
     /// Sticker width in pixels; auto-detected from the source by default
-    #[arg(long, value_name = "PX")]
+    #[arg(long, value_name = "PX", value_parser = crate::cli::parse_dimension)]
     pub width: Option<i32>,
 
     /// Sticker height in pixels; auto-detected from the source by default
-    #[arg(long, value_name = "PX")]
+    #[arg(long, value_name = "PX", value_parser = crate::cli::parse_dimension)]
     pub height: Option<i32>,
 
     /// Sticker color: yellow, green, blue, pink or gray
@@ -45,6 +45,7 @@ fn resolve(source: &str) -> anyhow::Result<String> {
     }
 
     let path = Path::new(source);
+    anyhow::ensure!(path.exists(), "preview source does not exist: {source}");
     if path.is_relative() {
         Ok(std::env::current_dir()?
             .join(path)
@@ -55,7 +56,7 @@ fn resolve(source: &str) -> anyhow::Result<String> {
     }
 }
 
-pub fn run(args: ViewArgs, format: Format) -> anyhow::Result<()> {
+pub(crate) fn run(runtime: &Runtime, args: ViewArgs, format: Format) -> anyhow::Result<()> {
     let source = resolve(&args.source)?;
 
     let request = PreviewFileRequest {
@@ -66,17 +67,21 @@ pub fn run(args: ViewArgs, format: Format) -> anyhow::Result<()> {
         flash: args.flash,
     };
 
-    let delivery = runtime::send(&format!(
+    let delivery = runtime.send(&format!(
         "PREVIEW_FILE {}",
         serde_json::to_string(&request)?
     ));
     if !delivery.delivered() {
-        bail!("Rustickers is not running; `view` needs the app to render the preview");
+        bail!(
+            "view needs desktop IPC; notification is {} (omit --offline/--data-dir and start Rustickers)",
+            delivery.as_str()
+        );
     }
 
-    format.emit(json!({ "source": source, "app_running": true }), || {
-        println!("Previewing {source}")
-    });
+    format.emit(
+        json!({ "source": source, "desktop_notification": "sent" }),
+        || println!("Previewing {source}"),
+    );
 
     Ok(())
 }

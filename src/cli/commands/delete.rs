@@ -2,18 +2,17 @@
 
 use anyhow::bail;
 use serde_json::json;
-use std::io::Write as _;
-
-use crate::storage::paths::AppPaths;
+use std::io::{IsTerminal as _, Write as _};
 
 use crate::cli::output::{Format, one_line};
-use crate::cli::runtime::{self, block_on, open_store};
+use crate::cli::runtime::{Runtime, block_on};
 
 use super::list::type_name;
 
 #[derive(clap::Args, Debug)]
 pub struct DeleteArgs {
     /// Sticker ID, as listed by `rst list`
+    #[arg(value_parser = crate::cli::parse_id)]
     pub id: i64,
 
     /// Delete without asking for confirmation
@@ -21,24 +20,23 @@ pub struct DeleteArgs {
     pub yes: bool,
 }
 
-pub fn run(app_paths: &AppPaths, args: DeleteArgs, format: Format) -> anyhow::Result<()> {
-    let store = open_store(app_paths)?;
-    let sticker = block_on(store.get_sticker(args.id))
-        .map_err(|_| anyhow::anyhow!("no sticker with id {}", args.id))?;
+pub(crate) fn run(runtime: &Runtime, args: DeleteArgs, format: Format) -> anyhow::Result<()> {
+    let store = runtime.store()?;
+    let sticker = super::show::load(runtime, args.id)?;
 
     if !args.yes {
         // There is nobody at a terminal to answer a prompt in JSON mode, so ask for the flag
         // instead of hanging on a read that will never be answered.
-        if format.is_json() {
-            bail!("refusing to delete without --yes");
+        if format.is_json() || !std::io::stdin().is_terminal() {
+            bail!("refusing to delete without --yes outside an interactive terminal");
         }
-        print!(
+        eprint!(
             "Delete {} sticker {} ({})? [y/N] ",
             type_name(sticker.sticker_type),
             sticker.id,
             one_line(&sticker.title, 40)
         );
-        std::io::stdout().flush()?;
+        std::io::stderr().flush()?;
 
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
@@ -49,8 +47,8 @@ pub fn run(app_paths: &AppPaths, args: DeleteArgs, format: Format) -> anyhow::Re
     }
 
     // Close it first so the app is not left holding a window for a sticker that no longer exists.
-    let delivery = runtime::close_sticker(args.id);
     block_on(store.delete_sticker(args.id))?;
+    let delivery = runtime.close_sticker(args.id);
 
     format.emit(
         json!({
@@ -58,7 +56,7 @@ pub fn run(app_paths: &AppPaths, args: DeleteArgs, format: Format) -> anyhow::Re
             "deleted": true,
             "title": sticker.title,
             "type": type_name(sticker.sticker_type),
-            "app_running": delivery.delivered(),
+            "desktop_notification": delivery.as_str(),
         }),
         || println!("Deleted sticker {}.", args.id),
     );

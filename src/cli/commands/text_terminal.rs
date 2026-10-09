@@ -1,4 +1,8 @@
 //! Controlling-terminal I/O: clipboard selection never consumes child stdin or pollutes stdout.
+//!
+//! [`safe_preview`] is the project's terminal-safe display sanitizer and is shared with human
+//! output outside this module, so untrusted text can never smuggle escape sequences or bidi
+//! overrides into a console.
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
@@ -43,7 +47,10 @@ impl Terminal {
             .read(true)
             .write(true)
             .open(path)
-            .context("text selection needs a terminal; omit child command to list, or use --id <SOURCE:ID> for scripts")?;
+            .context(
+                "text selection needs a terminal; run `rst text list` to inspect entries, \
+                      or pass --id <SOURCE:ID> --non-interactive in scripts",
+            )?;
         let mut terminal = Self {
             output,
             alternate: false,
@@ -297,7 +304,7 @@ pub(super) fn password(prompt: &str) -> Result<Option<Zeroizing<String>>> {
 }
 
 /// Strip terminal commands and bidi controls from display text, not from stored/pasted payloads.
-pub(super) fn safe_preview(text: &str, max: usize) -> String {
+pub fn safe_preview(text: &str, max: usize) -> String {
     let mut out = String::new();
     let mut count: usize = 0;
     for c in text.chars() {

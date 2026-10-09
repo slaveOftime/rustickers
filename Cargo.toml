@@ -31,7 +31,6 @@ ui = [
 	"dep:lyon",
 	"dep:mimalloc",
 	"dep:rdev",
-	"dep:winsplit",
 	"dep:rust-embed",
 	"dep:notify-rust",
 	"dep:async-compat",
@@ -65,6 +64,7 @@ ui = [
 cli = [
 	"dep:crossterm",
 	"dep:clap",
+	"dep:unicode-width",
 	"dep:futures",
 	"dep:sqlx",
 	"storage",
@@ -72,7 +72,6 @@ cli = [
 	# at creation time instead of silently failing later inside the app.
 	"dep:cron",
 	"dep:which",
-	"dep:winsplit",
 	"dep:arboard",
 	"dep:sha2",
 	"dep:zeroize",
@@ -92,6 +91,7 @@ required-features = ["cli"]
 
 [dependencies]
 crossterm = { version = "0.29", features = ["use-dev-tty"], optional = true }
+unicode-width = { version = "0.2", optional = true }
 # GPUI Kit single consumer entry point. Kit re-exports the gpui-pre family
 # as `gpui_kit::gpui` and the component library as `gpui_kit::component`, so
 # application code can adopt the Kit namespaces without depending on the
@@ -132,7 +132,6 @@ lyon = { version = "1.0.16", optional = true }
 mimalloc = { version = "0.1.52", features = ["v2"], optional = true }
 rdev = { version = "0.5.3", optional = true }
 which = { version = "8.0.0", optional = true }
-winsplit = { version = "0.1.0", optional = true }
 rust-embed = { version = "8", features = ["interpolate-folder-path"], optional = true }
 notify-rust = { version = "4.11.7", optional = true }
 async-compat = { version = "0.2.5", optional = true }
@@ -180,3 +179,4 @@ winres = "0.1"
 [dev-dependencies]
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
 tempfile = "3"
+shlex = "2"

@@ -3,16 +3,16 @@
 use serde_json::{Value, json};
 
 use crate::model::sticker::StickerDetail;
-use crate::storage::paths::AppPaths;
 
-use crate::cli::output::{Format, format_ts};
-use crate::cli::runtime::{block_on, open_store};
+use crate::cli::output::{Format, format_ts, sanitize};
+use crate::cli::runtime::{Runtime, block_on};
 
 use super::list::{state_name, type_name};
 
 #[derive(clap::Args, Debug)]
 pub struct ShowArgs {
     /// Sticker ID, as listed by `rst list`
+    #[arg(value_parser = crate::cli::parse_id)]
     pub id: i64,
 
     /// Print only the stored content, with no surrounding report
@@ -28,6 +28,9 @@ pub struct ShowArgs {
 /// Giving a caller structured content when it exists saves them a second parse and a guess about
 /// which sticker types store what.
 pub fn content_value(sticker: &StickerDetail) -> Value {
+    if sticker.sticker_type == crate::model::sticker::StickerType::Markdown {
+        return Value::String(sticker.content.clone());
+    }
     serde_json::from_str::<Value>(&sticker.content)
         .ok()
         .filter(Value::is_object)
@@ -52,20 +55,28 @@ pub fn to_json(sticker: &StickerDetail) -> Value {
     })
 }
 
-pub fn load(app_paths: &AppPaths, id: i64) -> anyhow::Result<StickerDetail> {
-    let store = open_store(app_paths)?;
-    // The underlying "no rows returned" is noise; the id is the only useful part.
-    block_on(store.get_sticker(id)).map_err(|_| anyhow::anyhow!("no sticker with id {id}"))
+pub(crate) fn load(runtime: &Runtime, id: i64) -> anyhow::Result<StickerDetail> {
+    let store = runtime.store()?;
+    block_on(store.get_sticker(id)).map_err(|error| {
+        if error
+            .downcast_ref::<sqlx::Error>()
+            .is_some_and(|e| matches!(e, sqlx::Error::RowNotFound))
+        {
+            anyhow::anyhow!("no sticker with id {id}")
+        } else {
+            error.context(format!("load sticker {id}"))
+        }
+    })
 }
 
-pub fn run(app_paths: &AppPaths, args: ShowArgs, format: Format) -> anyhow::Result<()> {
-    let sticker = load(app_paths, args.id)?;
+pub(crate) fn run(runtime: &Runtime, args: ShowArgs, format: Format) -> anyhow::Result<()> {
+    let sticker = load(runtime, args.id)?;
 
     if args.content_only {
         format.emit(
             json!({ "id": sticker.id, "content": content_value(&sticker) }),
             || {
-                println!("{}", sticker.content);
+                print!("{}", sticker.content);
             },
         );
         return Ok(());
@@ -73,7 +84,7 @@ pub fn run(app_paths: &AppPaths, args: ShowArgs, format: Format) -> anyhow::Resu
 
     format.emit(to_json(&sticker), || {
         println!("id:         {}", sticker.id);
-        println!("title:      {}", sticker.title);
+        println!("title:      {}", sanitize(&sticker.title));
         println!("type:       {}", type_name(sticker.sticker_type));
         println!("state:      {}", state_name(sticker.state));
         println!("color:      {}", sticker.color.as_str());
@@ -85,7 +96,7 @@ pub fn run(app_paths: &AppPaths, args: ShowArgs, format: Format) -> anyhow::Resu
         println!("content:");
         // Pretty-print structured content; a wall of one-line JSON is unreadable.
         match content_value(&sticker) {
-            Value::String(text) => println!("{text}"),
+            Value::String(text) => println!("{}", sanitize(&text)),
             structured => println!(
                 "{}",
                 serde_json::to_string_pretty(&structured).unwrap_or(sticker.content.clone())

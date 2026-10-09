@@ -1,7 +1,7 @@
-//! Public CLI regression coverage; every runtime call uses an isolated database.
+//! Public CLI regression coverage for the text grammar; every runtime call uses an isolated
+//! database and the library seam (`cli::run`) is always offline, so no IPC leaves the process.
 #![cfg(feature = "cli")]
 
-use clap::Parser;
 use futures::executor::block_on;
 use rustickers::{
     cli::{
@@ -12,6 +12,8 @@ use rustickers::{
     storage::{StickerStore, paths::AppPaths, sqlite::SqliteStore},
     text::{TextEntryId, TextRepository},
 };
+use serde_json::Value;
+use std::process::Command;
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_owned()).collect()
@@ -49,6 +51,11 @@ impl Fixture {
         block_on(store.update_sticker_state(id, state)).unwrap();
         TextEntryId::Sticker(id)
     }
+    fn locked_sticker(&self, text: &str, password: &str) -> TextEntryId {
+        block_on(self.repo.set_master_password(password)).unwrap();
+        let capture = block_on(self.repo.get(self.capture(text))).unwrap();
+        TextEntryId::Sticker(block_on(self.repo.promote(&capture, true)).unwrap())
+    }
     fn run(&self, args: &[&str]) -> anyhow::Result<()> {
         cli::run(Cli::try_parse_from(args).unwrap(), &self.paths)
     }
@@ -58,7 +65,7 @@ impl Fixture {
         id: TextEntryId,
         command: &[String],
     ) -> anyhow::Result<()> {
-        let mut args = strings(&["rst", "ls"]);
+        let mut args = strings(&["rst", "text", "exec"]);
         args.extend(strings(selectors));
         args.extend(["--id".into(), id.to_string(), "--".into()]);
         args.extend_from_slice(command);
@@ -90,45 +97,179 @@ fn child(code: i32, dir: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn merged_grammar_aliases_and_removed_families() {
-    for name in ["ls", "list"] {
-        for tail in [
-            vec![],
-            vec!["--state", "all"],
-            vec!["--text"],
-            vec!["--cp"],
-            vec!["--text", "--cp", "-s", "rust", "-n", "20"],
-            vec!["--text", "--cp", "--json"],
-            vec!["--text", "--cp", "--", "some_cmd", "xxx", "{{txt}}", "xxx"],
-            vec!["--text", "--id", "sticker:42", "--", "my-tool", "{{txt}}"],
-            vec!["--cp", "--id", "clipboard:42", "--", "my-tool"],
-        ] {
-            let mut args = vec!["rst", name];
-            args.extend(tail);
-            assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
-        }
+fn text_list_json_uses_the_spoken_state_names() {
+    let f = Fixture::new();
+    f.sticker("closed text", StickerState::Close);
+    f.capture("clipboard text");
+    let output = Command::new(env!("CARGO_BIN_EXE_rst"))
+        .arg("--data-dir")
+        .arg(f._dir.path())
+        .args(["text", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    // Saved stickers say "closed", matching `--state closed`; captures have no state.
+    let closed = value["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("sticker:"))
+        })
+        .expect("the closed saved sticker");
+    assert_eq!(closed["state"], "closed");
+    let capture = value["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("clipboard:"))
+        })
+        .expect("the capture");
+    assert_eq!(capture["state"], Value::Null);
+}
+
+#[test]
+fn bad_child_template_does_not_create_storage() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("isolated");
+    let output = Command::new(env!("CARGO_BIN_EXE_rst"))
+        .arg("--data-dir")
+        .arg(&dir)
+        .args(["text", "exec", "--id", "sticker:1", "--", "{{txt}}"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("program name"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !dir.exists(),
+        "a rejected child template must not touch storage"
+    );
+}
+
+#[test]
+fn non_interactive_without_id_is_a_usage_error_before_storage() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("isolated");
+    let output = Command::new(env!("CARGO_BIN_EXE_rst"))
+        .arg("--data-dir")
+        .arg(&dir)
+        .args(["text", "exec", "--non-interactive", "--", "tool"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "requires --id at the parser");
+    assert!(!dir.exists(), "a usage error must not touch storage");
+}
+
+#[test]
+fn canonical_grammar_and_removed_aliases() {
+    // `list` is canonical; `ls` and the old text families are gone.
+    assert!(Cli::try_parse_from(["rst", "list"]).is_ok());
+    for removed in ["ls", "cp", "vault", "markdown", "cmd"] {
+        assert!(Cli::try_parse_from(["rst", removed]).is_err(), "{removed}");
     }
     let names = cli::subcommand_names();
-    assert!(names.iter().any(|s| s == "ls"));
     assert!(names.iter().any(|s| s == "list"));
-    for removed in ["cp", "vault"] {
-        assert!(!names.iter().any(|s| s == removed));
-        assert!(Cli::try_parse_from(["rst", removed]).is_err());
+    assert!(!names.iter().any(|s| s == "ls"));
+
+    for tail in [
+        vec![],
+        vec!["--state", "all"],
+        vec!["--state", "open"],
+        vec!["--state", "closed"],
+        vec!["--type", "markdown"],
+        vec!["-s", "rust", "-n", "20"],
+        vec!["--json"],
+    ] {
+        let mut args = vec!["rst", "list"];
+        args.extend(tail);
+        assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
+    }
+    // The old sticker-listing text flags are not part of `list` anymore.
+    for tail in [
+        vec!["--text"],
+        vec!["--cp"],
+        vec!["--state", "close"],
+        vec!["-n", "0"],
+        vec!["--", "tool"],
+    ] {
+        let mut args = vec!["rst", "list"];
+        args.extend(tail);
+        assert!(Cli::try_parse_from(&args).is_err(), "{args:?}");
+    }
+
+    for tail in [
+        vec![],
+        vec!["--source", "saved"],
+        vec!["--source", "clipboard"],
+        vec!["--source", "all", "--state", "closed"],
+        vec!["--source", "saved", "-s", "rust", "-n", "5"],
+        vec!["--json"],
+    ] {
+        let mut args = vec!["rst", "text", "list"];
+        args.extend(tail);
+        assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
     }
 }
 
 #[test]
-fn id_limit_and_search_conflicts_are_parser_errors() {
+fn exec_parser_constraints() {
+    // A child program is required, including when `--` is present but empty.
     for tail in [
-        vec!["--id", "sticker:1"],
+        vec![],
+        vec!["--"],
+        vec!["--id", "sticker:1", "--"],
+        vec!["--non-interactive", "--", "tool"],
         vec!["--id", "sticker:1", "-s", "needle", "--", "tool"],
-        vec!["--id", "sticker:1", "-n", "1", "--", "tool"],
-        vec!["-n", "1", "--", "tool"],
+        vec!["--json", "--id", "sticker:1", "--", "tool"],
     ] {
-        let mut args = vec!["rst", "ls", "--text"];
+        let mut args = vec!["rst", "text", "exec"];
         args.extend(tail);
         assert!(Cli::try_parse_from(&args).is_err(), "{args:?}");
     }
+    assert!(
+        Cli::try_parse_from([
+            "rst",
+            "--json",
+            "text",
+            "exec",
+            "--id",
+            "sticker:1",
+            "--",
+            "tool"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "rst",
+            "text",
+            "exec",
+            "--id",
+            "sticker:1",
+            "-s",
+            "needle",
+            "--",
+            "tool"
+        ])
+        .is_err()
+    );
+
+    // Malformed cross-table IDs never reach the runtime.
     for id in [
         "42",
         "sticker:0",
@@ -137,101 +278,42 @@ fn id_limit_and_search_conflicts_are_parser_errors() {
         "sticker:nope",
     ] {
         assert!(
-            Cli::try_parse_from(["rst", "ls", "--text", "--id", id, "--", "tool"]).is_err(),
+            Cli::try_parse_from(["rst", "text", "exec", "--id", id, "--", "tool"]).is_err(),
             "{id}"
         );
     }
-    assert!(Cli::try_parse_from(["rst", "ls", "--text", "-s", "needle", "--", "tool"]).is_ok());
-}
 
-#[test]
-fn empty_child_separator_is_ordinary_listing() {
-    // An optional delimiter without a child preserves standard Clap listing semantics.
-    assert!(Cli::try_parse_from(["rst", "ls", "--text", "--"]).is_ok());
-}
-
-#[test]
-fn parent_json_is_rejected_but_child_json_is_not_global() {
-    let f = Fixture::new();
-    for args in [
-        vec![
-            "rst",
-            "--json",
-            "ls",
-            "--text",
-            "--id",
-            "sticker:1",
-            "--",
-            "tool",
-        ],
-        vec![
-            "rst",
-            "ls",
-            "--text",
-            "--json",
-            "--id",
-            "sticker:1",
-            "--",
-            "tool",
-        ],
-    ] {
-        let cli = Cli::try_parse_from(args).unwrap();
-        assert!(cli.format().is_json());
-        assert!(
-            cli::run(cli, &f.paths)
-                .unwrap_err()
-                .to_string()
-                .contains("--json")
-        );
-    }
+    // A valid invocation, and a parent JSON flag after `--` belongs to the child.
     let cli = Cli::try_parse_from([
         "rst",
-        "ls",
-        "--cp",
+        "text",
+        "exec",
         "--id",
-        "clipboard:1",
+        "clipboard:42",
         "--",
         "tool",
         "--json",
         "{{txt}}",
     ])
-    .unwrap();
+    .expect("child argv passes through");
     assert!(!cli.format().is_json());
-    // A missing ID proves execution got past the parent JSON guard, without launching a child.
-    assert!(
-        cli::run(cli, &f.paths)
-            .unwrap_err()
-            .to_string()
-            .contains("not available")
-    );
 }
 
 #[test]
-fn runtime_rejects_execution_without_sources_and_nontext_types() {
+fn text_list_and_sticker_list_are_separate_domains() {
     let f = Fixture::new();
-    assert!(
-        f.run(&["rst", "ls", "--", "tool"])
-            .unwrap_err()
-            .to_string()
-            .contains("requires --text")
-    );
-    for kind in ["command", "file", "timer", "paint"] {
-        let error = f
-            .run(&["rst", "ls", "--text", "--type", kind, "--", "tool"])
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("only supports Markdown"),
-            "{error}"
-        );
-    }
-    // Noninteractive listings and the legacy alias always operate on this fixture, never AppData.
+    f.sticker("open text", StickerState::Open);
+    f.capture("clipboard text");
     for args in [
-        vec!["rst", "ls"],
-        vec!["rst", "list", "--state", "all"],
+        vec!["rst", "list"],
+        vec!["rst", "list", "--state", "closed"],
+        vec!["rst", "list", "--type", "markdown", "--json"],
+        vec!["rst", "text", "list"],
+        vec!["rst", "text", "list", "--source", "saved"],
+        vec!["rst", "text", "list", "--source", "clipboard", "--json"],
         vec![
-            "rst", "ls", "--text", "--cp", "-s", "rust", "-n", "1", "--json",
+            "rst", "text", "list", "--source", "all", "-s", "text", "-n", "1",
         ],
-        vec!["rst", "ls", "--text", "--type", "markdown"],
     ] {
         f.run(&args).unwrap();
     }
@@ -245,25 +327,75 @@ fn runtime_honors_source_and_state_filters_for_direct_ids() {
     let capture = f.capture("clipboard text");
     let command = child(0, f._dir.path());
     for (selectors, id) in [
-        (vec!["--text"], closed), // omitted state includes closed stickers
-        (vec!["--text", "--state", "open"], open),
-        (vec!["--text", "--state", "close"], closed),
-        (vec!["--text", "--state", "all"], closed),
-        (vec!["--cp", "--state", "open"], capture),
-        (vec!["--cp", "--state", "close"], capture),
-        (vec!["--text", "--cp"], capture),
+        (vec!["--source", "saved"], closed), // --state all is the default
+        (vec!["--source", "saved", "--state", "open"], open),
+        (vec!["--source", "saved", "--state", "closed"], closed),
+        (vec!["--source", "saved", "--state", "all"], closed),
+        (vec!["--source", "clipboard", "--state", "open"], capture),
+        (vec!["--source", "clipboard", "--state", "closed"], capture),
+        (vec!["--source", "all"], capture),
     ] {
         f.execute(&selectors, id, &command).unwrap();
     }
     for (selectors, id, expected) in [
-        (vec!["--cp"], closed, "outside selected text sources"),
-        (vec!["--text"], capture, "outside selected text sources"),
-        (vec!["--text", "--state", "open"], closed, "not available"),
-        (vec!["--text", "--state", "close"], open, "not available"),
+        (
+            vec!["--source", "clipboard"],
+            closed,
+            "outside selected text sources",
+        ),
+        (
+            vec!["--source", "saved"],
+            capture,
+            "outside selected text sources",
+        ),
+        (
+            vec!["--source", "saved", "--state", "open"],
+            closed,
+            "not available",
+        ),
+        (
+            vec!["--source", "saved", "--state", "closed"],
+            open,
+            "not available",
+        ),
     ] {
         let error = f.execute(&selectors, id, &command).unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
+}
+
+#[test]
+fn empty_snapshot_fails_before_the_terminal_chooser() {
+    let f = Fixture::new();
+    let error = f
+        .run(&["rst", "text", "exec", "--", "some-tool"])
+        .unwrap_err();
+    assert!(error.to_string().contains("no text entries"), "{error}");
+}
+
+#[test]
+fn non_interactive_requires_id_and_refuses_encrypted_text_before_any_prompt() {
+    let f = Fixture::new();
+    let capture = f.capture("ordinary text");
+    f.execute(
+        &["--source", "clipboard", "--non-interactive"],
+        capture,
+        &child(0, f._dir.path()),
+    )
+    .unwrap();
+
+    let locked = f.locked_sticker("private marker text", "master key");
+    let error = f
+        .execute(
+            &["--source", "saved", "--non-interactive"],
+            locked,
+            &child(0, f._dir.path()),
+        )
+        .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("non-interactive"), "{message}");
+    assert!(message.contains("encrypted"), "{message}");
+    assert!(!message.contains("private marker"), "{message}");
 }
 
 #[test]
@@ -325,10 +457,11 @@ fn nul_and_invalid_programs_fail_before_selection() {
     );
     assert!(text_argv::build(&strings(&["program"]), "secret\0text").is_err());
     let f = Fixture::new();
+    f.capture("some text");
     let error = f
-        .run(&["rst", "ls", "--text", "--", "{{txt}}"])
+        .run(&["rst", "text", "exec", "--", "{{txt}}"])
         .unwrap_err();
-    assert!(error.to_string().contains("program name"));
+    assert!(error.to_string().contains("program name"), "{error}");
 }
 
 #[test]
@@ -361,7 +494,7 @@ fn child_receives_exact_text_as_one_argument_without_shell_expansion() {
         output.to_str().unwrap(),
         "prefix={{txt}}/{{txt}}",
     ]);
-    f.execute(&["--cp"], id, &command).unwrap();
+    f.execute(&["--source", "clipboard"], id, &command).unwrap();
     assert_eq!(
         std::fs::read_to_string(&output).unwrap(),
         format!("prefix={exact}/{exact}")
@@ -381,7 +514,8 @@ fn child_receives_exact_text_as_one_argument_without_shell_expansion() {
         appended[2] =
             "test \"$2\" = 'fixed argument' || exit 71; printf '%s' \"$3\" > \"$1\"".to_owned();
     }
-    f.execute(&["--cp"], id, &appended).unwrap();
+    f.execute(&["--source", "clipboard"], id, &appended)
+        .unwrap();
     assert_eq!(std::fs::read_to_string(output).unwrap(), exact);
 }
 
@@ -425,7 +559,7 @@ fn unsupported_envelopes_cannot_be_selected_or_spawn_a_child() {
         let id: i64 = block_on(sqlx::query_scalar("INSERT INTO stickers(title,state,left,top,width,height,color,type,content,created_at,updated_at) VALUES('old title','close',0,0,400,300,'yellow','markdown',?,1,1) RETURNING id")
             .bind(content).fetch_one(&pool)).unwrap();
         let error = f
-            .execute(&["--text"], TextEntryId::Sticker(id), &command)
+            .execute(&["--source", "saved"], TextEntryId::Sticker(id), &command)
             .unwrap_err();
         assert!(error.to_string().contains("not available"), "{error}");
         assert!(!format!("{error:#}").contains("private legacy marker"));
@@ -444,10 +578,15 @@ fn unsupported_envelopes_cannot_be_selected_or_spawn_a_child() {
 fn child_success_nonzero_and_missing_executable_propagate_exit_codes() {
     let f = Fixture::new();
     let id = f.capture("exact argument with spaces\nquotes: \" ' ; &");
-    f.execute(&["--cp"], id, &child(0, f._dir.path())).unwrap();
+    f.execute(&["--source", "clipboard"], id, &child(0, f._dir.path()))
+        .unwrap();
     let nonzero_id = f.capture("nonzero child still counts as successful delivery");
     let error = f
-        .execute(&["--cp"], nonzero_id, &child(23, f._dir.path()))
+        .execute(
+            &["--source", "clipboard"],
+            nonzero_id,
+            &child(23, f._dir.path()),
+        )
         .unwrap_err();
     assert_eq!(error.downcast_ref::<ExitCode>().unwrap().0, 23);
     assert!(
@@ -457,7 +596,11 @@ fn child_success_nonzero_and_missing_executable_propagate_exit_codes() {
     let before = block_on(f.repo.get(id)).unwrap().activity_at();
     let missing = f._dir.path().join("definitely-missing-executable");
     let error = f
-        .execute(&["--cp"], id, &[missing.to_str().unwrap().to_owned()])
+        .execute(
+            &["--source", "clipboard"],
+            id,
+            &[missing.to_str().unwrap().to_owned()],
+        )
         .unwrap_err();
     assert_eq!(error.downcast_ref::<ExitCode>().unwrap().0, 127);
     assert_eq!(block_on(f.repo.get(id)).unwrap().activity_at(), before);

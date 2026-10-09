@@ -12,6 +12,7 @@
 //! resolves against the platform's transitive dependency set. See
 //! `docs/plans/gpui-kit-upgrade-goal.md`, milestone 6.
 
+#[cfg(feature = "ui")]
 use rustickers::model::sticker::StickerColor;
 
 #[cfg(feature = "ui")]

@@ -22,7 +22,7 @@ The desktop is single-instance. IPC carries requests from the CLI or another lau
 | `src/native/windows/` | Manager, sticker windows, TXTs, selection popup, dialogs |
 | `src/native/components/stickers/` | Markdown, timer, command, file, and paint views |
 | `src/native/clipboard/` | OS collection, write suppression, verified paste |
-| `src/cli/` | Parsing, commands, terminal chooser, safe child argv |
+| `src/cli/` | Explicit sticker commands, separate text workflows, terminal chooser, exact argv, bundled recipes/agent guide |
 | `migrations/`, `tests/` | Database evolution and regression coverage |
 
 Features: `ui` is enabled by default; `cli` builds `rst`; both depend on `storage`. UI dependencies enter through GPUI Kit and its matching WebView adapter.
@@ -64,7 +64,9 @@ Command stickers keep execution/scheduling state independently of window visibil
 
 The clipboard observer writes ordinary captures through `TextRepository`. Internal decrypted writes are suppressed; externally recopied secrets are not guaranteed exclusion. Paste verifies the destination and modifier release. Windows supports ownership-aware protected clearing; unavailable capabilities fail closed. A newer clipboard value must never be cleared.
 
-The CLI substitutes `{{txt}}` only in child argument tokens, never the executable. It preserves exact text, inherits stdio, and propagates child exit status. No implicit shell execution or expanded-secret argv logging is allowed.
+The CLI separates sticker `list` from `text list`/`text exec`. Direct command creation accepts an argument vector after `--` and round-trip-validates its encoding into the desktop's command storage; shell scripts are explicit. `{{txt}}` is substituted only in immediate child argument tokens, never the executable. It preserves exact text, inherits stdio, and propagates child exit status. Selection stickers use `{{RUSTICKERS_SELECTION}}` or the environment variable; shell selection uses environment data rather than interpolation into code. No implicit shell execution or expanded-secret argv logging is allowed.
+
+One invocation-owned runtime carries storage location and IPC policy through ordinary commands and recipe expansion. `--data-dir` and library test execution are always offline, preventing experimental IDs from controlling real windows. Notification status describes transport delivery, not application acknowledgement. Parsing/validation precede storage initialization; help, recipes, and the bundled agent guide are database-free. JSON usage and runtime errors use the same `ok` envelope. Recipe previews/execution share one nonrecursive argv expansion; tests enforce parser and documentation synchronization.
 
 ## Making changes
 

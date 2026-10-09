@@ -87,9 +87,9 @@ impl super::StickerStore for SqliteStore {
         let row = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO stickers (
-                title, state, left, top, width, height, color, type, content, created_at, updated_at, text_digest
+                title, state, left, top, width, height, color, type, content, created_at, updated_at, text_digest, top_most
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
             )
             RETURNING id
             "#,
@@ -106,6 +106,7 @@ impl super::StickerStore for SqliteStore {
         .bind(now)
         .bind(now)
         .bind(digest)
+        .bind(sticker.top_most)
         .fetch_one(&mut *tx)
         .await
         .context("insert sticker")?;
