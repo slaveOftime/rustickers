@@ -25,6 +25,7 @@ use crate::{
     native::{SelectionCommandTarget, components::IconName, windows::StickerWindowEvent},
     storage::ArcStickerStore,
 };
+use super::text;
 
 use super::{EscapeDismissTarget, set_escape_dismiss_target_active, sticker::StickerWindow};
 
@@ -394,6 +395,51 @@ impl SelectionPopup {
         self.open_selected(cx);
     }
 
+    /// The text the popup is currently acting on: the user-typed value while the input view is
+    /// shown, otherwise the captured selection (or the just-confirmed typed value, once
+    /// `show_stickers` rebuilds the chooser view around the user's text).
+    fn live_selection_text(&self, cx: &App) -> String {
+        match self.view {
+            SelectionView::Input => self.input.read(cx).value().to_string(),
+            SelectionView::Choose => self.selection.to_string(),
+        }
+    }
+
+    /// Persist the popup's current text into the clipboard collection so the TXT picker
+    /// can recover it later. Dedup is delegated to the repository; we still guard on empty
+    /// text here to avoid bumping activity timestamps for whitespace-only payloads.
+    fn record_selection_text(&self, cx: &mut Context<Self>) {
+        let text = self.live_selection_text(cx);
+        if text.trim().is_empty() {
+            return;
+        }
+        let Some(repository) = text::text_repository() else {
+            return;
+        };
+        let stamp = crate::utils::time::now_unix_millis();
+        let bytes = text.len();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { repository.capture(&text, stamp).await })
+                .await;
+            match result {
+                Ok(_) => {
+                    tracing::debug!(
+                        bytes,
+                        "Recorded selection text to clipboard collection"
+                    );
+                }
+                Err(err) => tracing::warn!(
+                    bytes,
+                    error = ?err,
+                    "Failed to record selection text to clipboard collection"
+                ),
+            }
+        })
+        .detach();
+    }
+
     fn open_selected(&mut self, cx: &mut Context<Self>) {
         if self.closing {
             return;
@@ -402,6 +448,7 @@ impl SelectionPopup {
             return;
         };
         self.closing = true;
+        self.record_selection_text(cx);
         let detail = self.stickers[sticker_index].clone();
         let sticker_id = detail.id;
         let store = self.store.clone();
@@ -453,6 +500,7 @@ impl SelectionPopup {
             return;
         }
         self.closing = true;
+        self.record_selection_text(cx);
         tracing::debug!("Dismissing selection popup");
         cx.defer(close_popup);
     }
