@@ -2,7 +2,8 @@
 //! Mutation and protection policy live here, not in picker adapters.
 pub mod protection;
 mod repository;
-pub use repository::TextRepository;
+pub use repository::{CaptureOutcome, TextRepository};
+pub(crate) use repository::{absorb_captures, digest, reconcile_captures};
 
 use anyhow::{Result, bail};
 use serde::Serialize;
@@ -76,6 +77,13 @@ pub struct TextEntry {
     created_at: i64,
     activity_at: i64,
     revision: i64,
+    /// SHA-256 of the underlying plaintext bytes, lowercase hex. Empty for
+    /// rows whose content is not yet digested (legacy entries that were never
+    /// edited through the new repository paths). Always set for new captures,
+    /// edits, lock transitions, and promotions. Internal only: public snapshots
+    /// must not expose fingerprints of locked content.
+    #[serde(skip)]
+    digest: String,
     #[serde(skip)]
     content: String,
 }

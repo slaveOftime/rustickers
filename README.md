@@ -52,7 +52,7 @@ TXTs combines Markdown stickers (open or closed) with disposable clipboard captu
 - **Rename** (Ctrl/Cmd+F2) changes a saved sticker's title; custom titles survive content edits. Locked stickers also show an editable public-title field above Unlock.
 - Deleting a capture is immediate; deleting a saved sticker requires confirmation.
 
-Clipboard collection starts **paused**. Enable it in TXTs. Captures preserve exact text and share a budget of 500 entries / 20 MiB; saved stickers are not evicted. Automatic paste and ownership-safe protected copying currently have a supported path only on Windows.
+Clipboard collection starts **paused**. Enable it in TXTs. Captures preserve exact text and share a budget of 500 entries / 20 MiB; saved stickers are not evicted. When a new clipboard copy's content matches an already-saved text sticker (plain or locked) by digest, the saved sticker absorbs the recency and no capture row is created, keeping duplicate plaintext from lingering next to a sealed copy. Automatic paste and ownership-safe protected copying currently have a supported path only on Windows.
 
 ## Protection and privacy
 
@@ -60,7 +60,7 @@ Set or change the **Master password…** from the manager or TXTs locker. Once c
 
 Changing the password generates new keys and re-encrypts all supported locked text atomically. **There is no forgotten-password recovery or old-lock-format compatibility.** Titles stay public and searchable: do not put secrets in them.
 
-Internally copied decrypted text is excluded from collection, but externally copied secrets can enter history. Protected clipboard text is cleared after 30 seconds only if still owned; a crash may prevent clearing. Encryption does not erase OS clipboard history, other apps' copies, old database pages, or backups. Protect backups too.
+Internally copied decrypted text is excluded from collection, but externally copied secrets can enter history. The stored digest of an encrypted sticker lets a later copy of identical plaintext refresh the locked sticker's recency instead of adding a new plaintext capture, so the sensitive row does not silently get duplicated beside its sealed copy. Protected clipboard text is cleared after 30 seconds only if still owned; a crash may prevent clearing. Encryption does not erase OS clipboard history, other apps' copies, old database pages, backups, or the persisted digest (a digest reveals content equality and permits offline guessing of low-entropy secrets; it is omitted from redacted JSON output). Legacy locked stickers gain a digest only after an authorized edit, unlock, or password rotation; until then identical external copies cannot be recognized without decrypting. Protect backups too.
 
 ## CLI
 

@@ -56,6 +56,9 @@ impl SqliteStore {
             .await
             .context("run sqlx migrations")?;
 
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        crate::text::reconcile_captures(&mut tx).await?;
+        tx.commit().await?;
         Ok(Self { pool })
     }
 }
@@ -70,13 +73,23 @@ impl super::StickerStore for SqliteStore {
         );
 
         let now = crate::utils::time::now_unix_millis();
+        let plaintext = matches!(sticker.sticker_type, StickerType::Markdown)
+            && !crate::text::protection::is_encrypted(&sticker.content)
+            && !crate::text::protection::is_unsupported(&sticker.content);
+        let digest = if plaintext {
+            crate::text::digest(&sticker.content)
+        } else {
+            String::new()
+        };
+        let content = sticker.content.clone();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let row = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO stickers (
-                title, state, left, top, width, height, color, type, content, created_at, updated_at
+                title, state, left, top, width, height, color, type, content, created_at, updated_at, text_digest
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
             )
             RETURNING id
             "#,
@@ -92,10 +105,14 @@ impl super::StickerStore for SqliteStore {
         .bind(sticker.content)
         .bind(now)
         .bind(now)
-        .fetch_one(&self.pool)
+        .bind(digest)
+        .fetch_one(&mut *tx)
         .await
         .context("insert sticker")?;
-
+        if plaintext {
+            crate::text::absorb_captures(&mut tx, row, &content).await?;
+        }
+        tx.commit().await?;
         Ok(row)
     }
 
@@ -346,30 +363,42 @@ impl super::StickerStore for SqliteStore {
         let now = crate::utils::time::now_unix_millis();
 
         anyhow::ensure!(
-            !crate::text::protection::is_encrypted(&content),
+            !crate::text::protection::is_encrypted(&content)
+                && !crate::text::protection::is_unsupported(&content),
             "encrypted text must be saved through the text repository"
         );
+        let digest = crate::text::digest(&content);
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let result = sqlx::query(
             r#"
             UPDATE stickers
             SET content = ?1,
+                text_digest = CASE WHEN type = 'markdown' THEN ?4 ELSE text_digest END,
                 updated_at = ?2,
                 text_modified_at = CASE WHEN type = 'markdown' THEN ?2 ELSE text_modified_at END,
                 text_revision = text_revision + 1
             WHERE id = ?3 AND (type != 'markdown' OR content NOT GLOB 'RUSTICKERS_TEXT_*')
             "#,
         )
-        .bind(content)
+        .bind(&content)
         .bind(now)
         .bind(id)
-        .execute(&self.pool)
+        .bind(digest)
+        .execute(&mut *tx)
         .await
         .context("update sticker content")?;
         anyhow::ensure!(
             result.rows_affected() == 1,
             "sticker disappeared or requires an authorized text save"
         );
-
+        let markdown: bool = sqlx::query_scalar("SELECT type='markdown' FROM stickers WHERE id=?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if markdown {
+            crate::text::absorb_captures(&mut tx, id, &content).await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 

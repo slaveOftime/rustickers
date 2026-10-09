@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::clipboard::settings::ClipboardSettings;
-use crate::text::TextRepository;
+use crate::text::{CaptureOutcome, TextRepository};
 
 /// Per-capture flag — text the system clipboard just received.
 #[derive(Debug, Clone)]
@@ -133,11 +133,15 @@ pub async fn persist_capture(
     {
         return Ok(None);
     }
-    Ok(Some(
-        store
-            .capture(&captured.content, crate::utils::time::now_unix_millis())
-            .await?,
-    ))
+    let outcome = store
+        .capture(&captured.content, crate::utils::time::now_unix_millis())
+        .await?;
+    Ok(Some(match outcome {
+        // Both branches signal the watcher to refresh — the picker reads its
+        // own snapshot, so whether a row was stored or a saved sticker's
+        // recency was bumped is invisible at this layer.
+        CaptureOutcome::Stored(id) | CaptureOutcome::RefreshedSticker(id) => id,
+    }))
 }
 
 /// Drives the watcher loop. Designed for parking on a background thread; the GUI owns the

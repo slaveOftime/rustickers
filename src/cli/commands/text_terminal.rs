@@ -364,12 +364,14 @@ mod interactive_smoke {
     #[test]
     #[ignore = "requires an interactive terminal"]
     fn terminal_chooser_smoke() {
+        use crate::text::CaptureOutcome;
         let directory = tempfile::tempdir().unwrap();
         let repository =
             futures::executor::block_on(TextRepository::open(directory.path().join("stickers.db")))
                 .unwrap();
         for text in ["First copy", "日本語 second copy", "Third copy"] {
-            futures::executor::block_on(repository.capture(text, 1)).unwrap();
+            let outcome = futures::executor::block_on(repository.capture(text, 1)).unwrap();
+            assert!(matches!(outcome, CaptureOutcome::Stored(_)));
         }
         let rows =
             futures::executor::block_on(repository.snapshot(TextSources::new(false, true), ""))

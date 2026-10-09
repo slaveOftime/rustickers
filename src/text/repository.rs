@@ -8,6 +8,38 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use zeroize::Zeroizing;
 
+/// Outcome of [`TextRepository::capture`]: either a fresh `clipboard_captures`
+/// row was inserted or refreshed, or an existing saved sticker absorbed the
+/// new copy's recency and nothing was stored in the captures table at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureOutcome {
+    /// A `clipboard_captures` row ID (created or refreshed) carries this
+    /// capture. The row already exists exactly once in the captures table.
+    Stored(i64),
+    /// A saved markdown sticker with a matching plaintext digest was found.
+    /// Its recency metadata was advanced and no capture row was inserted;
+    /// the carried value is the saved sticker ID.
+    RefreshedSticker(i64),
+}
+impl CaptureOutcome {
+    /// The capture row id when one was stored/refreshed, or `None` when the
+    /// new copy was deduplicated against an existing saved sticker.
+    pub fn capture_id(self) -> Option<i64> {
+        match self {
+            Self::Stored(id) => Some(id),
+            Self::RefreshedSticker(_) => None,
+        }
+    }
+    /// The saved-sticker id when the new copy was absorbed into an existing
+    /// sticker, or `None` when a fresh capture row was created.
+    pub fn sticker_id(self) -> Option<i64> {
+        match self {
+            Self::Stored(_) => None,
+            Self::RefreshedSticker(id) => Some(id),
+        }
+    }
+}
+
 /// Composes text and capture operations on the sticker store's canonical pool.
 #[derive(Clone)]
 pub struct TextRepository {
@@ -84,6 +116,7 @@ impl TextRepository {
                     .await?;
             }
         }
+        backfill_plaintext_digests(&mut tx).await?;
         let mut copied = 0i64;
         let mut skipped = 0i64;
         // Include obsolete rows already in the canonical DB; only raw content is eligible.
@@ -104,6 +137,18 @@ impl TextRepository {
                 skipped += 1;
                 continue;
             }
+            let fingerprint = digest(&text);
+            let saved = matching_sticker(&mut tx, &fingerprint).await?;
+            if let Some(id) = saved {
+                let activity = row
+                    .try_get::<i64, _>("created_at")?
+                    .max(row.try_get("last_copied_at")?)
+                    .max(row.try_get::<Option<i64>, _>("last_used_at")?.unwrap_or(0));
+                sqlx::query("UPDATE stickers SET text_last_used_at=MAX(COALESCE(text_last_used_at,0),?) WHERE id=?")
+                    .bind(activity).bind(id).execute(&mut *tx).await?;
+                absorb_captures(&mut tx, id, &text).await?;
+                continue;
+            }
             let existing: Option<i64> =
                 sqlx::query_scalar("SELECT id FROM clipboard_captures WHERE text=? LIMIT 1")
                     .bind(&text)
@@ -116,7 +161,7 @@ impl TextRepository {
                     .bind(copied_at).bind(used_at).bind(id).execute(&mut *tx).await?;
             } else {
                 sqlx::query("INSERT INTO clipboard_captures(text,text_digest,byte_size,created_at,last_copied_at,last_used_at) VALUES(?,?,?,?,?,?)")
-                    .bind(&text).bind(format!("{:x}", Sha256::digest(text.as_bytes())))
+                    .bind(&text).bind(&fingerprint)
                     .bind(text.len() as i64).bind(row.try_get::<i64,_>("created_at")?)
                     .bind(copied_at).bind(used_at).execute(&mut *tx).await?;
                 copied += 1;
@@ -204,23 +249,45 @@ impl TextRepository {
         tx.commit().await?;
         Ok(())
     }
-    pub async fn capture(&self, text: &str, now: i64) -> Result<i64> {
+    pub async fn capture(&self, text: &str, now: i64) -> Result<CaptureOutcome> {
         ensure!(
             !text.trim().is_empty() && !text.contains('\0'),
             "capture must be nonempty text without NUL"
         );
         ensure!(text.len() <= 1024 * 1024, "capture exceeds one MiB");
-        let digest = format!("{:x}", Sha256::digest(text.as_bytes()));
+        let digest = digest(text);
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let settings = settings_in(&mut tx).await?;
-        let existing: Option<i64> = sqlx::query_scalar(
+        // Cross-format dedup: if a saved sticker (plaintext or encrypted) already
+        // matches this content by digest, refresh its recency instead of creating
+        // a duplicate capture. The sticker carries the same plaintext digest even
+        // when its `content` is a sealed envelope, so the same lookup handles both.
+        backfill_plaintext_digests(&mut tx).await?;
+        let existing_sticker = matching_sticker(&mut tx, &digest).await?;
+        if let Some(sticker) = existing_sticker {
+            let result = sqlx::query(
+                "UPDATE stickers SET text_last_used_at=MAX(COALESCE(text_last_used_at,0),?) WHERE id=? AND type='markdown'",
+            )
+            .bind(now)
+            .bind(sticker)
+            .execute(&mut *tx)
+            .await?;
+            ensure!(
+                result.rows_affected() == 1,
+                "matched sticker disappeared before recency refresh"
+            );
+            absorb_captures(&mut tx, sticker, text).await?;
+            tx.commit().await?;
+            return Ok(CaptureOutcome::RefreshedSticker(sticker));
+        }
+        let existing_capture: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM clipboard_captures WHERE text_digest=? AND text=? LIMIT 1",
         )
         .bind(&digest)
         .bind(text)
         .fetch_optional(&mut *tx)
         .await?;
-        let id = if let Some(id) = existing {
+        let id = if let Some(id) = existing_capture {
             sqlx::query(
                 "UPDATE clipboard_captures SET last_copied_at=MAX(last_copied_at,?) WHERE id=?",
             )
@@ -231,31 +298,37 @@ impl TextRepository {
             id
         } else {
             sqlx::query_scalar("INSERT INTO clipboard_captures(text,text_digest,byte_size,created_at,last_copied_at) VALUES(?,?,?,?,?) RETURNING id")
-                .bind(text).bind(digest).bind(text.len() as i64).bind(now).bind(now).fetch_one(&mut *tx).await?
+                .bind(text).bind(&digest).bind(text.len() as i64).bind(now).bind(now).fetch_one(&mut *tx).await?
         };
         prune(&mut tx, &settings).await?;
         tx.commit().await?;
-        Ok(id)
+        Ok(CaptureOutcome::Stored(id))
     }
     pub async fn snapshot(&self, sources: TextSources, query: &str) -> Result<Vec<TextEntry>> {
         let mut entries = Vec::new();
         if sources.includes(TextEntryId::Sticker(1)) {
-            for row in sqlx::query("SELECT id,title,state,content,created_at,COALESCE(text_modified_at,created_at) AS modified,COALESCE(text_last_used_at,0) AS used,text_revision FROM stickers WHERE type='markdown' ORDER BY id ASC")
+            for row in sqlx::query("SELECT id,title,state,content,created_at,COALESCE(text_modified_at,created_at) AS modified,COALESCE(text_last_used_at,0) AS used,text_revision,COALESCE(text_digest,'') AS digest FROM stickers WHERE type='markdown' ORDER BY id ASC")
                 .fetch_all(&self.pool).await? {
                 let content: String = row.try_get("content")?;
                 if protection::is_unsupported(&content) { continue; }
                 let encrypted = protection::is_encrypted(&content);
                 let title: String = row.try_get("title")?; let created_at: i64 = row.try_get("created_at")?;
+                let mut stored_digest: String = row.try_get("digest")?;
+                // Read-only fallback for legacy rows; persistent backfill runs at open/capture.
+                if stored_digest.is_empty() && !encrypted {
+                    stored_digest = digest(&content);
+                }
                 entries.push(TextEntry { id: TextEntryId::Sticker(row.try_get("id")?),
                     preview: preview(if encrypted { &title } else { &content }), title, encrypted,
                     state: Some(row.try_get("state")?), created_at,
                     activity_at: created_at.max(row.try_get("modified")?).max(row.try_get("used")?),
-                    revision: row.try_get("text_revision")?, content });
+                    revision: row.try_get("text_revision")?,
+                    digest: stored_digest, content });
             }
         }
         if sources.includes(TextEntryId::Clipboard(1)) {
             for row in
-                sqlx::query("SELECT *,COALESCE(last_used_at,0) AS used FROM clipboard_captures")
+                sqlx::query("SELECT id,text,created_at,last_copied_at,text_digest,COALESCE(last_used_at,0) AS used FROM clipboard_captures")
                     .fetch_all(&self.pool)
                     .await?
             {
@@ -264,10 +337,14 @@ impl TextRepository {
                 let activity_at = created_at
                     .max(row.try_get("last_copied_at")?)
                     .max(row.try_get("used")?);
-                // Projection dedupe only: a capture can refresh the representative sticker's display activity.
-                if let Some(sticker) = entries
-                    .iter_mut()
-                    .find(|e| !e.encrypted && e.content == content)
+                let capture_digest: String = row.try_get("text_digest")?;
+                // Projection dedupe only: a capture can refresh the representative
+                // sticker's display activity. Digest matching also folds captures
+                // whose plaintext matches an already-locked sticker.
+                if !capture_digest.is_empty()
+                    && let Some(sticker) = entries
+                        .iter_mut()
+                        .find(|e| matches!(e.id, TextEntryId::Sticker(_)) && !e.digest.is_empty() && e.digest == capture_digest)
                 {
                     sticker.activity_at = sticker.activity_at.max(activity_at);
                     continue;
@@ -281,6 +358,7 @@ impl TextRepository {
                     created_at,
                     activity_at,
                     revision: 0,
+                    digest: capture_digest,
                     content,
                 });
             }
@@ -366,7 +444,7 @@ impl TextRepository {
         } else {
             content.clone()
         };
-        sqlx::query("UPDATE stickers SET title=?,content=? WHERE id=?")
+        sqlx::query("UPDATE stickers SET title=?,content=?,text_digest=? WHERE id=?")
             .bind(title.map(str::to_owned).unwrap_or_else(|| {
                 if encrypted {
                     "Locked text".to_owned()
@@ -375,15 +453,11 @@ impl TextRepository {
                 }
             }))
             .bind(saved)
+            .bind(digest(&content))
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM clipboard_captures WHERE id=? OR (? AND text=?)")
-            .bind(capture_id)
-            .bind(encrypted)
-            .bind(&content)
-            .execute(&mut *tx)
-            .await?;
+        absorb_captures(&mut tx, id, &content).await?;
         tx.commit().await?;
         Ok(id)
     }
@@ -408,13 +482,24 @@ impl TextRepository {
             );
             text.to_owned()
         };
-        let result = sqlx::query("UPDATE stickers SET content=?,title=CASE WHEN ? OR title != ? THEN title ELSE ? END,text_revision=text_revision+1,text_modified_at=?,updated_at=? WHERE id=? AND type='markdown' AND text_revision=? AND content=?")
-            .bind(content).bind(expected.encrypted).bind(preview(&expected.content)).bind(if expected.encrypted { String::new() } else { preview(text) }).bind(crate::utils::time::now_unix_millis()).bind(crate::utils::time::now_unix_millis())
-            .bind(id).bind(expected.revision).bind(&expected.content).execute(&mut *tx).await?;
+        let result = sqlx::query("UPDATE stickers SET content=?,title=CASE WHEN ? OR title != ? THEN title ELSE ? END,text_digest=?,text_revision=text_revision+1,text_modified_at=?,updated_at=? WHERE id=? AND type='markdown' AND text_revision=? AND content=?")
+            .bind(content)
+            .bind(expected.encrypted)
+            .bind(preview(&expected.content))
+            .bind(if expected.encrypted { String::new() } else { preview(text) })
+            .bind(digest(text))
+            .bind(crate::utils::time::now_unix_millis())
+            .bind(crate::utils::time::now_unix_millis())
+            .bind(id)
+            .bind(expected.revision)
+            .bind(&expected.content)
+            .execute(&mut *tx)
+            .await?;
         ensure!(
             result.rows_affected() == 1,
             "text changed; reload before saving"
         );
+        absorb_captures(&mut tx, id, text).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -462,19 +547,16 @@ impl TextRepository {
         } else {
             plaintext.to_string()
         };
-        let result = sqlx::query("UPDATE stickers SET content=?,title=?,text_revision=text_revision+1 WHERE id=? AND type='markdown' AND text_revision=? AND content=?")
+        let plaintext_digest = digest(&plaintext);
+        let result = sqlx::query("UPDATE stickers SET content=?,title=?,text_digest=?,text_revision=text_revision+1 WHERE id=? AND type='markdown' AND text_revision=? AND content=?")
             .bind(replacement).bind(title.map(str::to_owned).unwrap_or_else(|| if enabled { "Locked text".to_owned() } else { expected.title.clone() }))
+            .bind(plaintext_digest)
             .bind(id).bind(expected.revision).bind(&expected.content).execute(&mut *tx).await?;
         ensure!(
             result.rows_affected() == 1,
             "text changed; reload before changing protection"
         );
-        if enabled {
-            sqlx::query("DELETE FROM clipboard_captures WHERE text=?")
-                .bind(&*plaintext)
-                .execute(&mut *tx)
-                .await?;
-        }
+        absorb_captures(&mut tx, id, &plaintext).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -509,11 +591,13 @@ impl TextRepository {
             let envelope: String = row.try_get("content")?;
             let plaintext = previous.open_authorized(id, &envelope, &identity)?;
             let replacement = next.seal(id, &plaintext)?;
-            sqlx::query("UPDATE stickers SET content=?,text_revision=text_revision+1 WHERE id=?")
+            sqlx::query("UPDATE stickers SET content=?,text_digest=?,text_revision=text_revision+1 WHERE id=?")
                 .bind(replacement)
+                .bind(digest(&plaintext))
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
+            absorb_captures(&mut tx, id, &plaintext).await?;
         }
         sqlx::query("UPDATE text_master_key SET configuration=? WHERE singleton=1")
             .bind(next.serialize()?)
@@ -567,6 +651,72 @@ fn preview(text: &str) -> String {
         .take(120)
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+/// Lowercase-hex SHA-256 of the exact bytes used to identify plaintext
+/// duplicates. This is a content fingerprint, not a secret; see the
+/// migration comment for the privacy contract.
+pub(crate) fn digest(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+/// Persist fingerprints only where plaintext is already available. Never hash ciphertext.
+pub(crate) async fn backfill_plaintext_digests(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<()> {
+    let rows = sqlx::query("SELECT id,content FROM stickers WHERE type='markdown' AND text_digest='' AND content NOT GLOB 'RUSTICKERS_TEXT_*'")
+        .fetch_all(&mut **tx).await?;
+    for row in rows {
+        let content: String = row.try_get("content")?;
+        sqlx::query("UPDATE stickers SET text_digest=? WHERE id=?")
+            .bind(digest(&content))
+            .bind(row.try_get::<i64, _>("id")?)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn matching_sticker(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    digest: &str,
+) -> Result<Option<i64>> {
+    sqlx::query_scalar(
+        "SELECT id FROM stickers WHERE type='markdown' AND text_digest=? ORDER BY id ASC LIMIT 1",
+    )
+    .bind(digest)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(Into::into)
+}
+
+/// Upgrade legacy plaintext identities and consume cross-table duplicates at startup.
+pub(crate) async fn reconcile_captures(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    backfill_plaintext_digests(tx).await?;
+    let captures: Vec<(String, String)> =
+        sqlx::query_as("SELECT text,text_digest FROM clipboard_captures")
+            .fetch_all(&mut **tx)
+            .await?;
+    for (text, digest) in captures {
+        if let Some(id) = matching_sticker(tx, &digest).await? {
+            absorb_captures(tx, id, &text).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Consume disposable duplicates and preserve their activity in the saved identity.
+/// Match exact plaintext here so even a legacy capture with a stale digest is removed.
+pub(crate) async fn absorb_captures(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    id: i64,
+    text: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE stickers SET text_last_used_at=MAX(COALESCE(text_last_used_at,0),COALESCE((SELECT MAX(MAX(created_at,last_copied_at,COALESCE(last_used_at,0))) FROM clipboard_captures WHERE text=?),0)) WHERE id=?")
+        .bind(text).bind(id).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM clipboard_captures WHERE text=?")
+        .bind(text)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 async fn key_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<Option<MasterKey>> {
     let value: Option<String> =

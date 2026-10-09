@@ -1,10 +1,12 @@
 #![cfg(feature = "storage")]
 
+use anyhow::Context as _;
 use futures::executor::block_on;
 use rustickers::text::{
-    TextEntry, TextEntryId, TextRepository, TextSources,
+    CaptureOutcome, TextEntry, TextEntryId, TextRepository, TextSources,
     protection::{self, CONTENT_PREFIX, MasterKey},
 };
+use sha2::{Digest, Sha256};
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -22,7 +24,11 @@ async fn fixture() -> anyhow::Result<(TempDir, TextRepository, SqlitePool)> {
     Ok((dir, repo, pool))
 }
 async fn promote(repo: &TextRepository, text: &str, encrypted: bool) -> anyhow::Result<TextEntry> {
-    let id = repo.capture(text, 1).await?;
+    let id = repo
+        .capture(text, 1)
+        .await?
+        .capture_id()
+        .context("expected a fresh clipboard capture")?;
     let source = repo.get(TextEntryId::Clipboard(id)).await?;
     let saved = repo.promote(&source, encrypted).await?;
     repo.get(TextEntryId::Sticker(saved)).await
@@ -40,13 +46,100 @@ async fn content(pool: &SqlitePool, id: TextEntryId) -> anyhow::Result<String> {
 }
 async fn persisted(pool: &SqlitePool) -> anyhow::Result<serde_json::Value> {
     // Capture all columns, not just ciphertext: rollback must restore revisions and metadata too.
-    let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('id',id,'title',title,'state',state,'left',left,'top',top,'width',width,'height',height,'color',color,'content',content,'created',created_at,'updated',updated_at,'modified',text_modified_at,'used',text_last_used_at,'revision',text_revision) FROM stickers ORDER BY id")
+    let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('id',id,'title',title,'state',state,'left',left,'top',top,'width',width,'height',height,'color',color,'content',content,'created',created_at,'updated',updated_at,'modified',text_modified_at,'used',text_last_used_at,'revision',text_revision,'digest',text_digest) FROM stickers ORDER BY id")
         .fetch_all(pool).await?;
     let key: String =
         sqlx::query_scalar("SELECT configuration FROM text_master_key WHERE singleton=1")
             .fetch_one(pool)
             .await?;
     Ok(serde_json::json!({"rows": rows, "key": key}))
+}
+
+#[test]
+fn rotation_backfills_legacy_locked_digest_and_consumes_plain_capture() -> anyhow::Result<()> {
+    block_on(async {
+        let (dir, repo, pool) = fixture().await?;
+        repo.set_master_password("old password").await?;
+        let locked = promote(&repo, "legacy locked secret", true).await?;
+        let TextEntryId::Sticker(id) = locked.id() else {
+            unreachable!()
+        };
+        sqlx::query("UPDATE stickers SET text_digest='' WHERE id=?")
+            .bind(id)
+            .execute(&pool)
+            .await?;
+        let reopened = TextRepository::open(dir.path().join("stickers.db")).await?;
+        let digest: String = sqlx::query_scalar("SELECT text_digest FROM stickers WHERE id=?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+        assert!(
+            digest.is_empty(),
+            "startup must not hash ciphertext or decrypt"
+        );
+        let capture = reopened
+            .capture("legacy locked secret", 100)
+            .await?
+            .capture_id()
+            .unwrap();
+        reopened
+            .change_master_password("old password", "new password")
+            .await?;
+        assert!(reopened.get(TextEntryId::Clipboard(capture)).await.is_err());
+        assert_eq!(
+            reopened
+                .capture("legacy locked secret", 200)
+                .await?
+                .sticker_id(),
+            Some(id)
+        );
+        assert_eq!(
+            reopened
+                .resolve(&reopened.get(locked.id()).await?, Some("new password"))
+                .await?
+                .as_str(),
+            "legacy locked secret"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn locked_edit_consumes_matching_capture_and_redacts_digest() -> anyhow::Result<()> {
+    block_on(async {
+        let (_dir, repo, pool) = fixture().await?;
+        repo.set_master_password("password").await?;
+        let locked = promote(&repo, "original secret", true).await?;
+        let capture = repo
+            .capture("replacement secret", 100)
+            .await?
+            .capture_id()
+            .unwrap();
+        repo.save_text(&locked, "replacement secret").await?;
+        assert!(repo.get(TextEntryId::Clipboard(capture)).await.is_err());
+        let current = repo.get(locked.id()).await?;
+        let json = serde_json::to_value(&current)?;
+        assert!(
+            json.get("digest").is_none(),
+            "redacted snapshots must not publish fingerprints"
+        );
+        let TextEntryId::Sticker(id) = current.id() else {
+            unreachable!()
+        };
+        let digest: String = sqlx::query_scalar("SELECT text_digest FROM stickers WHERE id=?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(
+            digest,
+            format!("{:x}", Sha256::digest(b"replacement secret"))
+        );
+        assert_eq!(
+            repo.capture("replacement secret", 200).await?.sticker_id(),
+            Some(id)
+        );
+        Ok(())
+    })
 }
 
 #[test]
@@ -110,8 +203,21 @@ fn encrypted_promotion_lock_save_redaction_and_explicit_remove_encryption() -> a
         repo.set_master_password("password").await?;
         assert!(repo.set_master_password("replacement").await.is_err());
         let secret = "secret 大文字\r\n'keep' ";
-        let independent = promote(&repo, secret, false).await?;
-        let encrypted = promote(&repo, secret, true).await?;
+        let locked_secret = "locked 大文字 'leak' ";
+        let plain_sticker = promote(&repo, secret, false).await?;
+        let locked_entry = promote(&repo, locked_secret, true).await?;
+        // The two stickers hold different plaintext: an identical capture would
+        // be deduplicated into the first one instead of promoting twice.
+        let plain_sticker_id = match plain_sticker.id() {
+            TextEntryId::Sticker(id) => id,
+            TextEntryId::Clipboard(_) => unreachable!("plain promote returns a sticker"),
+        };
+        let locked_sticker_id = match locked_entry.id() {
+            TextEntryId::Sticker(id) => id,
+            TextEntryId::Clipboard(_) => unreachable!("encrypted promote returns a sticker"),
+        };
+        assert_ne!(plain_sticker_id, locked_sticker_id);
+        let encrypted = repo.get(locked_entry.id()).await?;
         assert!(encrypted.is_encrypted());
         assert_eq!(encrypted.title(), "Locked text");
         assert_eq!(encrypted.preview(), "Locked text");
@@ -120,21 +226,28 @@ fn encrypted_promotion_lock_save_redaction_and_explicit_remove_encryption() -> a
                 .await?
                 .is_empty()
         );
-        assert!(!repo.get(independent.id()).await?.is_encrypted());
+        // The plainly stored sticker lives side-by-side with a sealed sticker
+        // holding a different plaintext, exercising the projection paths the new
+        // digest index enables.
+        assert!(!plain_sticker.is_encrypted());
         let before = content(&pool, encrypted.id()).await?;
         assert!(before.starts_with(CONTENT_PREFIX));
-        assert!(!before.contains(secret));
+        assert!(!before.contains(locked_secret));
         let json = serde_json::to_string(&encrypted)?;
-        assert!(!json.contains(secret));
+        assert!(!json.contains(locked_secret));
         assert!(!json.contains(CONTENT_PREFIX));
-        assert!(!format!("{encrypted:?}").contains(secret));
-        assert!(!encrypted.matches("secret"));
+        assert!(!format!("{encrypted:?}").contains(locked_secret));
+        assert!(!encrypted.matches(locked_secret));
         assert!(encrypted.matches("locked"));
         assert!(repo.resolve(&encrypted, None).await.is_err());
         assert!(repo.resolve(&encrypted, Some("wrong")).await.is_err());
-        assert_eq!(&*repo.resolve(&encrypted, Some("password")).await?, secret);
+        assert_eq!(
+            &*repo.resolve(&encrypted, Some("password")).await?,
+            locked_secret
+        );
         assert_eq!(content(&pool, encrypted.id()).await?, before); // Temporary unlock is read-only.
-        let replacement = "edited secret\r\n新 ";
+        assert_eq!(&*repo.resolve(&plain_sticker, None).await?, secret);
+        let replacement = "edited locked text\r\n新 ";
         repo.save_text(&encrypted, replacement).await?; // No private key/password needed.
         assert!(repo.save_text(&encrypted, "stale").await.is_err());
         let edited = repo.get(encrypted.id()).await?;
@@ -153,8 +266,22 @@ fn encrypted_promotion_lock_save_redaction_and_explicit_remove_encryption() -> a
         repo.set_encryption(&edited, false, Some("password"))
             .await?;
         assert_eq!(content(&pool, edited.id()).await?, replacement);
-        let stale_plain = repo.get(independent.id()).await?;
-        repo.capture(secret, 50).await?;
+        let stale_plain = repo.get(plain_sticker.id()).await?;
+        let copied_at = stale_plain.activity_at() + 1_000;
+        assert_eq!(
+            repo.capture(secret, copied_at).await?,
+            CaptureOutcome::RefreshedSticker(plain_sticker_id)
+        );
+        // Recopying identical text must not introduce a fresh clipboard row;
+        // the saved plaintext sticker already absorbs the activity.
+        let row: Option<i64> = sqlx::query_scalar("SELECT id FROM clipboard_captures WHERE text=?")
+            .bind(secret)
+            .fetch_optional(&pool)
+            .await?;
+        assert!(
+            row.is_none(),
+            "no plaintext capture row should leak next to the saved sticker"
+        );
         repo.set_encryption(&stale_plain, true, None).await?;
         assert!(
             repo.save_text(&stale_plain, "plaintext resurrection")
@@ -166,10 +293,12 @@ fn encrypted_promotion_lock_save_redaction_and_explicit_remove_encryption() -> a
                 .await?
                 .is_empty()
         );
-        assert_eq!(
-            repo.get(independent.id()).await?.activity_at(),
-            stale_plain.activity_at()
-        );
+        // The pre-encryption recency is preserved (`set_encryption` does not
+        // touch text_modified_at or text_last_used_at). The new dedup path
+        // does advance the saved sticker's recency, so the post-encryption
+        // activity should equal what the duplicate capture just installed.
+        assert_eq!(repo.get(plain_sticker.id()).await?.activity_at(), copied_at);
+        assert_eq!(repo.get(plain_sticker.id()).await?.revision(), 1);
         Ok(())
     })
 }
@@ -208,7 +337,11 @@ fn row_swaps_are_rejected_and_corrupt_configuration_never_promotes_plaintext() -
         sqlx::query("UPDATE text_master_key SET configuration='{}'")
             .execute(&pool)
             .await?;
-        let capture = repo.capture("must stay capture", 10).await?;
+        let capture = repo
+            .capture("must stay capture", 10)
+            .await?
+            .capture_id()
+            .context("expected a fresh clipboard capture")?;
         let source = repo.get(TextEntryId::Clipboard(capture)).await?;
         assert!(repo.promote(&source, true).await.is_err());
         assert!(repo.get(source.id()).await.is_ok());
@@ -415,7 +548,11 @@ fn concurrent_rotations_have_one_winner_and_stale_cross_pool_editor_cannot_write
         assert!(repo.resolve(&current, Some(loser)).await.is_err());
         assert!(repo.resolve(&current, Some("old password")).await.is_err());
         // Collection remains ordinary and independent of encryption/private-key authorization.
-        let capture = other.capture("external later secret copy", 100).await?;
+        let capture = other
+            .capture("external later secret copy", 100)
+            .await?
+            .capture_id()
+            .context("expected a fresh clipboard capture")?;
         let entry = other.get(TextEntryId::Clipboard(capture)).await?;
         assert_eq!(
             &*other.resolve(&entry, None).await?,
@@ -432,7 +569,11 @@ fn encrypted_promotion_racing_rotation_never_commits_old_generation_payload() ->
         let (dir, repo, pool) = fixture().await?;
         repo.set_master_password("old password").await?;
         let existing = promote(&repo, "existing secret", true).await?;
-        let source_id = repo.capture("concurrently promoted secret", 10).await?;
+        let source_id = repo
+            .capture("concurrently promoted secret", 10)
+            .await?
+            .capture_id()
+            .context("expected a fresh clipboard capture")?;
         let source = repo.get(TextEntryId::Clipboard(source_id)).await?;
         let other = TextRepository::open(dir.path().join("stickers.db")).await?;
         let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -519,6 +660,87 @@ fn damaged_second_item_and_wrong_password_roll_back_entire_rotation() -> anyhow:
                 .await
                 .is_err()
         );
+        Ok(())
+    })
+}
+
+/// Same-text clipboard capture must refresh the existing saved sticker's
+/// recency without ever materialising a duplicate capture row, and the
+/// sticker involved may be either plaintext or already locked — the digest
+/// is computed at seal time so the two cases share the same identity.
+#[test]
+fn clipboard_capture_with_matching_save_refreshes_not_duplicates() -> anyhow::Result<()> {
+    block_on(async {
+        let (_dir, repo, pool) = fixture().await?;
+        repo.set_master_password("password").await?;
+        let secret = "secret 大文字\r\n'keep' ";
+        let independent = promote(&repo, secret, false).await?;
+        let tracked_id = independent.id();
+        let before_recency: (i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(text_last_used_at,0),text_modified_at FROM stickers WHERE id=?",
+        )
+        .bind(match tracked_id {
+            TextEntryId::Sticker(id) => id,
+            TextEntryId::Clipboard(_) => unreachable!(),
+        })
+        .fetch_one(&pool)
+        .await?;
+        // Lock the sticker; the digest should now match the plaintext we
+        // capture below, exercising the cross-format dedup path.
+        repo.set_encryption(&independent, true, None).await?;
+        // Recopy identical text while it's already a sealed sticker.
+        let copied_at = 1_700_000_000_000;
+        let outcome = repo.capture(secret, copied_at).await?;
+        let refreshed = outcome
+            .sticker_id()
+            .context("expected the duplicate to refresh the saved sticker")?;
+        let TextEntryId::Sticker(tracked_sticker) = tracked_id else {
+            unreachable!()
+        };
+        assert_eq!(refreshed, tracked_sticker);
+        let after: (i64, i64, String) = sqlx::query_as(
+            "SELECT COALESCE(text_last_used_at,0),text_modified_at,content FROM stickers WHERE id=?",
+        )
+        .bind(match tracked_id {
+            TextEntryId::Sticker(id) => id,
+            TextEntryId::Clipboard(_) => unreachable!(),
+        })
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(
+            after.0, copied_at,
+            "text_last_used_at jumps to the new capture time"
+        );
+        assert_eq!(
+            after.1, before_recency.1,
+            "text_modified_at remains stable: encryption is a protection flip, not a content edit"
+        );
+        assert!(
+            after.2.starts_with(CONTENT_PREFIX),
+            "sticker stays locked; the duplicate capture must not silently unlock it"
+        );
+        let captures: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_captures")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(
+            captures, 0,
+            "the duplicate must not produce a plaintext capture row next to a locked sticker"
+        );
+        // After deleting the saved sticker, a fresh capture of the same text
+        // re-creates an ordinary clipboard row (the path through which new
+        // copies land once the prior matching record is gone).
+        repo.delete(tracked_id).await?;
+        let stored = repo
+            .capture(secret, copied_at + 1)
+            .await?
+            .capture_id()
+            .context("expected a stored capture row after the saved sticker was deleted")?;
+        let row: (i64, String) =
+            sqlx::query_as("SELECT id,text FROM clipboard_captures WHERE id=?")
+                .bind(stored)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(row.1, secret);
         Ok(())
     })
 }

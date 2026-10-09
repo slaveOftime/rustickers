@@ -33,7 +33,7 @@ Features: `ui` is enabled by default; `cli` builds `rst`; both depend on `storag
 
 | Table | Purpose |
 | --- | --- |
-| `stickers` | Persistent stickers, content, window placement, text revisions/recency |
+| `stickers` | Persistent stickers, content, window placement, text revisions/recency, plaintext digest |
 | `clipboard_captures` | Exact disposable text, digest, byte size, creation/copy times |
 | `text_master_key` | Public recipient and password-wrapped private identity |
 | `text_imports` | One-time legacy-import markers |
@@ -42,7 +42,7 @@ Historical clipboard/vault tables remain in the migration chain for raw import o
 
 TXTs contains Markdown stickers and optional captures, not command output or file previews. Typed IDs (`sticker:42`, `clipboard:42`) prevent cross-table collisions. Both desktop and CLI use shared full-text filtering and deterministic MRU ordering. Locked entries expose only public titles/metadata.
 
-Capture promotion creates a **closed Markdown sticker** and consumes the source in one transaction. Capture budgets never evict saved stickers. Content/revision checks reject stale saves, duplicate promotion, and authorization races. Custom titles survive editing; title changes do not change text-use recency.
+Capture promotion creates a **closed Markdown sticker** and consumes the source in one transaction. Capture budgets never evict saved stickers. Content/revision checks reject stale saves, duplicate promotion, and authorization races. Custom titles survive editing; title changes do not change text-use recency. `text_digest` is computed at seal/save/promote time on the **plaintext** bytes, so dedup happens across encryption transitions: a clipboard copy whose content matches a saved (plain or locked) sticker refreshes its recency instead of materializing a new capture row, keeping duplicate plaintext from lingering beside a sealed copy. Startup persistently backfills legacy plaintext sticker digests and consumes matching disposable captures, preserving their activity on the saved sticker. General sticker writes, text edits, protection changes, and legacy import use the same reconciliation policy. Legacy locked rows gain a digest only when an authorized edit, unlock, or password rotation provides plaintext; ciphertext is never hashed as a substitute. Intentionally separate saved sticker identities are not merged.
 
 ## Protection
 

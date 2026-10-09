@@ -1,4 +1,5 @@
 #![cfg(feature = "storage")]
+use anyhow::Context as _;
 use futures::executor::block_on;
 use rustickers::text::{TextEntryId, TextRepository};
 #[test]
@@ -7,7 +8,11 @@ fn required_titles_are_searchable_and_survive_edits_and_protection() -> anyhow::
         let dir = tempfile::tempdir()?;
         let repo = TextRepository::open(dir.path().join("stickers.db")).await?;
         repo.set_master_password("test-password").await?;
-        let capture = repo.capture("private content", 1).await?;
+        let capture = repo
+            .capture("private content", 1)
+            .await?
+            .capture_id()
+            .context("expected a fresh clipboard capture")?;
         let entry = repo.get(TextEntryId::Clipboard(capture)).await?;
         assert!(
             repo.promote_titled(&entry, true, Some(" \t "))

@@ -36,7 +36,11 @@ impl Fixture {
         }
     }
     fn capture(&self, text: &str) -> TextEntryId {
-        TextEntryId::Clipboard(block_on(self.repo.capture(text, 100)).unwrap())
+        let id = block_on(self.repo.capture(text, 100))
+            .unwrap()
+            .capture_id()
+            .expect("expected the CLI helper to seed a fresh capture");
+        TextEntryId::Clipboard(id)
     }
     fn sticker(&self, text: &str, state: StickerState) -> TextEntryId {
         let capture = block_on(self.repo.get(self.capture(text))).unwrap();

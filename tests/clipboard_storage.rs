@@ -1,8 +1,9 @@
 //! Capture and read-only legacy import contracts on isolated SQLite files.
 #![cfg(feature = "storage")]
 
+use anyhow::Context as _;
 use futures::executor::block_on;
-use rustickers::text::{TextEntryId, TextRepository, TextSources};
+use rustickers::text::{CaptureOutcome, TextEntryId, TextRepository, TextSources};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 
 async fn pool(path: &std::path::Path) -> anyhow::Result<SqlitePool> {
@@ -50,8 +51,12 @@ fn capture_round_trip_persists_without_legacy_vault_dependency() -> anyhow::Resu
         assert_eq!(settings.normal_byte_limit, 20 * 1024 * 1024);
         assert!(repo.master_key().await?.is_none());
         let exact = " \t大文字\r\n'quoted' ; & ";
-        let id = repo.capture(exact, 10).await?;
-        assert_eq!(repo.capture(exact, 20).await?, id);
+        let id = repo
+            .capture(exact, 10)
+            .await?
+            .capture_id()
+            .context("expected a stored clipboard capture")?;
+        assert_eq!(repo.capture(exact, 20).await?, CaptureOutcome::Stored(id));
         let reopened = TextRepository::open(&path).await?;
         let rows = reopened.snapshot(TextSources::new(false, true), "").await?;
         assert_eq!(rows.len(), 1);
