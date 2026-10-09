@@ -14,7 +14,7 @@ use crate::model::sticker::StickerColor;
 pub use gpui::Rgba;
 
 /// Shared alpha for desktop window surfaces; text and controls remain fully opaque.
-pub(crate) const WINDOW_SURFACE_OPACITY: f32 = 0.95;
+pub(crate) const WINDOW_SURFACE_OPACITY: f32 = 0.9;
 
 /// Background tint applied to a sticker card's surface. Dark, slightly
 /// desaturated so the sticker's title and body stay legible while the

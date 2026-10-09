@@ -471,7 +471,7 @@ impl SelectionPopup {
             .px_3()
             .py_2()
             .overflow_hidden()
-            .when(selected, |row| row.bg(cx.theme().list_active))
+            .when(selected, |row| row.bg(cx.theme().list_active.alpha(0.3)))
             .hover(|row| row.bg(cx.theme().list_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
@@ -591,6 +591,7 @@ impl SelectionPopup {
                         .size_full()
                         .mx_neg_0p5()
                         .my_neg_1()
+                        .bg(cx.theme().background.alpha(0.05))
                         .bordered(false),
                 ),
             )

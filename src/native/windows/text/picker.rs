@@ -785,12 +785,10 @@ impl TextPicker {
             .px_3()
             .py_2()
             .bg(if selected {
-                cx.theme().list_active
+                cx.theme().list_active.alpha(0.3)
             } else {
                 cx.theme().transparent
             })
-            .border_b_1()
-            .border_color(cx.theme().border)
             .when(!selected && !self.busy, |row| {
                 row.hover(|row| row.bg(cx.theme().list_hover))
             })
