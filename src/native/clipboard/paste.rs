@@ -26,7 +26,15 @@ mod platform {
             if IsWindow(hwnd) == 0 || GetWindowThreadProcessId(hwnd, &mut pid) == 0 {
                 bail!("The original window has closed. Use Copy only.");
             }
-            if pid == std::process::id() || GetForegroundWindow() != hwnd {
+            // Cross-process destinations must actually be foreground before we
+            // synthesise Ctrl+V; otherwise the simulated paste land in the
+            // wrong app. Same-process targets skip this check: the picker was
+            // opened from one of them, the receiving control is part of this
+            // app, and Windows is more lenient about foreground transitions
+            // within a single process. We still gate on `IsWindow` above so a
+            // closed same-process window doesn't get a phantom paste.
+            let same_process = pid == std::process::id();
+            if !same_process && GetForegroundWindow() != hwnd {
                 bail!("The original destination is not focused. Use Copy only.");
             }
         }
@@ -36,12 +44,14 @@ mod platform {
         let hwnd = handle as *mut core::ffi::c_void;
         unsafe {
             let mut pid = 0;
-            if IsWindow(hwnd) == 0
-                || GetWindowThreadProcessId(hwnd, &mut pid) == 0
-                || pid == std::process::id()
-            {
-                bail!("The original destination is unavailable. Use Copy only.");
+            if IsWindow(hwnd) == 0 || GetWindowThreadProcessId(hwnd, &mut pid) == 0 {
+                bail!("The original window has closed. Use Copy only.");
             }
+            // The self-pid gate used to bail out here, which was the bug: the
+            // rustickers process is also the source of every native input box
+            // we paste into (selection popup, sticker MD editor, settings
+            // fields), so refusing same-process activations blocked the TXT
+            // picker's paste mode from supplying any of them.
             if IsIconic(hwnd) != 0 {
                 ShowWindow(hwnd, SW_RESTORE);
             }
