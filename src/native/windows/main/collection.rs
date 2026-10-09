@@ -170,7 +170,7 @@ impl MainWindow {
             .bg(if selected {
                 cx.theme().list_active
             } else {
-                cx.theme().background
+                gpui::transparent_black().into()
             })
             .opacity(
                 if sticker.state == StickerState::Open

@@ -19,8 +19,8 @@ use std::{
 
 use crate::gpui_component::Root;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, point, px, size,
+    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, Styled,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
 };
 use url::Url;
 
@@ -422,7 +422,9 @@ impl StickerWindow {
                 let entity = cx.new(|cx| {
                     StickerWindow::new(detail, store, sticker_events_tx, options, window, cx)
                 });
-                cx.new(|cx| Root::new(entity, window, cx))
+                // Component Root defaults to an opaque theme background. Sticker
+                // content owns its translucent surface; keep the overlay root clear.
+                cx.new(|cx| Root::new(entity, window, cx).bg(gpui::transparent_black()))
             },
         )?;
 

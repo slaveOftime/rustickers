@@ -793,6 +793,9 @@ impl Render for MarkdownSticker {
                     .child(
                         Textarea::new(&self.editor)
                             .size_full()
+                            // Borderless still paints the component's input background.
+                            // The sticker surface owns the background in editing mode too.
+                            .appearance(false)
                             .bordered(false)
                             .readonly(self.busy || text_password::is_rotating()),
                     ),

@@ -29,22 +29,22 @@ pub fn run_native(
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
 ) {
-    // Required for the embedded wry WebView to render on Windows: the GPUI
-    // Windows platform reads `GPUI_DISABLE_DIRECT_COMPOSITION` once at
-    // construction (see `gpui-pre-windows-0.3.8/src/platform.rs`), so the
-    // variable must be set before `gpui::application()` returns. When
-    // direct-composition is on, the WebView's child surface paints behind
-    // a slot the GPUI compositor never redraws into, which is the
-    // "blank HTML preview" symptom the file sticker has on Windows.
-    // Carrying this from the kit's webview example verbatim. We don't
-    // override the variable if the operator already set it, so an
-    // environment with a known-good direct-composition build keeps
-    // its value.
+    // Per-pixel window alpha requires GPUI's DirectComposition swap chain.
+    // The legacy HWND swap chain uses DXGI_ALPHA_MODE_IGNORE. Leave the
+    // framework default enabled, while honoring explicit operator overrides.
+    // Sticker Root and editor backgrounds must also stay transparent; enabling
+    // composition alone cannot reveal the desktop through opaque UI layers.
     #[cfg(target_os = "windows")]
     {
-        if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
-            unsafe {
-                std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
+        if let Some(value) = std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION") {
+            tracing::info!(
+                value = %value.to_string_lossy(),
+                "GPUI_DISABLE_DIRECT_COMPOSITION is set externally; honoring it"
+            );
+            if value == "true" || value == "1" {
+                tracing::warn!(
+                    "DirectComposition is disabled; per-pixel window transparency is unavailable"
+                );
             }
         }
     }

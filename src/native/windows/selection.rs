@@ -138,7 +138,7 @@ impl SelectionPopup {
             },
             |window, cx| {
                 let entity = cx.new(|cx| Self::new(window, cx, sticker_events_tx, store, init));
-                cx.new(|cx| Root::new(entity, window, cx))
+                cx.new(|cx| Root::new(entity, window, cx).bg(gpui::transparent_black()))
             },
         )?;
 
@@ -614,7 +614,10 @@ impl Render for SelectionPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx
+                .theme()
+                .background
+                .opacity(crate::native::theme::WINDOW_SURFACE_OPACITY))
             .overflow_hidden()
             .child(match self.view {
                 SelectionView::Input => self.input_view(cx),

@@ -94,7 +94,7 @@ impl MainWindow {
                 // size in physical pixels while GPUI lays out logical pixels.
                 #[cfg(target_os = "windows")]
                 window.resize(bounds.size);
-                cx.new(|cx| Root::new(view, window, cx))
+                cx.new(|cx| Root::new(view, window, cx).bg(gpui::transparent_black()))
             },
         )
         .map(Into::into)
@@ -631,7 +631,7 @@ impl Render for MainWindow {
         h_flex()
             .items_stretch()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.theme().background.opacity(crate::native::theme::WINDOW_SURFACE_OPACITY))
             .text_color(cx.theme().foreground)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if window.has_active_dialog(cx) {

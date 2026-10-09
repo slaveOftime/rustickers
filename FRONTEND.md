@@ -73,7 +73,7 @@ Use one owner method for each logical command across buttons, menus, and keyboar
 
 ## Native checks
 
-Sticker windows use transparent backgrounds for corners. On Windows, startup sets `GPUI_DISABLE_DIRECT_COMPOSITION=true` unless already configured, so embedded WebViews paint correctly. Keep WebView construction fallible and expose errors rather than blank panels.
+Sticker content owns its translucent background. Component `Root` defaults to an opaque theme background, so sticker windows explicitly override Root with `gpui::transparent_black()` while retaining its overlay/focus facilities. The Markdown editor uses `.appearance(false)` because `.bordered(false)` alone still paints the input background. On Windows, per-pixel alpha requires DirectComposition; `GPUI_DISABLE_DIRECT_COMPOSITION=true` or `1` selects an HWND swap chain with `DXGI_ALPHA_MODE_IGNORE`. Do not auto-disable composition; explicit operator overrides remain honored and logged. The current embedded WebView/DComp blank-preview issue is unresolved and tracked separately—do not claim both paths work. Keep WebView construction fallible and expose errors rather than blank panels.
 
 Verify resizing, DPI, keyboard navigation, focus restoration, long text, empty/error states, and light/dark themes in a real window. Compilation and repository tests do not prove rendered UI quality.
 

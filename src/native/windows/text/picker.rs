@@ -96,14 +96,14 @@ impl TextPickerWindow {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Sticker backend unavailable"))?;
         // Physical window geometry is an OS boundary; internal layout uses rem helpers.
-        let bounds = Bounds::centered(None, size(px(380.), px(520.)), cx);
+        let bounds = Bounds::centered(None, size(px(300.), px(400.)), cx);
         let handle = cx.open_window(
             WindowOptions {
                 focus: true,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_background: WindowBackgroundAppearance::Transparent,
                 is_resizable: true,
-                window_min_size: Some(size(px(380.), px(360.))),
+                window_min_size: Some(size(px(300.), px(400.))),
                 kind: WindowKind::Floating,
                 titlebar: None,
                 ..Default::default()
@@ -112,7 +112,7 @@ impl TextPickerWindow {
                 let view = cx.new(|cx| {
                     TextPicker::new(repository, store, filter, events, destination, window, cx)
                 });
-                cx.new(|cx| Root::new(view, window, cx))
+                cx.new(|cx| Root::new(view, window, cx).bg(gpui::transparent_black()))
             },
         )?;
         if let Ok(mut slot) = TEXT_POPUP.write() {
@@ -811,19 +811,16 @@ impl TextPicker {
                 }),
             )
             .child(
-                div()
-                    .text_sm()
-                    .truncate()
-                    .child(
-                        entry
-                            .preview()
-                            .replace(['\r', '\n'], "↩")
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .trim()
-                            .to_owned(),
-                    ),
+                div().text_sm().truncate().child(
+                    entry
+                        .preview()
+                        .replace(['\r', '\n'], "↩")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_owned(),
+                ),
             )
             .child(
                 h_flex()
@@ -1024,7 +1021,7 @@ impl Render for TextPicker {
         let view = cx.entity();
         let count = self.filtered.len();
         v_flex().size_full().relative().rounded_lg().overflow_hidden()
-            .bg(cx.theme().background).text_color(cx.theme().foreground)
+            .bg(cx.theme().background.opacity(crate::native::theme::WINDOW_SURFACE_OPACITY)).text_color(cx.theme().foreground)
             .track_focus(&self.query.focus_handle(cx)).on_key_down(cx.listener(Self::key))
             .child(self.render_header(cx))
             .child(self.render_filters(cx))

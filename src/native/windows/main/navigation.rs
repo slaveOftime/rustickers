@@ -71,6 +71,14 @@ impl Section {
             Self::Settings => false,
             Self::Scheduled => command.is_some_and(|c| c.armed),
             Self::Selection => command.is_some_and(|c| c.accept_selection),
+            Self::Commands => {
+                // The automation destinations own commands that are armed or that
+                // accept selection input, so the Commands section only lists the
+                // plain on-demand commands. Without a parsed command summary the
+                // sticker hasn't been classified yet, so it is still routed here.
+                sticker.sticker_type == StickerType::Command
+                    && command.is_none_or(|c| !c.armed && !c.accept_selection)
+            }
             _ => self.kind().is_none_or(|kind| kind == sticker.sticker_type),
         }
     }
@@ -121,6 +129,8 @@ impl MainWindow {
                     }))
             };
         Sidebar::new("manager-navigation")
+            // The window surface supplies alpha; avoid stacking an opaque sidebar.
+            .bg(gpui::transparent_black())
             .w(gpui::rems(13.))
             .collapsed(compact)
             .header(
@@ -231,5 +241,46 @@ mod tests {
         assert!(Section::Selection.matches(&sticker(StickerType::Command), Some(&c)));
         assert!(!Section::Scheduled.matches(&sticker(StickerType::Command), None));
         assert!(!Section::Settings.matches(&sticker(StickerType::Markdown), None));
+    }
+    #[test]
+    fn commands_section_excludes_armed_or_selection_targets() {
+        let cmd = |armed: bool, accept: bool| CommandSummary {
+            command: "echo".into(),
+            working_dir: String::new(),
+            cron: if armed {
+                Some("0 * * * * *".into())
+            } else {
+                None
+            },
+            armed,
+            accept_selection: accept,
+        };
+        // Plain on-demand commands still belong in Commands, even before parsing.
+        assert!(Section::Commands.matches(&sticker(StickerType::Command), None));
+        assert!(
+            Section::Commands.matches(&sticker(StickerType::Command), Some(&cmd(false, false)),)
+        );
+        // Armed commands live in Scheduled; their row never appears in Commands.
+        assert!(
+            !Section::Commands.matches(&sticker(StickerType::Command), Some(&cmd(true, false)),)
+        );
+        // Selection-routed commands live in Selection.
+        assert!(
+            !Section::Commands.matches(&sticker(StickerType::Command), Some(&cmd(false, true)),)
+        );
+        // A command that is both armed and selection-routed still goes only to the
+        // automation destinations, not Commands.
+        assert!(
+            !Section::Commands.matches(&sticker(StickerType::Command), Some(&cmd(true, true)),)
+        );
+        // Non-command stickers never belong in Commands regardless of summary state.
+        for kind in [
+            StickerType::Markdown,
+            StickerType::Timer,
+            StickerType::Paint,
+            StickerType::File,
+        ] {
+            assert!(!Section::Commands.matches(&sticker(kind), None));
+        }
     }
 }
