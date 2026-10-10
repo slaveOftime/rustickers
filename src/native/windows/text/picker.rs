@@ -703,7 +703,6 @@ impl TextPicker {
             )
             .child(
                 h_flex()
-                    .gap_1()
                     .child(
                         Button::new("master-password")
                             .icon(IconName::LockClosed)
