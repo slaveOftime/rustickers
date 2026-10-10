@@ -10,6 +10,7 @@ use std::{
 #[cfg(target_os = "windows")]
 mod platform {
     use anyhow::{Result, bail};
+    use std::{thread, time::{Duration, Instant}};
     use windows_sys::Win32::UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -42,7 +43,7 @@ mod platform {
     }
     pub fn foreground(handle: u64) -> Result<()> {
         let hwnd = handle as *mut core::ffi::c_void;
-        unsafe {
+        let same_process = unsafe {
             let mut pid = 0;
             if IsWindow(hwnd) == 0 || GetWindowThreadProcessId(hwnd, &mut pid) == 0 {
                 bail!("The original window has closed. Use Copy only.");
@@ -56,8 +57,34 @@ mod platform {
                 ShowWindow(hwnd, SW_RESTORE);
             }
             SetForegroundWindow(hwnd);
+            pid == std::process::id()
+        };
+        // Same-process foreground switches are unconditionally allowed by
+        // Windows even after the picker has been destroyed; the receiving
+        // child control regains focus when its parent window is recomposed,
+        // so there is no observable drift to wait for.
+        if same_process {
+            return Ok(());
         }
-        verify(handle)
+        // USER32 sometimes applies the actual foreground change a few
+        // milliseconds after SetForegroundWindow returns. Poll briefly so
+        // callers can rely on `GetForegroundWindow() == handle` once the
+        // function returns Ok, while still bailing out fast if the call
+        // genuinely was blocked by the foreground lock (which the call site
+        // minimises by always invoking foreground() while still inside the
+        // foreground process).
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            unsafe {
+                if GetForegroundWindow() == hwnd {
+                    return Ok(());
+                }
+            }
+            if Instant::now() >= deadline {
+                bail!("The original destination is not focused. Use Copy only.");
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
     }
     pub fn modifiers_released() -> bool {
         [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]

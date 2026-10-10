@@ -169,6 +169,14 @@ struct TextPicker {
     scroll: UniformListScrollHandle,
     destination: Option<u64>,
     busy: bool,
+    /// True while a paste-into-destination is in flight. The activation
+    /// observer must ignore deactivation events during this window: switching
+    /// the OS foreground to the destination is required to land the
+    /// simulated Ctrl+V, and the picker naturally loses focus as a side
+    /// effect. Without the gate the observer would self-destruct the window
+    /// (or race with the explicit removal) before clipboard write and paste
+    /// dispatch complete.
+    delivering: bool,
     status: String,
     capture_enabled: bool,
     source: SourceFilter,
@@ -202,11 +210,16 @@ impl TextPicker {
                 cx.notify();
             }
         });
-        let activation = cx.observe_window_activation(window, |_, window, _| {
-            if !window.is_window_active() {
-                clear_popup();
-                window.remove_window();
+        let activation = cx.observe_window_activation(window, |this, window, _| {
+            // Hold off on the deactivation auto-close while a paste is in
+            // flight: the foreground switch back to the destination ditches
+            // the picker's focus as a side effect, and the observer must not
+            // double up on the explicit removal that `deliver` schedules.
+            if this.delivering || window.is_window_active() {
+                return;
             }
+            clear_popup();
+            window.remove_window();
         });
         let this = Self {
             repository,
@@ -220,6 +233,7 @@ impl TextPicker {
             scroll: UniformListScrollHandle::new(),
             destination,
             busy: false,
+            delivering: false,
             status: String::new(),
             capture_enabled: false,
             source: SourceFilter::All,
@@ -509,10 +523,41 @@ impl TextPicker {
         let destination = self.destination;
         let weak = cx.entity().downgrade();
         self.busy = true;
+        self.delivering = true;
         cx.notify();
         // Paste switches foreground windows. The authorized action is app-owned so
         // closing this transient picker cannot cancel delivery or revive it on failure.
         let handle = window.window_handle();
+        // Switch the OS foreground to the destination *while the picker is
+        // still alive*. Cross-process `SetForegroundWindow` is gated by
+        // Windows' foreground lock, and rustickers only owns that right
+        // while one of its windows is the foreground window. Running it
+        // asynchronously (after the picker is gone) silently fails for
+        // external destinations such as Notepad because User32 routes the
+        // call through the new (or null) foreground process until the lock
+        // expires -- which is why prior versions pasted into rustickers-
+        // owned windows fine but failed against any other app.
+        let foreground_done = if !copy_only {
+            match destination {
+                None => false,
+                Some(destination) => {
+                    if let Err(err) =
+                        crate::native::clipboard::paste::foreground(Some(destination))
+                    {
+                        let _ = weak.update(cx, |this, cx| {
+                            this.busy = false;
+                            this.delivering = false;
+                            this.status = format!("Could not use text. {err}");
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    true
+                }
+            }
+        } else {
+            false
+        };
         if !copy_only {
             clear_popup();
             window.remove_window();
@@ -531,6 +576,7 @@ impl TextPicker {
                             destination,
                             copy_only,
                             entry.is_encrypted(),
+                            foreground_done,
                         )?;
                         let _ = repo
                             .mark_used(entry.id(), crate::utils::time::now_unix_millis())
@@ -542,6 +588,7 @@ impl TextPicker {
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = weak.update(cx, |this, cx| {
                     this.busy = false;
+                    this.delivering = false;
                     if result.is_ok() {
                         clear_popup();
                         window.remove_window();
@@ -1041,6 +1088,7 @@ fn dispatch_content(
     destination: Option<u64>,
     copy_only: bool,
     secret: bool,
+    foreground_done: bool,
 ) -> anyhow::Result<()> {
     if secret {
         anyhow::ensure!(
@@ -1050,7 +1098,9 @@ fn dispatch_content(
     }
     if !copy_only {
         crate::native::clipboard::paste::wait_for_modifiers()?;
-        foreground(destination)?;
+        if !foreground_done {
+            foreground(destination)?;
+        }
     }
     let generation =
         crate::native::clipboard::watcher::write_clipboard_text_owned(filter, content)?;
