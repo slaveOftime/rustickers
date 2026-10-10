@@ -27,7 +27,7 @@ These are the defaults. Edit and save the four global shortcuts in **Settings**;
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+Alt+R | Show the manager |
-| Ctrl+Alt+V | Open or dismiss TXTs |
+| Ctrl+Shift+V | Open or dismiss TXTs |
 | Ctrl+Alt | Toggle quick file preview |
 | Ctrl/Cmd+Space | Send selected text to a command sticker |
 | Esc | Dismiss a transient window |

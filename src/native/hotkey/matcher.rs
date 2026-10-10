@@ -212,16 +212,20 @@ mod tests {
         }
     }
     fn defaults() -> Snapshot {
-        config(["Ctrl+Alt+R", "Ctrl+Alt+V", "Ctrl+Alt", "Ctrl+Space"])
+        config(["Ctrl+Alt+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Space"])
     }
     #[test]
     fn keyed_shortcuts_fire_once_and_suppress_repeat_and_release() {
-        for (code, slot, alt) in [(82, 0, true), (86, 1, true), (32, 3, false)] {
+        for (code, slot, second) in [
+            (82, 0, ALT),
+            (86, 1, SHIFT),
+            (32, 3, 0),
+        ] {
             let mut m = Matcher::default();
             let s = defaults();
             m.event(Key::Modifier(CTRL, 1), true, s);
-            if alt {
-                m.event(Key::Modifier(ALT, 1), true, s);
+            if second != 0 {
+                m.event(Key::Modifier(second, 1), true, s);
             }
             assert_eq!(
                 m.event(Key::Code(code), true, s),
@@ -239,7 +243,9 @@ mod tests {
             );
             m.event(Key::Modifier(CTRL, 1), false, s);
             assert!(m.event(Key::Code(code), false, s).suppress);
-            assert_eq!(m.event(Key::Modifier(ALT, 1), false, s).action, None);
+            if second != 0 {
+                assert_eq!(m.event(Key::Modifier(second, 1), false, s).action, None);
+            }
         }
     }
     #[test]
@@ -297,13 +303,13 @@ mod tests {
         let mut m = Matcher::default();
         let s = defaults();
         m.event(Key::Modifier(CTRL, 1), true, s);
-        m.event(Key::Modifier(ALT, 1), true, s);
+        m.event(Key::Modifier(SHIFT, 1), true, s);
         m.event(Key::Code(86), true, s);
         let mut next = config(["Alt+F2", "Ctrl+Q", "Alt+Shift", "Ctrl+Space"]);
         next.revision = 1;
         assert!(m.event(Key::Code(86), false, next).suppress);
         m.event(Key::Modifier(CTRL, 1), false, next);
-        assert!(m.event(Key::Modifier(ALT, 1), false, next).action.is_none());
+        assert!(m.event(Key::Modifier(SHIFT, 1), false, next).action.is_none());
         m.event(Key::Modifier(ALT, 1), true, next);
         assert_eq!(
             m.event(Key::Code(113), true, next).action,
@@ -323,18 +329,18 @@ mod tests {
         // First attempt: chord fires, but the V release is lost mid-flight.
         let mut m = Matcher::default();
         m.event(Key::Modifier(CTRL, 1), true, s);
-        m.event(Key::Modifier(ALT, 1), true, s);
+        m.event(Key::Modifier(SHIFT, 1), true, s);
         assert_eq!(
             m.event(Key::Code(86), true, s).action,
             Some(HotkeyAction::ToggleClipboardChooser)
         );
         // V-up never arrives; user just releases the modifiers.
-        m.event(Key::Modifier(ALT, 1), false, s);
+        m.event(Key::Modifier(SHIFT, 1), false, s);
         m.event(Key::Modifier(CTRL, 1), false, s);
 
         // Second attempt: chord must fire again, not be dropped as a repeat.
         m.event(Key::Modifier(CTRL, 1), true, s);
-        m.event(Key::Modifier(ALT, 1), true, s);
+        m.event(Key::Modifier(SHIFT, 1), true, s);
         assert_eq!(
             m.event(Key::Code(86), true, s).action,
             Some(HotkeyAction::ToggleClipboardChooser)
@@ -346,7 +352,7 @@ mod tests {
 
         // Once the user releases the chord modifiers too, plain V presses
         // must no longer be suppressed by any stray state.
-        m.event(Key::Modifier(ALT, 1), false, s);
+        m.event(Key::Modifier(SHIFT, 1), false, s);
         m.event(Key::Modifier(CTRL, 1), false, s);
         assert!(!m.event(Key::Code(86), true, s).suppress);
         assert!(!m.event(Key::Code(86), false, s).suppress);

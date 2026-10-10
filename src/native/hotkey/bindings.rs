@@ -39,7 +39,7 @@ static CONFIGURATION: LazyLock<RwLock<Configuration>> = LazyLock::new(|| {
 });
 
 pub fn default_bindings() -> [String; 4] {
-    ["Ctrl+Alt+R", "Ctrl+Alt+V", "Ctrl+Alt", "Ctrl+Space"].map(str::to_string)
+    ["Ctrl+Alt+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Space"].map(str::to_string)
 }
 pub fn bindings() -> [String; 4] {
     CONFIGURATION
@@ -222,7 +222,7 @@ mod tests {
             assert!(validate(&values).is_err(), "{invalid}");
         }
         let mut values = default_bindings();
-        values[0] = "alt+ctrl+v".into();
+        values[0] = "shift+ctrl+v".into();
         assert!(validate(&values).is_err());
         values = default_bindings();
         values[0] = "Alt+Ctrl".into();
