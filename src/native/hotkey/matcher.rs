@@ -115,6 +115,24 @@ impl Matcher {
                 self.gesture = false;
             }
         }
+        // Drop any residual non-modifier state once the user has lifted every
+        // chord modifier. The OS can drop a key-up event during a foreground
+        // transition (e.g. UAC prompt, lock screen, RDP focus swap), which
+        // would otherwise leave `down` (and `suppressed`) pinned for a virtual
+        // key that the user already released. The follow-up press would then
+        // register as a repeat (`repeat = self.down[ix] == true`) and the
+        // chord would never fire again until the app restarts. Releasing the
+        // last modifier is a clean baseline: any next chord must be entered
+        // from scratch, so forgetting the phantom "still held" entry is safe.
+        //
+        // Only `down` is reset here. `suppressed` is left intact so that an
+        // unmatched release (e.g. the chord key released *after* every
+        // modifier) still suppresses the trailing release to the foreground
+        // app, matching the documented chord-key suppression behaviour.
+        // The next chord match clears it naturally.
+        if previous_modifiers != 0 && modifiers == 0 {
+            self.down = [false; 256];
+        }
         if self.waiting_for_release && !self.active() {
             self.waiting_for_release = false;
             self.gesture = false;
@@ -291,6 +309,47 @@ mod tests {
             m.event(Key::Code(113), true, next).action,
             Some(HotkeyAction::Show)
         );
+    }
+    #[test]
+    fn chord_recovers_after_missed_keyup_when_modifiers_release() {
+        // The OS can drop a non-modifier key-up event during a foreground
+        // transition (UAC, lock screen, RDP focus swap). Without state
+        // recovery, the matcher would treat the next press of the same chord
+        // as a repeat and the action would never fire again until the app
+        // restarts. Lifting the last modifier must reset the phantom
+        // "still held" entries so the chord can fire again.
+        let s = defaults();
+
+        // First attempt: chord fires, but the V release is lost mid-flight.
+        let mut m = Matcher::default();
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(ALT, 1), true, s);
+        assert_eq!(
+            m.event(Key::Code(86), true, s).action,
+            Some(HotkeyAction::ToggleClipboardChooser)
+        );
+        // V-up never arrives; user just releases the modifiers.
+        m.event(Key::Modifier(ALT, 1), false, s);
+        m.event(Key::Modifier(CTRL, 1), false, s);
+
+        // Second attempt: chord must fire again, not be dropped as a repeat.
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(ALT, 1), true, s);
+        assert_eq!(
+            m.event(Key::Code(86), true, s).action,
+            Some(HotkeyAction::ToggleClipboardChooser)
+        );
+
+        // After the recovered match, the trailing V release must still be
+        // suppressed so the foreground app doesn't see a stray 'v' keystroke.
+        assert!(m.event(Key::Code(86), false, s).suppress);
+
+        // Once the user releases the chord modifiers too, plain V presses
+        // must no longer be suppressed by any stray state.
+        m.event(Key::Modifier(ALT, 1), false, s);
+        m.event(Key::Modifier(CTRL, 1), false, s);
+        assert!(!m.event(Key::Code(86), true, s).suppress);
+        assert!(!m.event(Key::Code(86), false, s).suppress);
     }
     #[test]
     fn custom_modifier_preview_and_keyed_preview_work() {
