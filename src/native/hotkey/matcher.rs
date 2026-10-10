@@ -212,14 +212,14 @@ mod tests {
         }
     }
     fn defaults() -> Snapshot {
-        config(["Ctrl+Alt+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Space"])
+        config(["Ctrl+Shift+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Shift+Space"])
     }
     #[test]
     fn keyed_shortcuts_fire_once_and_suppress_repeat_and_release() {
         for (code, slot, second) in [
-            (82, 0, ALT),
+            (82, 0, SHIFT),
             (86, 1, SHIFT),
-            (32, 3, 0),
+            (32, 3, SHIFT),
         ] {
             let mut m = Matcher::default();
             let s = defaults();
@@ -271,8 +271,11 @@ mod tests {
     }
     #[test]
     fn side_modifiers_and_exact_modifier_matching() {
+        // Used an explicit snapshot rather than `defaults()`: this test
+        // verifies that Ctrl+Shift is *not* collapsed to Ctrl when matching
+        // slot 3, which only holds when slot 3 is `Ctrl+Space` (plain).
+        let s = config(["Ctrl+Alt+R", "Ctrl+Alt+V", "Ctrl+Alt", "Ctrl+Space"]);
         let mut m = Matcher::default();
-        let s = defaults();
         m.event(Key::Modifier(CTRL, 1), true, s);
         m.event(Key::Modifier(CTRL, 2), true, s);
         m.event(Key::Modifier(CTRL, 1), false, s);
