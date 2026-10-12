@@ -637,6 +637,9 @@ impl MainWindow {
                                 }
                             })),
                     )
+                    .when(self.section != Section::Settings, |v| {
+                        v.child(self.sort_button(cx))
+                    })
                     .child(
                         Button::new("minimize")
                             .ghost()
@@ -658,7 +661,7 @@ impl MainWindow {
                             }),
                     )
                     .when(self.section != Section::Settings, |v| {
-                        v.child(self.sort_button(cx)).child(self.create_button(cx))
+                        v.child(self.create_button(cx))
                     }),
             )
             .into_any_element()

@@ -19,10 +19,10 @@ pub(super) enum Section {
 impl Section {
     pub(super) const COLLECTIONS: [Self; 5] = [
         Self::Text,
-        Self::Commands,
+        Self::Files,
         Self::Timers,
         Self::Sketches,
-        Self::Files,
+        Self::Commands,
     ];
     pub(super) fn label(self) -> &'static str {
         match self {
