@@ -123,35 +123,28 @@ unsafe extern "system" fn keyboard_hook(
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 #[cfg(target_os = "windows")]
+mod windows_listener;
+#[cfg(target_os = "windows")]
 fn start_listen(tx: Sender<IpcEvent>) -> anyhow::Result<()> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetMessageW, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG};
     WINDOWS_CONTEXT
         .set(std::sync::Mutex::new(WindowsContext {
             tx,
             matcher: Matcher::default(),
         }))
         .map_err(|_| anyhow::anyhow!("Keyboard listener already started"))?;
-    let hook =
-        unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), std::ptr::null_mut(), 0) };
-    if hook.is_null() {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    let mut listener = windows_listener::Listener::new()?;
     let mut message = MSG::default();
-    let result = loop {
+    loop {
         let result = unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) };
-        if result <= 0 {
-            break result;
+        if result == -1 {
+            return Err(std::io::Error::last_os_error().into());
         }
-    };
-    unsafe {
-        UnhookWindowsHookEx(hook);
+        if result == 0 {
+            return Ok(());
+        }
+        listener.process(&message);
     }
-    if result == -1 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    Ok(())
 }
 #[cfg(target_os = "macos")]
 fn mac_key(code: i64) -> Key {
