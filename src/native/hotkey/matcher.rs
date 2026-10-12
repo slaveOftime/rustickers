@@ -39,6 +39,14 @@ impl Default for Matcher {
     }
 }
 impl Matcher {
+    /// A desktop/session transition breaks the keyboard event stream. Discard
+    /// all held/suppressed state without interpreting it as a gesture release.
+    pub(super) fn reset(&mut self) {
+        *self = Self {
+            revision: self.revision,
+            ..Self::default()
+        };
+    }
     fn modifiers(&self) -> u8 {
         self.sides.iter().enumerate().fold(0, |mask, (ix, sides)| {
             mask | if *sides != 0 { 1 << ix } else { 0 }
@@ -359,6 +367,63 @@ mod tests {
         m.event(Key::Modifier(CTRL, 1), false, s);
         assert!(!m.event(Key::Code(86), true, s).suppress);
         assert!(!m.event(Key::Code(86), false, s).suppress);
+    }
+    #[test]
+    fn shortcuts_recover_after_keyboard_stream_interruption() {
+        let s = defaults();
+        let mut m = Matcher::default();
+        // Win+L switches desktops; neither release reaches this listener.
+        m.event(Key::Modifier(8, 1), true, s);
+        m.event(Key::Code(76), true, s);
+        m.reset();
+
+        for (code, slot) in [(82, 0), (86, 1), (32, 3)] {
+            m.event(Key::Modifier(CTRL, 1), true, s);
+            m.event(Key::Modifier(SHIFT, 1), true, s);
+            assert_eq!(
+                m.event(Key::Code(code), true, s).action,
+                Some(HotkeyAction::from_slot(slot))
+            );
+            assert!(m.event(Key::Code(code), false, s).suppress);
+            m.event(Key::Modifier(SHIFT, 1), false, s);
+            m.event(Key::Modifier(CTRL, 1), false, s);
+        }
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(ALT, 1), true, s);
+        m.event(Key::Modifier(ALT, 1), false, s);
+        assert_eq!(
+            m.event(Key::Modifier(CTRL, 1), false, s).action,
+            Some(HotkeyAction::ToggleFilePreview)
+        );
+    }
+    #[test]
+    fn interruption_discards_suppression_and_pending_gestures() {
+        let mut s = defaults();
+        s.revision = 5;
+        let mut m = Matcher::default();
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(SHIFT, 1), true, s);
+        assert!(m.event(Key::Code(86), true, s).suppress);
+        assert!(m.escape(true, true).suppress);
+        s.revision += 1;
+        m.event(Key::Code(86), true, s); // Reload while held waits for release.
+        m.reset();
+        assert_eq!(m.event(Key::Code(86), false, s), Outcome::default());
+        assert_eq!(m.escape(false, false), Outcome::default());
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(ALT, 1), true, s);
+        m.reset(); // Must cancel, not dispatch, the in-progress preview gesture.
+        assert_eq!(m.event(Key::Modifier(ALT, 1), false, s), Outcome::default());
+        assert_eq!(
+            m.event(Key::Modifier(CTRL, 1), false, s),
+            Outcome::default()
+        );
+        m.event(Key::Modifier(CTRL, 1), true, s);
+        m.event(Key::Modifier(SHIFT, 1), true, s);
+        assert_eq!(
+            m.event(Key::Code(82), true, s).action,
+            Some(HotkeyAction::Show)
+        );
     }
     #[test]
     fn custom_modifier_preview_and_keyed_preview_work() {
