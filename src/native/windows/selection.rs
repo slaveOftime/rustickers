@@ -55,6 +55,13 @@ enum SelectionPopupInit {
         selection: String,
     },
     Input,
+    /// Manual text input that, on confirm, reveals a chooser filtered to a single
+    /// selection-routed sticker. Used by the manager so the user lands in the
+    /// input box first and then sees the command they originally chose as the
+    /// only available target.
+    InputPicked {
+        sticker: StickerDetail,
+    },
 }
 
 pub struct SelectionPopup {
@@ -71,6 +78,12 @@ pub struct SelectionPopup {
     resolving: bool,
     scroll_handle: UniformListScrollHandle,
     closing: bool,
+    /// When the manager launches the popup for a specific selection-routed
+    /// sticker, this records that sticker so `confirm_input` can skip the
+    /// DB-wide `accept_selection` resolve and reveal only the picked target.
+    /// It sticks across `edit_selection` retries so that editing the text and
+    /// confirming again keeps the focus on the chosen sticker.
+    picked: Option<StickerDetail>,
     _keystroke_subscription: Subscription,
     _window_activation_subscription: Subscription,
 }
@@ -102,6 +115,24 @@ impl SelectionPopup {
         store: ArcStickerStore,
     ) -> anyhow::Result<()> {
         Self::open_with(cx, sticker_events_tx, store, SelectionPopupInit::Input)
+    }
+
+    /// Open the popup with the input box focused, then route the confirm step to
+    /// the supplied selection-routed sticker. The popup comes up in input mode
+    /// so the user can type or accept an empty selection, and pressing Enter
+    /// reveals a chooser list filtered to that single sticker.
+    pub fn open_for_selection(
+        cx: &mut App,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+        sticker: StickerDetail,
+    ) -> anyhow::Result<()> {
+        Self::open_with(
+            cx,
+            sticker_events_tx,
+            store,
+            SelectionPopupInit::InputPicked { sticker },
+        )
     }
 
     fn open_with(
@@ -168,12 +199,18 @@ impl SelectionPopup {
         store: ArcStickerStore,
         init: SelectionPopupInit,
     ) -> Self {
-        let (view, stickers, selection) = match init {
+        let (view, stickers, selection, picked) = match init {
             SelectionPopupInit::Choose {
                 stickers,
                 selection,
-            } => (SelectionView::Choose, stickers, selection),
-            SelectionPopupInit::Input => (SelectionView::Input, Vec::new(), String::new()),
+            } => (SelectionView::Choose, stickers, selection, None),
+            SelectionPopupInit::Input => (SelectionView::Input, Vec::new(), String::new(), None),
+            SelectionPopupInit::InputPicked { sticker } => (
+                SelectionView::Input,
+                Vec::new(),
+                String::new(),
+                Some(sticker),
+            ),
         };
 
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers…"));
@@ -291,6 +328,7 @@ impl SelectionPopup {
             resolving: false,
             scroll_handle: UniformListScrollHandle::new(),
             closing: false,
+            picked,
             _keystroke_subscription: keystroke_subscription,
             _window_activation_subscription: window_activation_subscription,
         }
@@ -304,6 +342,20 @@ impl SelectionPopup {
         }
 
         let text = self.input.read(cx).value().to_string();
+
+        // The manager launches the popup for a specific sticker; honour that
+        // intent by skipping the DB-wide resolve and showing only the picked
+        // target. The pick sticks across `edit_selection` retries so that an
+        // edit-and-confirm still routes to the same sticker.
+        if let Some(sticker) = self.picked.as_ref() {
+            tracing::info!(
+                sticker_id = sticker.id,
+                text_len = text.len(),
+                "Show pre-picked selection sticker chooser"
+            );
+            self.show_stickers(text, vec![sticker.clone()], window, cx);
+            return;
+        }
 
         self.resolving = true;
         self.input_error = None;

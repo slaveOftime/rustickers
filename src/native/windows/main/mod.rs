@@ -487,9 +487,9 @@ impl MainWindow {
         tracing::info!(sticker_id = id, "Manual command run requested from manager");
         command_background::run_now(id, self.store.clone(), cx);
     }
-    /// Pop up the selection-routing dialog pre-populated with this sticker. The manager's
-    /// Selection section only lists commands that accept selection, so a single-row chooser
-    /// already lines up the action the user came here to take.
+    /// Pop up the selection-routing dialog for this sticker. The popup opens with
+    /// the input box focused so the user can type or accept an empty selection,
+    /// then Enter reveals a chooser filtered to this single sticker for confirm.
     fn run_with_selection(&mut self, id: i64, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let tx = self.sticker_events_sender.clone();
@@ -505,8 +505,7 @@ impl MainWindow {
                     return;
                 }
             };
-            let result =
-                cx.update(|cx| SelectionPopup::open(cx, tx, store, vec![detail], String::new()));
+            let result = cx.update(|cx| SelectionPopup::open_for_selection(cx, tx, store, detail));
             if let Err(err) = result {
                 let _ = entity.update(cx, |this, cx| {
                     this.error = Some(format!("Could not open the selection popup: {err:#}"));
