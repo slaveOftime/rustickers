@@ -491,7 +491,13 @@ impl TextPicker {
             })
             .detach();
     }
-    fn use_selected(&mut self, copy_only: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn use_selected(
+        &mut self,
+        copy_only: bool,
+        close_after: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy {
             return;
         }
@@ -506,19 +512,20 @@ impl TextPicker {
                 Box::new(move |password, window, cx| {
                     if let Some(entity) = weak.upgrade() {
                         entity.update(cx, |this, cx| {
-                            this.deliver(entry, copy_only, Some(password), window, cx)
+                            this.deliver(entry, copy_only, close_after, Some(password), window, cx)
                         });
                     }
                 }),
             );
         } else {
-            self.deliver(entry, copy_only, None, window, cx);
+            self.deliver(entry, copy_only, close_after, None, window, cx);
         }
     }
     fn deliver(
         &mut self,
         entry: TextEntry,
         copy_only: bool,
+        close_after: bool,
         password: Option<Zeroizing<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -604,13 +611,19 @@ impl TextPicker {
                     this.busy = false;
                     this.delivering = false;
                     if result.is_ok() {
-                        if !mode_copy_only {
+                        if !mode_copy_only || close_after {
+                            // Paste path, foreground-degrade copy path, or the
+                            // explicit Ctrl+C shortcut all close the picker
+                            // once the clipboard write completes. The pure
+                            // Ctrl+Enter copy path stays open so the user can
+                            // pick another entry or fall back to a manual
+                            // paste without re-opening the chooser.
                             clear_popup();
                             window.remove_window();
                         } else if this.status.is_empty() {
-                            // Pure Ctrl+Enter or the unreachable-fallback
-                            // path: a quiet success is enough; the user
-                            // already has the focus they need to paste.
+                            // Pure Ctrl+Enter copy path: a quiet success is
+                            // enough; the user already has the focus they need
+                            // to paste.
                             this.status.clear();
                         }
                     } else if this.status.is_empty() {
@@ -718,8 +731,13 @@ impl TextPicker {
         if window.has_active_dialog(cx) || self.busy {
             return;
         }
+        let focus_in_query = self.query.focus_handle(cx).contains_focused(window, cx);
         // Menus consume Escape first; toolbar focus must not strand the utility.
-        if key != "escape" && !self.query.focus_handle(cx).contains_focused(window, cx) {
+        // Ctrl+C is treated like Escape here: it must work whether the focus
+        // is sitting in the search field or on a clicked row, because the
+        // user only has one chord for "copy" across the whole OS.
+        let is_top_level_shortcut = key == "escape" || (key == "c" && command);
+        if !is_top_level_shortcut && !focus_in_query {
             return;
         }
         match key {
@@ -733,7 +751,19 @@ impl TextPicker {
             "down" => self.move_selection(1, cx),
             "pageup" => self.move_selection(-3, cx),
             "pagedown" => self.move_selection(3, cx),
-            "enter" => self.use_selected(command || self.destination.is_none(), window, cx),
+            "enter" => self.use_selected(
+                command || self.destination.is_none(),
+                false,
+                window,
+                cx,
+            ),
+            // Ctrl+C is the cross-platform muscle memory for "copy whatever
+            // is selected". Inside the chooser that is the highlighted
+            // entry, so we route through the same `use_selected` path as
+            // Ctrl+Enter -- but with `close_after = true` so the dialog
+            // hides itself once the clipboard write lands, mirroring the
+            // paste-mode success path. Locked entries are unlocked first.
+            "c" if command => self.use_selected(true, true, window, cx),
             "f2" if command => self.rename(window, cx),
             "f2" => self.save(false, true, window, cx),
             "delete" if self.query.read(cx).value().is_empty() => self.delete(window, cx),
@@ -1050,9 +1080,9 @@ impl TextPicker {
                         self.status.clone()
                     } else {
                         if self.destination.is_some() {
-                            "↑↓ select · Enter paste · F2 edit"
+                            "↑↓ select · Enter paste · Ctrl+C copy · F2 edit"
                         } else {
-                            "↑↓ select · Enter copy · F2 edit"
+                            "↑↓ select · Ctrl+C copy · F2 edit"
                         }
                         .into()
                     }),
