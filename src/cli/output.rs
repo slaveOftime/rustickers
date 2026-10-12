@@ -8,6 +8,7 @@
 //! alone and never has to reason about exit codes and stderr at the same time.
 
 use serde_json::{Map, Value, json};
+use unicode_width::UnicodeWidthStr as _;
 
 /// Which language the CLI is speaking for this invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +51,7 @@ impl Format {
     /// can actually act on it.
     pub fn note(self, message: impl std::fmt::Display) {
         if self == Self::Human {
-            println!("{message}");
+            eprintln!("{message}");
         }
     }
 }
@@ -84,7 +85,8 @@ pub fn ellipsize(s: &str, max: usize) -> String {
 
 /// Collapse a string onto one line so it can sit inside a table cell.
 pub fn one_line(s: &str, max: usize) -> String {
-    let flattened = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let safe = sanitize(s);
+    let flattened = safe.split_whitespace().collect::<Vec<_>>().join(" ");
     ellipsize(&flattened, max)
 }
 
@@ -95,16 +97,41 @@ pub fn format_ts(ts: i64) -> String {
         .unwrap_or_else(|| ts.to_string())
 }
 
+/// Neutralize terminal escapes and bidi overrides in human-facing metadata.
+pub(crate) fn sanitize(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_whitespace() {
+                c
+            } else if c.is_control()
+                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                '�'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Render rows under a header, sizing every column to its widest cell.
 ///
 /// A fixed-width layout wastes space on short lists and truncates long ids on big ones, so the
 /// widths are measured instead of guessed.
 pub fn table(headers: &[&str], rows: &[Vec<String>]) {
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
-    for row in rows {
+    let rows = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| one_line(cell, usize::MAX))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.width()).collect();
+    for row in &rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(i) {
-                *width = (*width).max(cell.chars().count());
+                *width = (*width).max(cell.width());
             }
         }
     }
@@ -116,7 +143,11 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) {
             if is_last {
                 out.push_str(cell);
             } else {
-                let pad = widths.get(i).copied().unwrap_or(0) - cell.chars().count();
+                let pad = widths
+                    .get(i)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(cell.width());
                 out.push_str(cell);
                 out.push_str(&" ".repeat(pad + 2));
             }
@@ -127,7 +158,7 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) {
     line(&headers.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>());
     let rule: usize = widths.iter().sum::<usize>() + 2 * widths.len().saturating_sub(1);
     println!("{}", "─".repeat(rule));
-    for row in rows {
+    for row in &rows {
         line(row);
     }
 }
@@ -147,6 +178,13 @@ mod tests {
     fn ellipsize_leaves_short_strings_untouched() {
         assert_eq!(ellipsize("abc", 10), "abc");
         assert_eq!(ellipsize("", 3), "");
+    }
+
+    #[test]
+    fn metadata_neutralizes_terminal_escapes_and_bidi_controls() {
+        let display = one_line("title\u{1b}[2J\u{202e} dangerous", 80);
+        assert!(!display.contains('\u{1b}'));
+        assert!(!display.contains('\u{202e}'));
     }
 
     #[test]

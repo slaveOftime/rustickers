@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-and-format:
+    name: Lint, format and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_suffix: macos-aarch_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+            WEBKIT_DEV=libwebkit2gtk-4.1-dev
+            JSCORE_DEV=libjavascriptcoregtk-4.1-dev
+          else
+            WEBKIT_DEV=libwebkit2gtk-4.0-dev
+            JSCORE_DEV=libjavascriptcoregtk-4.0-dev
+          fi
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libasound2-dev \
+            "$WEBKIT_DEV" \
+            "$JSCORE_DEV" \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ matrix.target }}
+
+      - name: git config (long paths on Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo check --locked --bin rustickers
+        run: cargo check --locked --bin rustickers
+
+      - name: cargo check --locked --no-default-features --features storage
+        run: cargo check --locked --no-default-features --features storage
+
+      - name: cargo check --locked --no-default-features --features cli --bin rst
+        run: cargo check --locked --no-default-features --features cli --bin rst
+
+      - name: cargo check --locked --features ui
+        run: cargo check --locked --features ui
+
+      - name: cargo test --locked --no-default-features --features cli
+        run: cargo test --locked --no-default-features --features cli
+
+      - name: cargo test --locked --features cli (UI-feature baseline)
+        run: cargo test --locked --features cli
+
+      - name: Verify zero duplicate GPUI families
+        shell: bash
+        run: |
+          set -eo pipefail
+          count=$((cargo tree --locked --features ui --edges normal 2>/dev/null || true) | grep -E 'gpui-pre v[0-9.]' | sed -E 's|.*gpui-pre v([0-9.]+).*|\1|' | sort -u | wc -l | tr -d '[:space:]')
+          echo "Distinct gpui-pre versions in closure: ${count}"
+          test "${count}" = "1" || (
+            echo "Migration must collapse to one gpui-pre family version."
+            exit 1
+          )

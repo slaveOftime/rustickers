@@ -50,7 +50,9 @@ mod imp {
         let hwnd = match hwnd {
             Ok(hwnd) if hwnd != HWND::default() => hwnd,
             _ => {
-                tracing::warn!("gpui platform window not found; system-wake crash guard not installed");
+                tracing::warn!(
+                    "gpui platform window not found; system-wake crash guard not installed"
+                );
                 return;
             }
         };

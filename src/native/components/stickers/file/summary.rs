@@ -1,5 +1,5 @@
+use crate::gpui_component::{Icon, green_500, h_flex, v_flex};
 use gpui::{Context, Window, div, prelude::*, relative};
-use gpui_component::{Icon, green_500, h_flex, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,7 +80,7 @@ impl super::FileSticker {
                         .p_2()
                         .text_xs()
                         .opacity(0.85)
-                        .child("Refreshing summaries..."),
+                        .child("Refreshing summaries"),
                 )
             })
             .children(self.summaries.iter().map(|item| {

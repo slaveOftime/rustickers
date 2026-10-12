@@ -6,18 +6,31 @@ default-run = "rustickers"
 
 [features]
 default = ["ui"]
+# Shared SQLite text storage and protection for desktop and CLI builds.
+storage = [
+	"dep:sqlx",
+	"sqlx/migrate",
+	"dep:ring",
+	"dep:base64",
+	"dep:zeroize",
+	"dep:futures",
+	"dep:sha2",
+	"dep:argon2",
+	"dep:age",
+	"dep:rand",
+	"dep:chrono",
+]
 ui = [
 	"dep:sqlx",
 	"sqlx/migrate",
-	"dep:gpui",
-	"dep:gpui_platform",
-	"dep:gpui-component",
+	"storage",
+	# GPUI Kit single consumer entry point plus its WRY adapter.
+	"dep:gpui-kit",
 	"dep:gpui-wry",
 	"dep:wry",
 	"dep:lyon",
 	"dep:mimalloc",
 	"dep:rdev",
-	"dep:winsplit",
 	"dep:rust-embed",
 	"dep:notify-rust",
 	"dep:async-compat",
@@ -45,16 +58,25 @@ ui = [
 	"dep:base64",
 	"dep:ring",
 	"dep:zeroize",
+	"dep:argon2",
+	"dep:rand",
 ]
 cli = [
+	"dep:crossterm",
 	"dep:clap",
+	"dep:unicode-width",
 	"dep:futures",
 	"dep:sqlx",
+	"storage",
 	# The CLI validates what it is about to store, so a broken sticker is reported
 	# at creation time instead of silently failing later inside the app.
 	"dep:cron",
 	"dep:which",
-	"dep:winsplit",
+	"dep:arboard",
+	"dep:sha2",
+	"dep:zeroize",
+	"dep:ring",
+	"dep:base64",
 ]
 
 [[bin]]
@@ -63,19 +85,26 @@ path = "src/rustickers.rs"
 required-features = ["ui"]
 
 [[bin]]
-name = "rusticker"
-path = "src/rusticker.rs"
+name = "rst"
+path = "src/rst.rs"
 required-features = ["cli"]
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", optional = true }
-# Enable GPUI's real macOS text backend; without this feature it installs
-# NoopTextSystem, which does not rasterize text.
-gpui_platform = { git = "https://github.com/zed-industries/zed", optional = true, features = ["font-kit", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", optional = true, rev = "aa7def675aa17b31ca7b79542c8e7a779ed3e56b" }
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", optional = true, rev = "aa7def675aa17b31ca7b79542c8e7a779ed3e56b" }
+crossterm = { version = "0.29", features = ["use-dev-tty"], optional = true }
+unicode-width = { version = "0.2", optional = true }
+# GPUI Kit single consumer entry point. Kit re-exports the gpui-pre family
+# as `gpui_kit::gpui` and the component library as `gpui_kit::component`, so
+# application code can adopt the Kit namespaces without depending on the
+# individual layered crates.
+gpui-kit = { version = "0.7.1", optional = true }
+gpui-wry = { version = "0.7.1", optional = true }
 raw-window-handle = { version = "0.6.2", optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
+# `gpui-wry` already references `lb-wry` internally; the application still
+# uses some `wry::*` helpers directly (e.g. `WebViewBuilder`), but those are
+# forwarded through the Kit adapter. Keep `wry` optional so the CLI-only
+# build does not pull in the Linux webkit dependencies on build farms that
+# only need the storage stack.
 anyhow = "1.0.102"
 clap = { version = "4", features = ["derive"], optional = true }
 async-trait = "0.1.85"
@@ -91,14 +120,18 @@ serde_json = "1.0.138"
 base64 = { version = "0.22.1", optional = true }
 ring = { version = "0.17.14", optional = true }
 zeroize = { version = "1.8.2", optional = true }
-chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
+sha2 = { version = "0.10.8", optional = true }
+argon2 = { version = "0.5", optional = true }
+# Recipient-only encryption; no passphrase/plugin/SSH features.
+age = { version = "=0.11.3", default-features = false, optional = true }
+rand = { version = "0.8", optional = true }
+chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"], optional = true }
 cron = { version = "0.17.0", optional = true }
 interprocess = "2.2.1"
 lyon = { version = "1.0.16", optional = true }
 mimalloc = { version = "0.1.52", features = ["v2"], optional = true }
 rdev = { version = "0.5.3", optional = true }
 which = { version = "8.0.0", optional = true }
-winsplit = { version = "0.1.0", optional = true }
 rust-embed = { version = "8", features = ["interpolate-folder-path"], optional = true }
 notify-rust = { version = "4.11.7", optional = true }
 async-compat = { version = "0.2.5", optional = true }
@@ -116,7 +149,7 @@ rodio = { version = "0.22.1", features = ["symphonia-all"], optional = true }
 lofty = { version = "0.24.0", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_RemoteDesktop", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -125,6 +158,13 @@ cocoa = { version = "0.26.0", optional = true }
 objc = { version = "0.2.7", optional = true }
 core-foundation = { version = "0.10.1", optional = true }
 core-graphics = { version = "0.24.0", optional = true }
+
+# Keep the memory-hard master-password KDF responsive in debug builds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 strip = true        # Automatically strip symbols from the binary.
@@ -135,3 +175,8 @@ panic = "abort"     # Removes stack unwinding (harder to debug crashes, but much
 
 [build-dependencies]
 winres = "0.1"
+
+[dev-dependencies]
+chrono = { version = "0.4.43", default-features = false, features = ["clock", "std"] }
+tempfile = "3"
+shlex = "2"

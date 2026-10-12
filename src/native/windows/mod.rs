@@ -5,12 +5,14 @@ pub mod main;
 pub mod placement;
 pub mod selection;
 pub mod sticker;
+pub mod text;
 mod transient_topmost;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EscapeDismissTarget {
     Selection,
     Sticker(i64),
+    TextPicker,
 }
 
 static ACTIVE_ESCAPE_DISMISS_TARGET: RwLock<Option<EscapeDismissTarget>> = RwLock::new(None);
@@ -23,6 +25,11 @@ pub(crate) fn set_escape_dismiss_target_active(target: EscapeDismissTarget, acti
             *current = None;
         }
     }
+}
+
+/// Toggle whether global Escape dispatch targets the text picker.
+pub(crate) fn set_text_escape_target(active: bool) {
+    set_escape_dismiss_target_active(EscapeDismissTarget::TextPicker, active);
 }
 
 pub fn has_escape_dismiss_target() -> bool {
@@ -41,6 +48,7 @@ pub fn close_active_escape_target(cx: &mut gpui::App) -> bool {
         Some(EscapeDismissTarget::Sticker(open_id)) => {
             sticker::StickerWindow::dispatch_escape(open_id, cx)
         }
+        Some(EscapeDismissTarget::TextPicker) => text::dispatch_escape(cx),
         None => false,
     }
 }

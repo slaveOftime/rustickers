@@ -3,21 +3,24 @@ use std::{
     time::Duration,
 };
 
-use gpui::{AnyWindowHandle, App, Application, rgb};
-use gpui_component::{Theme, ThemeMode};
+use crate::gpui_component::{Theme, ThemeMode};
+use gpui::{AnyWindowHandle, App};
 
 use crate::{
     ipc::IpcEvent,
     native::windows::{StickerWindowEvent, main::MainWindow, sticker::StickerWindow},
     storage::{ArcStickerStore, open_sqlite, paths::AppPaths},
+    text::TextRepository,
 };
 
+pub mod clipboard;
 pub mod components;
 pub mod file_manager;
 pub mod hotkey;
 pub mod http;
 pub mod power_guard;
 pub mod selection;
+pub mod theme;
 pub mod windows;
 
 pub fn run_native(
@@ -26,7 +29,27 @@ pub fn run_native(
     sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
     sticker_events_rx: mpsc::Receiver<StickerWindowEvent>,
 ) {
-    let app = Application::with_platform(gpui_platform::current_platform(false))
+    // Per-pixel window alpha requires GPUI's DirectComposition swap chain.
+    // The legacy HWND swap chain uses DXGI_ALPHA_MODE_IGNORE. Leave the
+    // framework default enabled, while honoring explicit operator overrides.
+    // Sticker Root and editor backgrounds must also stay transparent; enabling
+    // composition alone cannot reveal the desktop through opaque UI layers.
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(value) = std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION") {
+            tracing::info!(
+                value = %value.to_string_lossy(),
+                "GPUI_DISABLE_DIRECT_COMPOSITION is set externally; honoring it"
+            );
+            if value == "true" || value == "1" {
+                tracing::warn!(
+                    "DirectComposition is disabled; per-pixel window transparency is unavailable"
+                );
+            }
+        }
+    }
+
+    let app = gpui::application()
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
 
@@ -36,12 +59,17 @@ pub fn run_native(
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
     let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());
+    let clipboard_handle_for_open: Arc<OnceLock<Arc<TextRepository>>> = Arc::new(OnceLock::new());
+    let clipboard_handle_for_ipc = clipboard_handle_for_open.clone();
+    let clipboard_filter_for_open: Arc<
+        OnceLock<std::sync::Arc<crate::native::clipboard::CaptureFilter>>,
+    > = Arc::new(OnceLock::new());
+    let clipboard_filter_for_ipc = clipboard_filter_for_open.clone();
 
     app.run(move |cx: &mut App| {
-        gpui_component::init(cx);
+        cx.on_app_quit(|_| async { crate::native::windows::text::clear_owned_secret(); }).detach();
+        crate::gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
-        let theme = cx.global_mut::<Theme>();
-        theme.background = rgb(0x151104).into();
 
         let main_window_handle_clone = main_window_handle.clone();
         let store_handle_clone = store_handle.clone();
@@ -128,7 +156,11 @@ pub fn run_native(
                             if let Some(store) = store_handle_clone.get() {
                                 let store = store.clone();
                                 let tx = sticker_events_tx_for_ipc.clone();
-                                let selection = match crate::native::selection::capture_selection() {
+                                let selection = match clipboard_filter_for_ipc.get() {
+                                    Some(filter) => crate::native::selection::capture_selection_with_filter(filter),
+                                    None => crate::native::selection::capture_selection(),
+                                };
+                                let selection = match selection {
                                     Ok(selection) => selection,
                                     Err(err) => {
                                         tracing::warn!(error = ?err, "Failed to capture text selection");
@@ -165,6 +197,26 @@ pub fn run_native(
                                 }
                             }
                         }
+                        crate::ipc::IpcEvent::ToggleClipboardChooser { focused_window } => {
+                            let store = clipboard_handle_for_ipc.get().cloned();
+                            let filter = clipboard_filter_for_ipc.get().cloned();
+                            if let (Some(store), Some(_filter)) = (store, filter) {
+                                cx.update(|cx| {
+                                    if let Err(err) = crate::native::windows::text::TextPickerWindow::toggle(
+                                        cx,
+                                        sticker_events_tx_for_ipc.clone(),
+                                        store,
+                                        focused_window,
+                                    ) {
+                                        tracing::warn!(error = ?err, "Failed to toggle clipboard chooser");
+                                    }
+                                });
+                            } else {
+                                tracing::warn!(
+                                    "Clipboard chooser requested but the clipboard backend has not been initialised"
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -173,8 +225,9 @@ pub fn run_native(
 
         let main_window_handle_clone = main_window_handle.clone();
         cx.spawn(async move |cx| {
-            tracing::info!(db_path = %app_paths.db_path.display(), "Opening sticker store");
-            let store: ArcStickerStore = match open_sqlite(app_paths.db_path).await {
+            let sticker_db = app_paths.db_path.clone();
+            tracing::info!(db_path = %sticker_db.display(), "Opening sticker store");
+            let store: ArcStickerStore = match open_sqlite(&sticker_db).await {
                 Ok(store) => store,
                 Err(err) => {
                     tracing::error!(error = ?err, "Failed to open store");
@@ -185,6 +238,23 @@ pub fn run_native(
             let _ = store_handle.set(store.clone());
 
             tracing::info!("Sticker store opened");
+
+            // Clipboard failure must not prevent the main window or stickers from opening.
+            match TextRepository::open(&sticker_db).await {
+                Ok(backend) => {
+                    let clipboard_store = Arc::new(backend);
+                    let filter = crate::native::clipboard::CaptureFilter::new();
+                    let _ = clipboard_handle_for_open.set(clipboard_store.clone());
+                    let _ = clipboard_filter_for_open.set(filter.clone());
+                    let (watcher, _stop) = crate::native::clipboard::watcher::WatcherHandle::new(Duration::from_millis(250));
+                    watcher.spawn(filter.clone(), clipboard_store.clone());
+                    crate::native::windows::text::set_global_store(clipboard_store, store.clone());
+                    cx.update(move |_cx| {
+                        crate::native::windows::text::set_global_capture_filter(filter);
+                    });
+                }
+                Err(_) => tracing::error!("Clipboard backend unavailable; continuing sticker startup"),
+            }
 
             // Armed cron stickers have to keep ticking whether or not their window is open, so the
             // scheduler starts before any window is restored.

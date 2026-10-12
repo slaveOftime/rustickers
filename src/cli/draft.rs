@@ -1,6 +1,6 @@
 //! The one path through which the CLI creates a sticker.
 //!
-//! Every create command (`markdown`, `cmd`, and the skills built on them) fills in a
+//! Every create command (`note`, `command`, and the skills built on them) fills in a
 //! [`StickerDraft`] and hands it here, so placement defaults, the top-most follow-up write and the
 //! "tell the running app about it" step behave identically no matter which command you used.
 
@@ -8,17 +8,17 @@ use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerTy
 use crate::storage::ArcStickerStore;
 
 use super::output::Format;
-use super::runtime::{self, Delivery, block_on};
+use super::runtime::{Delivery, Runtime, block_on};
 
 /// Where a sticker lands and how it looks. Shared by every create command.
 #[derive(clap::Args, Debug, Clone)]
 pub struct Geometry {
     /// Sticker width in pixels
-    #[arg(long, value_name = "PX", help_heading = "Appearance")]
+    #[arg(long, value_name = "PX", value_parser = super::parse_dimension, help_heading = "Appearance")]
     pub width: Option<i32>,
 
     /// Sticker height in pixels
-    #[arg(long, value_name = "PX", help_heading = "Appearance")]
+    #[arg(long, value_name = "PX", value_parser = super::parse_dimension, help_heading = "Appearance")]
     pub height: Option<i32>,
 
     /// Distance from the left edge of the screen, in pixels
@@ -73,7 +73,12 @@ pub struct Created {
 }
 
 impl StickerDraft {
-    pub fn create(self, store: &ArcStickerStore, geometry: &Geometry) -> anyhow::Result<Created> {
+    pub(crate) fn create(
+        self,
+        runtime: &Runtime,
+        store: &ArcStickerStore,
+        geometry: &Geometry,
+    ) -> anyhow::Result<Created> {
         let state = geometry.state();
 
         let id = block_on(store.insert_sticker(StickerDetail {
@@ -101,16 +106,10 @@ impl StickerDraft {
             placements: Vec::new(),
         }))?;
 
-        // `insert_sticker` only writes the columns it knows a new sticker needs, so top-most is a
-        // separate update rather than part of the row above.
-        if geometry.top_most {
-            block_on(store.update_sticker_top_most(id, true))?;
-        }
-
         let delivery = if state == StickerState::Open {
-            runtime::open_sticker(id)
+            runtime.open_sticker(id)
         } else {
-            Delivery::AppNotRunning
+            Delivery::NotRequested
         };
 
         Ok(Created {
@@ -127,14 +126,17 @@ impl Created {
         format.note(format!("Created {kind} sticker (id={})", self.id));
         match (self.state, self.delivery) {
             (StickerState::Close, _) => format.note(format!(
-                "It was created closed. Run `rusticker open {}` to show it.",
+                "It was created closed. Run `rst open {}` to show it.",
                 self.id
             )),
-            (StickerState::Open, Delivery::Delivered) => {
-                format.note("Rustickers is running and opened it.");
+            (StickerState::Open, Delivery::Sent) => {
+                format.note("Window request sent to Rustickers.");
             }
-            (StickerState::Open, Delivery::AppNotRunning) => {
-                format.note("Rustickers is not running — it will open on next launch.");
+            (StickerState::Open, Delivery::Offline) => {
+                format.note("Saved offline; no desktop request was sent.");
+            }
+            (StickerState::Open, _) => {
+                format.note("Desktop unavailable; marked open for its next launch.");
             }
         }
     }
@@ -145,10 +147,9 @@ impl Created {
             "type": kind,
             "state": match self.state {
                 StickerState::Open => "open",
-                StickerState::Close => "close",
+                StickerState::Close => "closed",
             },
-            "opened": self.delivery.delivered(),
-            "app_running": self.delivery.delivered(),
+            "desktop_notification": self.delivery.as_str(),
         })
     }
 }

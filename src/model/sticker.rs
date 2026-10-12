@@ -190,30 +190,19 @@ impl StickerColor {
         Self::Gray,
     ];
 
+    /// Surface tint applied to a sticker card. Defined in the UI-owned
+    /// palette module [`crate::native::theme`] so the model never embeds
+    /// raw GPUI presentation literals.
     #[cfg(feature = "ui")]
     pub fn bg(&self) -> gpui::Rgba {
-        use gpui::rgb;
-
-        match self {
-            Self::Yellow => rgb(0x2d2a1b),
-            Self::Green => rgb(0x1b2d20),
-            Self::Blue => rgb(0x1b2430),
-            Self::Pink => rgb(0x2d1b24),
-            Self::Gray => rgb(0x1e1e1e),
-        }
+        crate::native::theme::sticker_background(*self)
     }
 
+    /// Bright swatch colour used in the colour picker and on the paint
+    /// swatch dots. UI-owned palette — see [`crate::native::theme`].
     #[cfg(feature = "ui")]
     pub fn swatch(&self) -> gpui::Rgba {
-        use gpui::rgb;
-
-        match self {
-            Self::Yellow => rgb(0xf2c94c),
-            Self::Green => rgb(0x27ae60),
-            Self::Blue => rgb(0x2d9cdb),
-            Self::Pink => rgb(0xeb5757),
-            Self::Gray => rgb(0xbdbdbd),
-        }
+        crate::native::theme::sticker_swatch(*self)
     }
 
     pub fn as_str(&self) -> &'static str {

@@ -37,6 +37,11 @@ pub enum IpcEvent {
     PreviewFile(PreviewFileRequest),
     CloseSticker(i64),
     TriggerSelectionToCommand,
+    /// Toggle the clipboard history chooser (M3). The argument is the focused window id at the
+    /// time the hotkey triggered, so the row's paste-step can restore focus to the previous app.
+    ToggleClipboardChooser {
+        focused_window: Option<u64>,
+    },
 }
 
 pub struct SingleInstance {
@@ -145,6 +150,14 @@ impl SingleInstance {
                         ) {
                             tracing::debug!("Received selection-to-command IPC");
                             let _ = ipc_events_tx.send(IpcEvent::TriggerSelectionToCommand);
+                        } else if let Some(payload) =
+                            buffer.trim().strip_prefix("CLIPBOARD_CHOOSER")
+                        {
+                            let focused = payload
+                                .strip_prefix(' ')
+                                .and_then(|rest| rest.parse::<u64>().ok());
+                            let _ = ipc_events_tx
+                                .send(IpcEvent::ToggleClipboardChooser { focused_window: focused });
                         }
                     }
                 }
@@ -179,6 +192,11 @@ pub fn send_ipc_command(app_id: &str, command: &str) -> io::Result<bool> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Convenience helper for the CLI: ask the running instance to toggle the clipboard chooser.
+pub fn signal_clipboard_chooser(app_id: &str) -> io::Result<bool> {
+    send_ipc_command(app_id, "CLIPBOARD_CHOOSER")
 }
 
 /// Filter function from the official reference

@@ -1,14 +1,12 @@
+use crate::gpui_component::{input::Editor, scroll::ScrollableElement, text::TextView, v_flex};
 use gpui::{
     Context, Entity, Image, ImageSource, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit,
     Rgba, Window, div, img, prelude::*,
 };
-use gpui_component::{input::Editor, scroll::ScrollableElement, text::TextView, v_flex};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::native::components::webview::SimpleWebView;
-
-use super::super::content_lock::LockedContent;
 
 const MAX_TEXT_PREVIEW_BYTES: usize = 1024 * 1024 * 25; // 25 MB
 
@@ -29,10 +27,6 @@ pub(super) enum FilePreview {
         language: String,
         editable: bool,
     },
-    LockedText {
-        source_path: PathBuf,
-        content: LockedContent,
-    },
     Image(Arc<Image>),
     WebView(Entity<SimpleWebView>),
     Audio {
@@ -49,11 +43,9 @@ impl FilePreview {
         cx: &mut Context<super::FileSticker>,
     ) -> Result<Option<FilePreview>, String> {
         if crate::utils::url::is_url(source) {
-            return Ok(Some(FilePreview::WebView(cx.new(|cx| {
-                let mut view = SimpleWebView::new(source, window, cx);
-                view.set_bg(color, cx);
-                view
-            }))));
+            let entity = SimpleWebView::try_new(source, window, cx)?;
+            entity.update(cx, |view, cx| view.set_bg(color, cx));
+            return Ok(Some(FilePreview::WebView(entity)));
         }
 
         let path = Path::new(source);
@@ -81,15 +73,10 @@ impl FilePreview {
         }
 
         if crate::utils::file::is_web_doc_ext(ext) || crate::utils::file::is_video_ext(ext) {
-            return crate::utils::url::create_local_file_url(path)
-                .map(|url| {
-                    FilePreview::WebView(cx.new(|cx| {
-                        let mut view = SimpleWebView::new(&url, window, cx);
-                        view.set_bg(color, cx);
-                        view
-                    }))
-                })
-                .map(Some);
+            let url = crate::utils::url::create_local_file_url(path)?;
+            let entity = SimpleWebView::try_new(&url, window, cx)?;
+            entity.update(cx, |view, cx| view.set_bg(color, cx));
+            return Ok(Some(FilePreview::WebView(entity)));
         }
 
         if crate::utils::file::is_audio_ext(ext) {
@@ -104,7 +91,11 @@ impl FilePreview {
             let content =
                 content_result.map_err(|err| format!("Failed to read markdown preview: {err}"))?;
             return match content {
-                Some(content) => preview_text(path, content, editable, true).map(Some),
+                Some(content) => Ok(Some(FilePreview::Markdown {
+                    source_path: path.to_path_buf(),
+                    content,
+                    editable,
+                })),
                 None => Ok(None),
             };
         }
@@ -113,20 +104,13 @@ impl FilePreview {
             let language = crate::utils::file::markdown_language_for_ext(ext);
             return crate::utils::file::read_text_full(path)
                 .map_err(|err| format!("Failed to read code preview: {err}"))
-                .and_then(|content| {
-                    if let Some(locked) = LockedContent::parse(&content)? {
-                        return Ok(Some(FilePreview::LockedText {
-                            source_path: path.to_path_buf(),
-                            content: locked,
-                        }));
-                    }
-
-                    Ok(Some(FilePreview::Code {
+                .map(|content| {
+                    Some(FilePreview::Code {
                         source_path: path.to_path_buf(),
                         content,
                         language: language.to_string(),
                         editable: true,
-                    }))
+                    })
                 });
         }
 
@@ -135,12 +119,6 @@ impl FilePreview {
             content_result.map_err(|err| format!("Failed to read text preview: {err}"))?;
         match content {
             Some(content) => {
-                if let Some(locked) = LockedContent::parse(&content)? {
-                    return Ok(Some(FilePreview::LockedText {
-                        source_path: path.to_path_buf(),
-                        content: locked,
-                    }));
-                }
                 let preview_content =
                     crate::utils::file::format_terminal_output_for_preview(&content);
                 Ok(Some(FilePreview::Text {
@@ -210,101 +188,6 @@ impl FilePreview {
             _ => {}
         }
     }
-
-    pub(super) fn lockable_content(&self) -> Option<(&Path, &str)> {
-        match self {
-            Self::Markdown {
-                source_path,
-                content,
-                editable: true,
-            }
-            | Self::Text {
-                source_path,
-                content,
-                editable: true,
-            }
-            | Self::Code {
-                source_path,
-                content,
-                editable: true,
-                ..
-            } => Some((source_path.as_path(), content.as_str())),
-            _ => None,
-        }
-    }
-
-    pub(super) fn locked_content(&self) -> Option<(&Path, &LockedContent)> {
-        match self {
-            Self::LockedText {
-                source_path,
-                content,
-            } => Some((source_path.as_path(), content)),
-            _ => None,
-        }
-    }
-
-    pub(super) fn unlocked_text(source_path: PathBuf, content: String) -> Self {
-        let ext = source_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if crate::utils::file::is_markdown_ext(&ext) {
-            Self::Markdown {
-                source_path,
-                content,
-                editable: true,
-            }
-        } else if crate::utils::file::is_code_ext(&ext) {
-            let language = crate::utils::file::markdown_language_for_ext(&ext).to_string();
-            Self::Code {
-                source_path,
-                content,
-                language,
-                editable: true,
-            }
-        } else {
-            Self::Text {
-                source_path,
-                content,
-                editable: true,
-            }
-        }
-    }
-
-    pub(super) fn locked_text(source_path: PathBuf, content: LockedContent) -> Self {
-        Self::LockedText {
-            source_path,
-            content,
-        }
-    }
-}
-
-fn preview_text(
-    path: &Path,
-    content: String,
-    editable: bool,
-    markdown: bool,
-) -> Result<FilePreview, String> {
-    if let Some(locked) = LockedContent::parse(&content)? {
-        return Ok(FilePreview::LockedText {
-            source_path: path.to_path_buf(),
-            content: locked,
-        });
-    }
-    if markdown {
-        Ok(FilePreview::Markdown {
-            source_path: path.to_path_buf(),
-            content,
-            editable,
-        })
-    } else {
-        Ok(FilePreview::Text {
-            source_path: path.to_path_buf(),
-            content,
-            editable,
-        })
-    }
 }
 
 impl super::FileSticker {
@@ -328,28 +211,7 @@ impl super::FileSticker {
                     match FilePreview::new(source.as_str(), bg, window, cx) {
                         Ok(preview) => {
                             this.preview_editor = None;
-                            if let Some((source_path, locked)) = preview
-                                .as_ref()
-                                .and_then(FilePreview::locked_content)
-                                .map(|(path, locked)| (path.to_path_buf(), locked.clone()))
-                            {
-                                let keep_unlocked = this.content_visible
-                                    && this.locked_content.as_ref() == Some(&locked);
-                                this.locked_content = Some(locked.clone());
-                                this.locked_path = Some(source_path.clone());
-                                if !keep_unlocked {
-                                    this.preview = preview;
-                                    this.content_visible = false;
-                                    this.lock_form.set_title(locked.title, window, cx);
-                                    this.lock_form.clear_passwords(window, cx);
-                                    this.lock_form.focus_password(window, cx);
-                                }
-                            } else {
-                                this.preview = preview;
-                                this.locked_content = None;
-                                this.locked_path = None;
-                                this.content_visible = true;
-                            }
+                            this.preview = preview;
                             if let Some(FilePreview::Audio { source_path, .. }) =
                                 this.preview.as_ref()
                             {
@@ -374,7 +236,7 @@ impl super::FileSticker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.click_count >= 2 && self.locked_content.is_none() {
+        if event.click_count >= 2 {
             self.start_edit(window, cx);
         }
     }
@@ -401,12 +263,7 @@ impl super::FileSticker {
                         window.prevent_default();
                     }
                 }))
-                .child(
-                    Editor::new(editor)
-                        .size_full()
-                        .bordered(false)
-                        .bg(gpui::rgba(0x000000)),
-                )
+                .child(Editor::new(editor).size_full().bordered(false))
                 .into_any_element();
         }
 
@@ -460,7 +317,6 @@ impl super::FileSticker {
                     .scrollable(true),
                 )
                 .into_any_element(),
-            Some(FilePreview::LockedText { .. }) => div().size_full().into_any_element(),
             Some(FilePreview::Image(image)) => div()
                 .size_full()
                 .child(
@@ -514,7 +370,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn editable_code_is_lockable() {
+    fn editable_code_exposes_source_content_and_language() {
         let preview = FilePreview::Code {
             source_path: PathBuf::from("example.rs"),
             content: "fn main() {}".to_string(),
@@ -522,16 +378,55 @@ mod tests {
             editable: true,
         };
 
-        let (path, content) = preview.lockable_content().expect("code should be lockable");
-
-        assert_eq!(path, Path::new("example.rs"));
-        assert_eq!(content, "fn main() {}");
+        assert_eq!(preview.editable_source(), Some(Path::new("example.rs")));
+        assert_eq!(preview.editable_content(), Some("fn main() {}"));
+        assert_eq!(preview.code_language(), Some("rust"));
     }
 
     #[test]
-    fn unlocked_code_restores_code_preview() {
-        let preview =
-            FilePreview::unlocked_text(PathBuf::from("example.rs"), "fn main() {}".to_string());
+    fn truncated_text_is_not_editable() {
+        let preview = FilePreview::Text {
+            source_path: PathBuf::from("large.txt"),
+            content: "preview only".to_string(),
+            editable: false,
+        };
+
+        assert!(preview.editable_source().is_none());
+        assert!(preview.editable_content().is_none());
+        assert!(preview.code_language().is_none());
+    }
+
+    #[test]
+    fn markdown_and_text_remain_editable_after_replacement() {
+        for mut preview in [
+            FilePreview::Markdown {
+                source_path: PathBuf::from("note.md"),
+                content: "old".to_string(),
+                editable: true,
+            },
+            FilePreview::Text {
+                source_path: PathBuf::from("note.txt"),
+                content: "old".to_string(),
+                editable: true,
+            },
+        ] {
+            let source = preview.editable_source().unwrap().to_path_buf();
+            preview.replace_content("new\r\ntext".to_string());
+
+            assert_eq!(preview.editable_source(), Some(source.as_path()));
+            assert_eq!(preview.editable_content(), Some("new\r\ntext"));
+        }
+    }
+
+    #[test]
+    fn replacing_code_content_preserves_code_preview() {
+        let mut preview = FilePreview::Code {
+            source_path: PathBuf::from("example.rs"),
+            content: "fn old() {}".to_string(),
+            language: "rust".to_string(),
+            editable: true,
+        };
+        preview.replace_content("fn main() {}".to_string());
 
         match preview {
             FilePreview::Code {
@@ -544,7 +439,7 @@ mod tests {
                 assert_eq!(language, "rust");
                 assert!(editable);
             }
-            _ => panic!("unlocked Rust source should remain a code preview"),
+            _ => panic!("edited Rust source should remain a code preview"),
         }
     }
 }

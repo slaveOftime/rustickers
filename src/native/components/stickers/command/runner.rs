@@ -44,14 +44,20 @@ impl RunSpec {
     pub fn resolve(content: &CommandContent, selection: Option<&str>) -> Result<Self, String> {
         let (display_name, args) = split_command(&content.command, selection)?;
 
-        let program = which::which(&display_name)
+        let working_dir = if content.working_dir.is_empty() {
+            std::env::current_dir()
+                .map_err(|error| format!("Working directory unavailable: {error}"))?
+        } else {
+            std::path::PathBuf::from(&content.working_dir)
+        };
+        let program = which::which_in(&display_name, std::env::var_os("PATH"), &working_dir)
             .map_err(|_| format!("Command not found: {display_name}"))?;
 
         Ok(Self {
             program,
             display_name,
             args,
-            working_dir: content.working_dir.trim().to_string(),
+            working_dir: content.working_dir.clone(),
             envs: parse_environments(&content.environments),
             selection: selection.map(str::to_owned),
         })
@@ -83,7 +89,8 @@ impl RunSpec {
             cmd.env(SELECTION_ENV_VAR, selection);
         }
 
-        tracing::debug!(program = %self.display_name, args = ?self.args, "Running command");
+        // Selection arguments may contain private text. Log only the executable identity.
+        tracing::debug!(program = %self.display_name, "Running command");
 
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -101,12 +108,15 @@ pub fn split_command(
     command: &str,
     selection: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
-    let mut parts = winsplit::split(command);
+    let mut parts = crate::utils::command_line::split(command)?;
     if parts.is_empty() {
         return Err("Command cannot be empty".to_string());
     }
 
     let program = parts.remove(0);
+    if program.is_empty() || program.contains(SELECTION_PLACEHOLDER) {
+        return Err("Command needs a fixed, non-empty executable".to_owned());
+    }
     replace_selection_args(&mut parts, selection);
     Ok((program, parts))
 }
@@ -213,14 +223,7 @@ pub fn kill_detached(child: Arc<Mutex<Child>>) {
 /// Splits on the *first* `=` only, so values may contain `=`. A line without one becomes an
 /// empty-valued variable, which is how a command is told a flag is present.
 pub fn parse_environments(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| match line.split_once('=') {
-            Some((key, value)) => (key.trim().to_string(), value.trim().to_string()),
-            None => (line.to_string(), String::new()),
-        })
-        .collect()
+    crate::utils::command_line::parse_environments(text)
 }
 
 /// Substitute the captured selection into every argument that mentions it.
@@ -271,7 +274,7 @@ mod tests {
         assert_eq!(
             envs,
             [
-                ("FOO".to_string(), "bar".to_string()),
+                ("FOO".to_string(), " bar ".to_string()),
                 ("BAZ".to_string(), String::new()),
                 ("URL".to_string(), "https://x/?a=1".to_string()),
             ]
@@ -284,14 +287,18 @@ mod tests {
     }
 
     #[test]
-    fn splitting_never_substitutes_the_program() {
-        let (program, args) = split_command(
-            &format!("{SELECTION_PLACEHOLDER} --flag={SELECTION_PLACEHOLDER}"),
-            Some("evil.exe"),
-        )
-        .expect("non empty");
-
-        assert_eq!(program, SELECTION_PLACEHOLDER);
-        assert_eq!(args, ["--flag=evil.exe"]);
+    fn splitting_requires_a_fixed_nonempty_program() {
+        assert!(
+            split_command(
+                &format!("{SELECTION_PLACEHOLDER} --flag=x"),
+                Some("evil.exe")
+            )
+            .is_err()
+        );
+        assert!(split_command("\"\" --flag=x", None).is_err());
+        assert_eq!(
+            split_command("program \"\" tail", None).unwrap().1,
+            ["", "tail"]
+        );
     }
 }

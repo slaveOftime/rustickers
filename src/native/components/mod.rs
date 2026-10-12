@@ -1,6 +1,6 @@
+use crate::gpui_component::IconNamed;
 use anyhow::anyhow;
 use gpui::*;
-use gpui_component::IconNamed;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
@@ -10,6 +10,7 @@ pub mod webview;
 #[derive(RustEmbed)]
 #[folder = "./assets"]
 #[include = "icons/**/*.svg"]
+#[include = "icon.png"]
 pub struct Assets;
 
 impl AssetSource for Assets {
@@ -63,6 +64,8 @@ pub enum IconName {
     Loop,
     LockClosed,
     LockOpen,
+    Copy,
+    Delete,
 }
 
 impl IconNamed for IconName {
@@ -99,6 +102,8 @@ impl IconNamed for IconName {
             IconName::Loop => "icons/loop.svg".into(),
             IconName::LockClosed => "icons/lock-closed.svg".into(),
             IconName::LockOpen => "icons/lock-open.svg".into(),
+            IconName::Copy => "icons/copy.svg".into(),
+            IconName::Delete => "icons/delete.svg".into(),
         }
     }
 }

@@ -17,12 +17,11 @@ use std::{
     },
 };
 
+use crate::gpui_component::Root;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Point, Size, Styled,
+    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Pixels, Point, Size, Styled,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
-    transparent_black,
 };
-use gpui_component::Root;
 use url::Url;
 
 use crate::model::content::{CommandContent, FileStickerContent};
@@ -68,6 +67,11 @@ pub(super) struct OpenOptions {
     pub(super) hidden: bool,
     /// Flash the window background in the sticker color.
     pub(super) flash: bool,
+    /// When true, ignore the saved per-monitor placement and open the window centered on the
+    /// primary display, keeping only the saved size. Used when reopening a sticker that was
+    /// saved as [`StickerState::Close`]: the position it last lived at is stale, but its size is
+    /// still meaningful.
+    pub(super) preserve_size_only: bool,
 }
 
 impl StickerWindow {
@@ -90,7 +94,21 @@ impl StickerWindow {
         id: i64,
         open_in_settings: bool,
     ) -> anyhow::Result<()> {
-        if cx.update(|cx| activate_open_window(id, cx))? {
+        if cx.update(|cx| -> anyhow::Result<bool> {
+            if let Some(handle) = find_open_window(id) {
+                handle.update(cx, |_, window, cx| {
+                    window.activate_window();
+                    if open_in_settings
+                        && let Some(Some(root)) = window.root::<Root>()
+                        && let Ok(entity) = root.read(cx).view().clone().downcast::<StickerWindow>()
+                    {
+                        entity.update(cx, |this, cx| this.view.begin_edit(window, cx));
+                    }
+                })?;
+                return Ok(true);
+            }
+            Ok(false)
+        })? {
             return Ok(());
         }
 
@@ -214,6 +232,25 @@ impl StickerWindow {
         Self::open_with_options(cx, sticker_events_tx, store, detail, open_options)
     }
 
+    /// Discard clean unlocked views after key rotation without saving stale ciphertext.
+    pub(crate) fn invalidate_protected_views(cx: &mut App) {
+        let handles = OPEN_STICKERS
+            .read()
+            .map(|rows| rows.clone())
+            .unwrap_or_default();
+        for (_, handle) in handles {
+            let _ = handle.update(cx, |_, window, cx| {
+                if let Some(Some(root)) = window.root::<Root>()
+                    && let Ok(entity) = root.read(cx).view().clone().downcast::<StickerWindow>()
+                {
+                    entity.update(cx, |this, cx| {
+                        this.view.relock_protected_content(window, cx)
+                    });
+                }
+            });
+        }
+    }
+
     pub fn try_close(id: i64, cx: &mut App) -> bool {
         tracing::info!("Trying to close sticker with id: {}", id);
         let Some((open_id, handle)) = OPEN_STICKERS.write().ok().and_then(|mut open_stickers| {
@@ -267,11 +304,16 @@ impl StickerWindow {
         // open them is from the sticker list, which opens them in their settings view.
         let hidden =
             !open_in_settings && command_content(&detail).is_some_and(|cmd| cmd.run_without_window);
+        // Reopening a sticker the database still records as closed: drop its old position and
+        // display, keep only the size, and rely on `open_with_options` to land it on the current
+        // primary display.
+        let preserve_size_only = detail.state == StickerState::Close;
         let options = OpenOptions {
             focus,
             open_id: detail.id,
             open_in_settings,
             hidden,
+            preserve_size_only,
             ..Default::default()
         };
         Self::open_with_options(cx, sticker_events_tx, store, detail, options)
@@ -306,6 +348,7 @@ impl StickerWindow {
             open_in_settings: false,
             hidden,
             flash: false,
+            preserve_size_only: false,
         };
         Self::open_with_options(cx, sticker_events_tx, store, detail, options)
     }
@@ -314,7 +357,7 @@ impl StickerWindow {
         cx: &mut App,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
-        detail: StickerDetail,
+        mut detail: StickerDetail,
         options: OpenOptions,
     ) -> anyhow::Result<()> {
         let OpenOptions {
@@ -322,6 +365,7 @@ impl StickerWindow {
             open_id,
             selection_run,
             hidden,
+            preserve_size_only,
             ..
         } = options;
 
@@ -335,10 +379,17 @@ impl StickerWindow {
         } else {
             default_window_size(detail.sticker_type)
         };
-        let bounds = Bounds::new(
+        let mut bounds = Bounds::new(
             gpui::point(px(detail.left as f32), px(detail.top as f32)),
             current_size.map(|x| px(x as f32)),
         );
+
+        // When reopening a sticker the database still records as closed, drop its per-monitor
+        // placement so `resolved_placement` and the deferred native correction below can not pull
+        // it back to where it last lived. The saved size is what we want to preserve.
+        if preserve_size_only {
+            forget_saved_placement(&mut detail);
+        }
 
         // Pick the monitor the sticker belongs to: its preferred one when that is plugged in,
         // otherwise the primary one, deriving a placement when there is no memory of the target.
@@ -355,17 +406,31 @@ impl StickerWindow {
         // GPUI creates the window from logical coordinates, which cannot express a precise
         // position across monitors of differing DPI. Aim at the right monitor here and let the
         // native correction below place the window exactly.
-        let bounds = match (&resolved, target_display) {
-            (Some(resolved), Some(display)) if !resolved.exact => {
-                Bounds::new(display.visible_bounds().origin, bounds.size)
-            }
-            _ => bounds,
-        };
+        if preserve_size_only {
+            bounds = cx
+                .primary_display()
+                .map(|display| {
+                    let visible = display.visible_bounds();
+                    Bounds::new(center_within(visible, bounds.size), bounds.size)
+                })
+                .unwrap_or_else(|| Bounds::new(point(px(0.), px(0.)), bounds.size));
+        } else {
+            bounds = match (&resolved, target_display) {
+                (Some(resolved), Some(display)) if !resolved.exact => {
+                    Bounds::new(display.visible_bounds().origin, bounds.size)
+                }
+                _ => bounds,
+            };
+        }
 
         let top_most = detail.top_most;
         let transient_topmost = top_most && (selection_run || detail.id <= 0);
         let virtual_desktop_id = detail.virtual_desktop_id.clone();
-        let restore_rect = resolved.map(|resolved| resolved.rect);
+        let restore_rect = if preserve_size_only {
+            None
+        } else {
+            resolved.map(|resolved| resolved.rect)
+        };
 
         let handle = cx.open_window(
             WindowOptions {
@@ -390,7 +455,9 @@ impl StickerWindow {
                 let entity = cx.new(|cx| {
                     StickerWindow::new(detail, store, sticker_events_tx, options, window, cx)
                 });
-                cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
+                // Component Root defaults to an opaque theme background. Sticker
+                // content owns its translucent surface; keep the overlay root clear.
+                cx.new(|cx| Root::new(entity, window, cx).bg(gpui::transparent_black()))
             },
         )?;
 
@@ -517,6 +584,35 @@ fn primary_display_size(cx: &App) -> Size<i32> {
         .unwrap_or(size(1920, 1080))
 }
 
+/// Strip a sticker's per-monitor placement memory so it reopens somewhere chosen by the caller
+/// instead of being pulled back to where it last lived.
+///
+/// `width` and `height` are kept so a sticker that was resized stays the size the user left it at.
+/// `virtual_desktop_id` is also kept because that is unrelated to position. `placements` is the
+/// source of truth used by [`super::bounds::resolved_placement`], and `native_left/top/width/height`
+/// are the fallback inline fields older stickers carry for the same purpose.
+fn forget_saved_placement(detail: &mut StickerDetail) {
+    detail.placements.clear();
+    detail.preferred_display_uuid = None;
+    detail.display_id = None;
+    detail.display_uuid = None;
+    detail.native_left = None;
+    detail.native_top = None;
+    detail.native_width = None;
+    detail.native_height = None;
+}
+
+/// Top-left coordinate that centers `size` inside `area`.
+///
+/// Negative origins (a monitor placed above or to the left of the primary) shift the centered
+/// result by the same amount, so a window stays inside the monitor it was centered on. When
+/// `size` is larger than `area`, it pins to the area's origin so the window remains reachable.
+fn center_within(area: Bounds<Pixels>, size: Size<Pixels>) -> Point<Pixels> {
+    let slack_x = (area.size.width - size.width).max(px(0.)) * 0.5_f32;
+    let slack_y = (area.size.height - size.height).max(px(0.)) * 0.5_f32;
+    point(area.left() + slack_x, area.top() + slack_y)
+}
+
 fn min_window_size(sticker_type: StickerType) -> Size<i32> {
     match sticker_type {
         StickerType::Timer => TimerSticker::min_window_size(),
@@ -612,6 +708,8 @@ fn preview_open_id(sources: &[String]) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::sticker::StickerPlacement;
+    use crate::native::windows::placement::DisplayEntry;
 
     fn sources(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|path| path.to_string()).collect()
@@ -663,5 +761,122 @@ mod tests {
         let origin = point(100, 100);
         // A limit equal to the origin pins every candidate onto the taken spot.
         assert_eq!(cascade(origin, origin, &[origin]), origin);
+    }
+
+    fn closed_detail_with_position(
+        rect: (i32, i32),
+        size: (i32, i32),
+        display: (&str, i64),
+    ) -> StickerDetail {
+        StickerDetail {
+            id: 7,
+            title: "memo".into(),
+            state: StickerState::Close,
+            left: rect.0,
+            top: rect.1,
+            width: size.0,
+            height: size.1,
+            top_most: false,
+            color: StickerColor::Gray,
+            sticker_type: StickerType::Markdown,
+            content: String::new(),
+            created_at: 0,
+            updated_at: 0,
+            display_id: Some(display.1),
+            display_uuid: Some(display.0.into()),
+            virtual_desktop_id: None,
+            native_left: Some(rect.0),
+            native_top: Some(rect.1),
+            native_width: Some(size.0),
+            native_height: Some(size.1),
+            preferred_display_uuid: Some(display.0.into()),
+            placements: vec![StickerPlacement {
+                display_uuid: display.0.into(),
+                display_id: Some(display.1),
+                native_left: rect.0,
+                native_top: rect.1,
+                native_width: size.0,
+                native_height: size.1,
+                scale_factor: 1.0,
+                updated_at: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn forget_saved_placement_keeps_size_and_strips_position() {
+        let mut detail = closed_detail_with_position((500, 250), (300, 200), ("display-a", 11));
+        let title = detail.title.clone();
+
+        forget_saved_placement(&mut detail);
+
+        assert_eq!(detail.width, 300);
+        assert_eq!(detail.height, 200);
+        assert!(detail.placements.is_empty());
+        assert!(detail.preferred_display_uuid.is_none());
+        assert!(detail.display_id.is_none());
+        assert!(detail.display_uuid.is_none());
+        assert!(detail.native_left.is_none());
+        assert!(detail.native_top.is_none());
+        assert!(detail.native_width.is_none());
+        assert!(detail.native_height.is_none());
+        // Pure stripping: state, title and type are unrelated to placement.
+        assert_eq!(detail.state, StickerState::Close);
+        assert_eq!(detail.title, title);
+        assert_eq!(detail.sticker_type, StickerType::Markdown);
+    }
+
+    #[test]
+    fn forget_saved_placement_makes_resolved_reopen_no_op_despite_connected_displays() {
+        // Even when a preferred monitor is plugged in, a sticker whose memory has been stripped
+        // must resolve to nothing so the open path is free to center it on the primary display.
+        let preferred = DisplayEntry {
+            uuid: "right".into(),
+            display_id: Some(2),
+            scale_factor: 1.5,
+            work_area: (1920, -1200, 4480, 0),
+            is_primary: false,
+        };
+        let primary = DisplayEntry {
+            uuid: "primary".into(),
+            display_id: Some(1),
+            scale_factor: 1.0,
+            work_area: (0, 0, 1920, 1040),
+            is_primary: true,
+        };
+        let displays = [primary.clone(), preferred.clone()];
+
+        let mut detail = closed_detail_with_position((2300, -1000), (315, 171), ("right", 2));
+        forget_saved_placement(&mut detail);
+
+        assert!(resolved_placement(&detail, &displays).is_none());
+    }
+
+    #[test]
+    fn center_within_aligns_a_smaller_window_in_the_middle() {
+        let area = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
+        let window = size(px(300.), px(200.));
+
+        assert_eq!(center_within(area, window), point(px(810.), px(440.)));
+    }
+
+    #[test]
+    fn center_within_pins_a_window_larger_than_the_area_to_the_origin() {
+        let area = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let window = size(px(200.), px(200.));
+
+        assert_eq!(center_within(area, window), point(px(0.), px(0.)));
+    }
+
+    #[test]
+    fn center_within_respects_a_negative_origin_for_an_above_or_left_monitor() {
+        // A second monitor above and to the right of the primary.
+        let area = Bounds::new(point(px(1920.), px(-1200.)), size(px(2560.), px(1400.)));
+        let window = size(px(600.), px(400.));
+
+        let centered = center_within(area, window);
+        // x = 1920 + (2560 - 600) / 2 = 1920 + 980
+        // y = -1200 + (1400 - 400) / 2 = -1200 + 500
+        assert_eq!(centered, point(px(2900.), px(-700.)));
     }
 }

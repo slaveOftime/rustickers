@@ -241,17 +241,26 @@ impl CommandSticker {
         self.stopping = false;
 
         self.result_html_entity = match &self.result {
-            CommandResult::Html(Some(html)) => Some(cx.new(|cx| {
-                let mut view = SimpleWebView::new(html.as_str(), window, cx);
-                view.set_bg(
-                    Rgba {
-                        a: 0.85,
-                        ..self.color.bg()
-                    },
-                    cx,
-                );
-                view
-            })),
+            CommandResult::Html(Some(html)) => {
+                match SimpleWebView::try_new(html.as_str(), window, cx) {
+                    Ok(entity) => {
+                        let bg = Rgba {
+                            a: 0.85,
+                            ..self.color.bg()
+                        };
+                        entity.update(cx, |view, cx| view.set_bg(bg, cx));
+                        Some(entity)
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "WebView backend refused the command-output HTML preview; \
+                             falling back to an empty surface"
+                        );
+                        None
+                    }
+                }
+            }
             _ => None,
         };
 

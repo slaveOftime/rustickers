@@ -1,7 +1,6 @@
 //! The command sticker's settings form.
 
-use gpui::{AnyElement, Context, prelude::*};
-use gpui_component::{
+use crate::gpui_component::{
     Sizable,
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
@@ -11,6 +10,7 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
+use gpui::{AnyElement, Context, prelude::*};
 
 use crate::model::content::{CommandResult, Scheduler};
 
@@ -55,7 +55,7 @@ impl CommandSticker {
             .child(
                 field().label("Selected text").child(
                     Switch::new("accept_selection")
-                        .label("Open and run from Ctrl/Cmd + Alt + C")
+                        .label("Open and run with the selection shortcut")
                         .small()
                         .checked(self.accept_selection)
                         .on_click(cx.listener(|this, _, _, _| {
@@ -110,7 +110,7 @@ impl CommandSticker {
             .child(
                 field()
                     .label(format!("Padding {}", self.padding.read(cx).value().start()))
-                    .child(Slider::new(&self.padding)),
+                    .child(Slider::new(&self.padding).px_2()),
             )
             .into_any_element()
     }

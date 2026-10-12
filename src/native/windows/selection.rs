@@ -1,18 +1,17 @@
 use std::sync::{Arc, RwLock, mpsc};
 
-use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
-    Render, ScrollHandle, Subscription, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, black, div, prelude::*, px, rgba, size,
-    transparent_black,
-};
-use gpui_component::{
-    FocusableExt, Icon, Root,
-    button::Button,
+use crate::gpui_component::{
+    ActiveTheme, Icon, Root,
+    button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    scroll::ScrollableElement,
     v_flex,
+};
+use gpui::{
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, Focusable, IntoElement,
+    Render, ScrollStrategy, Subscription, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowOptions, div,
+    prelude::*, px, size, uniform_list,
 };
 
 #[cfg(target_os = "macos")]
@@ -21,6 +20,7 @@ use cocoa::{
     base::{YES, nil},
 };
 
+use super::text;
 use crate::{
     model::{content::CommandContent, sticker::StickerDetail},
     native::{SelectionCommandTarget, components::IconName, windows::StickerWindowEvent},
@@ -55,6 +55,13 @@ enum SelectionPopupInit {
         selection: String,
     },
     Input,
+    /// Manual text input that, on confirm, reveals a chooser filtered to a single
+    /// selection-routed sticker. Used by the manager so the user lands in the
+    /// input box first and then sees the command they originally chose as the
+    /// only available target.
+    InputPicked {
+        sticker: StickerDetail,
+    },
 }
 
 pub struct SelectionPopup {
@@ -69,8 +76,14 @@ pub struct SelectionPopup {
     view: SelectionView,
     input_error: Option<String>,
     resolving: bool,
-    scroll_handle: ScrollHandle,
+    scroll_handle: UniformListScrollHandle,
     closing: bool,
+    /// When the manager launches the popup for a specific selection-routed
+    /// sticker, this records that sticker so `confirm_input` can skip the
+    /// DB-wide `accept_selection` resolve and reveal only the picked target.
+    /// It sticks across `edit_selection` retries so that editing the text and
+    /// confirming again keeps the focus on the chosen sticker.
+    picked: Option<StickerDetail>,
     _keystroke_subscription: Subscription,
     _window_activation_subscription: Subscription,
 }
@@ -102,6 +115,24 @@ impl SelectionPopup {
         store: ArcStickerStore,
     ) -> anyhow::Result<()> {
         Self::open_with(cx, sticker_events_tx, store, SelectionPopupInit::Input)
+    }
+
+    /// Open the popup with the input box focused, then route the confirm step to
+    /// the supplied selection-routed sticker. The popup comes up in input mode
+    /// so the user can type or accept an empty selection, and pressing Enter
+    /// reveals a chooser list filtered to that single sticker.
+    pub fn open_for_selection(
+        cx: &mut App,
+        sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
+        store: ArcStickerStore,
+        sticker: StickerDetail,
+    ) -> anyhow::Result<()> {
+        Self::open_with(
+            cx,
+            sticker_events_tx,
+            store,
+            SelectionPopupInit::InputPicked { sticker },
+        )
     }
 
     fn open_with(
@@ -139,7 +170,7 @@ impl SelectionPopup {
             },
             |window, cx| {
                 let entity = cx.new(|cx| Self::new(window, cx, sticker_events_tx, store, init));
-                cx.new(|cx| Root::new(entity, window, cx).bg(transparent_black().alpha(0.0)))
+                cx.new(|cx| Root::new(entity, window, cx).bg(gpui::transparent_black()))
             },
         )?;
 
@@ -168,19 +199,25 @@ impl SelectionPopup {
         store: ArcStickerStore,
         init: SelectionPopupInit,
     ) -> Self {
-        let (view, stickers, selection) = match init {
+        let (view, stickers, selection, picked) = match init {
             SelectionPopupInit::Choose {
                 stickers,
                 selection,
-            } => (SelectionView::Choose, stickers, selection),
-            SelectionPopupInit::Input => (SelectionView::Input, Vec::new(), String::new()),
+            } => (SelectionView::Choose, stickers, selection, None),
+            SelectionPopupInit::Input => (SelectionView::Input, Vec::new(), String::new(), None),
+            SelectionPopupInit::InputPicked { sticker } => (
+                SelectionView::Input,
+                Vec::new(),
+                String::new(),
+                Some(sticker),
+            ),
         };
 
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers ..."));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers…"));
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .submit_on_enter(true)
-                .placeholder("Type the text to send to a command sticker ...")
+                .placeholder("Type the text to send to a command sticker…")
         });
         let filtered = (0..stickers.len()).collect();
 
@@ -289,8 +326,9 @@ impl SelectionPopup {
             view,
             input_error: None,
             resolving: false,
-            scroll_handle: ScrollHandle::new(),
+            scroll_handle: UniformListScrollHandle::new(),
             closing: false,
+            picked,
             _keystroke_subscription: keystroke_subscription,
             _window_activation_subscription: window_activation_subscription,
         }
@@ -304,6 +342,20 @@ impl SelectionPopup {
         }
 
         let text = self.input.read(cx).value().to_string();
+
+        // The manager launches the popup for a specific sticker; honour that
+        // intent by skipping the DB-wide resolve and showing only the picked
+        // target. The pick sticks across `edit_selection` retries so that an
+        // edit-and-confirm still routes to the same sticker.
+        if let Some(sticker) = self.picked.as_ref() {
+            tracing::info!(
+                sticker_id = sticker.id,
+                text_len = text.len(),
+                "Show pre-picked selection sticker chooser"
+            );
+            self.show_stickers(text, vec![sticker.clone()], window, cx);
+            return;
+        }
 
         self.resolving = true;
         self.input_error = None;
@@ -353,7 +405,8 @@ impl SelectionPopup {
         self.stickers = Arc::new(stickers);
         self.selected = 0;
         self.view = SelectionView::Choose;
-        self.scroll_handle.scroll_to_item(0);
+        self.scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Nearest);
         self.query.update(cx, |query, cx| query.focus(window, cx));
         cx.notify();
     }
@@ -361,7 +414,8 @@ impl SelectionPopup {
     fn apply_filter(&mut self, query: &str, cx: &mut Context<Self>) {
         self.filtered = filtered_sticker_indices(&self.stickers, query);
         self.selected = 0;
-        self.scroll_handle.scroll_to_item(0);
+        self.scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Nearest);
         cx.notify();
     }
 
@@ -383,13 +437,56 @@ impl SelectionPopup {
         self.selected = (self.selected as isize + offset)
             .clamp(0, self.filtered.len().saturating_sub(1) as isize)
             as usize;
-        self.scroll_handle.scroll_to_item(self.selected);
+        self.scroll_handle
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         cx.notify();
     }
 
     fn open_at(&mut self, filtered_index: usize, cx: &mut Context<Self>) {
         self.selected = filtered_index;
         self.open_selected(cx);
+    }
+
+    /// The text the popup is currently acting on: the user-typed value while the input view is
+    /// shown, otherwise the captured selection (or the just-confirmed typed value, once
+    /// `show_stickers` rebuilds the chooser view around the user's text).
+    fn live_selection_text(&self, cx: &App) -> String {
+        match self.view {
+            SelectionView::Input => self.input.read(cx).value().to_string(),
+            SelectionView::Choose => self.selection.to_string(),
+        }
+    }
+
+    /// Persist the popup's current text into the clipboard collection so the TXT picker
+    /// can recover it later. Dedup is delegated to the repository; we still guard on empty
+    /// text here to avoid bumping activity timestamps for whitespace-only payloads.
+    fn record_selection_text(&self, cx: &mut Context<Self>) {
+        let text = self.live_selection_text(cx);
+        if text.trim().is_empty() {
+            return;
+        }
+        let Some(repository) = text::text_repository() else {
+            return;
+        };
+        let stamp = crate::utils::time::now_unix_millis();
+        let bytes = text.len();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { repository.capture(&text, stamp).await })
+                .await;
+            match result {
+                Ok(_) => {
+                    tracing::debug!(bytes, "Recorded selection text to clipboard collection");
+                }
+                Err(err) => tracing::warn!(
+                    bytes,
+                    error = ?err,
+                    "Failed to record selection text to clipboard collection"
+                ),
+            }
+        })
+        .detach();
     }
 
     fn open_selected(&mut self, cx: &mut Context<Self>) {
@@ -400,6 +497,7 @@ impl SelectionPopup {
             return;
         };
         self.closing = true;
+        self.record_selection_text(cx);
         let detail = self.stickers[sticker_index].clone();
         let sticker_id = detail.id;
         let store = self.store.clone();
@@ -451,6 +549,7 @@ impl SelectionPopup {
             return;
         }
         self.closing = true;
+        self.record_selection_text(cx);
         tracing::debug!("Dismissing selection popup");
         cx.defer(close_popup);
     }
@@ -464,35 +563,32 @@ impl SelectionPopup {
         v_flex()
             .id(("selection-sticker", sticker.id as u64))
             .w_full()
+            .h_16()
+            .flex_shrink_0()
             .px_3()
             .py_2()
-            .cursor_pointer()
-            .when(selected, |row| row.bg(rgba(0xe5c23696)))
-            .hover(|row| row.bg(rgba(0xe5c23664)))
+            .overflow_hidden()
+            .when(selected, |row| row.bg(cx.theme().list_active.alpha(0.3)))
+            .hover(|row| row.bg(cx.theme().list_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_at(filtered_index, cx);
             }))
-            .child(div().child(title))
+            .child(div().truncate().child(title))
             .when(!command.is_empty(), |row| {
-                row.child(
-                    div()
-                        .text_sm()
-                        .opacity(0.7)
-                        .overflow_hidden()
-                        .flex_wrap()
-                        .child(command),
-                )
+                row.child(div().text_sm().opacity(0.7).truncate().child(command))
             })
             .into_any_element()
     }
 
     fn choose_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let visible_count = self.filtered.len();
+        let view = cx.entity();
 
         v_flex()
             .size_full()
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .items_center()
                     .pb_2()
                     .window_control_area(WindowControlArea::Drag)
@@ -503,10 +599,9 @@ impl SelectionPopup {
                             Input::new(&self.query)
                                 .cleanable(true)
                                 .border_0()
+                                .focus_bordered(false)
                                 .w(px(200.0))
                                 .tab_index(0)
-                                .focus_ring(false)
-                                .bg(rgba(0x00000000))
                                 .prefix(Icon::new(IconName::Search)),
                         ),
                     )
@@ -514,36 +609,54 @@ impl SelectionPopup {
                     .child(
                         Button::new("close-selection-popup")
                             .icon(IconName::Close)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .cursor_pointer()
+                            .ghost()
                             // The header is a window drag area, which swallows
                             // clicks unless the button occludes it.
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     ),
             )
-            .child(h_flex().px_3().pb_2().text_sm().opacity(0.7).child(format!(
-                "{visible_count} matches · ↑/↓ select · Enter open · Esc close"
-            )))
             .child(
-                v_flex()
-                    .id("selection-popup-list")
+                div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll_handle)
-                    .vertical_scrollbar(&self.scroll_handle)
+                    .w_full()
+                    .overflow_hidden()
+                    .when(visible_count > 0, |body| {
+                        body.child(
+                            uniform_list(
+                                "selection-popup-list",
+                                visible_count,
+                                move |range, _, cx| {
+                                    view.update(cx, |this, cx| {
+                                        range.map(|ix| this.row(ix, cx)).collect::<Vec<_>>()
+                                    })
+                                },
+                            )
+                            .size_full()
+                            .track_scroll(&self.scroll_handle),
+                        )
+                    })
                     .when(visible_count == 0, |list| {
                         list.child(
                             div()
                                 .py_8()
                                 .text_center()
-                                .text_color(rgba(0xffffff88))
+                                .text_color(cx.theme().muted_foreground)
                                 .child("No matching command stickers"),
                         )
-                    })
-                    .children((0..visible_count).map(|index| self.row(index, cx))),
+                    }),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .justify_between()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .opacity(0.6)
+                    .child(format!("{visible_count} · ↑/↓ select"))
+                    .child("Enter/Esc"),
             )
             .into_any_element()
     }
@@ -557,14 +670,12 @@ impl SelectionPopup {
                 h_flex()
                     .items_center()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(div().text_sm().px_2().child("Input and invoke ..."))
+                    .child(div().text_sm().px_2().child("Input and invoke"))
                     .child(div().flex_1())
                     .child(
                         Button::new("close-selection-popup")
                             .icon(IconName::Close)
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .cursor_pointer()
+                            .ghost()
                             // The header is a window drag area, which swallows
                             // clicks unless the button occludes it.
                             .occlude()
@@ -577,8 +688,8 @@ impl SelectionPopup {
                         .size_full()
                         .mx_neg_0p5()
                         .my_neg_1()
-                        .bordered(false)
-                        .bg(rgba(0x00000000)),
+                        .bg(cx.theme().background.alpha(0.05))
+                        .bordered(false),
                 ),
             )
             .child(
@@ -586,10 +697,10 @@ impl SelectionPopup {
                     .p_2()
                     .text_sm()
                     .opacity(0.6)
-                    .when(error.is_some(), |row| row.text_color(rgba(0xf87171ff)))
+                    .when(error.is_some(), |row| row.text_color(cx.theme().danger))
                     .child(match &error {
                         Some(error) => format!("{error} · {INPUT_VIEW_HINT}"),
-                        None if self.resolving => "Looking for command stickers ...".to_string(),
+                        None if self.resolving => "Looking for command stickers".to_string(),
                         None => INPUT_VIEW_HINT.to_string(),
                     }),
             )
@@ -601,7 +712,10 @@ impl Render for SelectionPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .bg(black().opacity(0.85))
+            .bg(cx
+                .theme()
+                .background
+                .opacity(crate::native::theme::WINDOW_SURFACE_OPACITY))
             .overflow_hidden()
             .child(match self.view {
                 SelectionView::Input => self.input_view(cx),

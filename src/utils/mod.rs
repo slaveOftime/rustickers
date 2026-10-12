@@ -1,3 +1,4 @@
+pub mod command_line;
 #[cfg(feature = "ui")]
 pub mod file;
 #[cfg(feature = "ui")]

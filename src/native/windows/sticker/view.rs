@@ -2,17 +2,17 @@
 
 use std::{sync::mpsc, time::Duration};
 
-use gpui::{
-    Animation, AnimationExt, AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window,
-    WindowControlArea, div, prelude::*, px, rgba,
-};
-use gpui_component::{
+use crate::gpui_component::{
     ActiveTheme,
     alert::Alert,
-    button::Button,
+    button::{Button, ButtonVariants},
     h_flex,
     menu::{DropdownMenu, PopupMenuItem},
     v_flex,
+};
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, IntoElement, MouseButton, Render, Rgba, Window,
+    WindowControlArea, div, prelude::*, px,
 };
 
 use crate::model::sticker::{StickerColor, StickerDetail, StickerState, StickerType};
@@ -107,7 +107,16 @@ impl StickerWindow {
                 TimerSticker::new(id, color, store, content, window, cx, sticker_events_tx)
             }))),
             StickerType::Markdown => Box::new(StickerViewEntity::new(cx.new(|cx| {
-                MarkdownSticker::new(id, color, store, content, window, cx, sticker_events_tx)
+                MarkdownSticker::new(
+                    id,
+                    color,
+                    store,
+                    content,
+                    window,
+                    cx,
+                    sticker_events_tx,
+                    options.open_in_settings,
+                )
             }))),
             StickerType::Command => {
                 let init = CommandStickerInit {
@@ -172,12 +181,62 @@ impl StickerWindow {
                     .min_w_0()
                     .when_some(extension, |view, extension| view.child(extension)),
             )
+            .when(
+                self.detail.sticker_type == StickerType::Markdown,
+                |header| {
+                    header.child(
+                        Button::new("rename-title")
+                            .icon(IconName::DocumentText)
+                            .ghost()
+                            .occlude()
+                            .tooltip("Rename title")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let Some(repo) = crate::native::windows::text::text_repository()
+                                else {
+                                    return;
+                                };
+                                let id = this.detail.id;
+                                let events = this.sticker_events_tx.clone();
+                                let weak = cx.weak_entity();
+                                crate::native::windows::text::title::prompt(
+                                    window,
+                                    cx,
+                                    false,
+                                    &this.detail.title,
+                                    Box::new(move |title, window, cx| {
+                                        window
+                                            .spawn(cx, async move |cx| {
+                                                if repo
+                                                    .update_title(
+                                                        crate::text::TextEntryId::Sticker(id),
+                                                        &title,
+                                                    )
+                                                    .await
+                                                    .is_ok()
+                                                {
+                                                    let _ = events.send(
+                                                        StickerWindowEvent::TitleChanged {
+                                                            id,
+                                                            title: title.clone(),
+                                                        },
+                                                    );
+                                                    let _ = weak.update_in(cx, |this, _, cx| {
+                                                        this.detail.title = title;
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            })
+                                            .detach();
+                                    }),
+                                );
+                            })),
+                    )
+                },
+            )
             .child(self.create_button(cx))
             .child(
                 Button::new("close")
-                    .bg(rgba(0x000000))
-                    .border_0()
-                    .cursor_pointer()
+                    .ghost()
                     .icon(IconName::Close)
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
@@ -201,7 +260,6 @@ impl StickerWindow {
                     .h(px(16.0))
                     .bg(theme.swatch())
                     .rounded_full()
-                    .cursor_pointer()
                     .window_control_area(WindowControlArea::Drag)
                     .occlude()
                     .on_mouse_down(
@@ -219,12 +277,12 @@ impl StickerWindow {
             .gap_2()
             .items_center()
             .occlude()
-            .cursor_grab()
             .window_control_area(WindowControlArea::Drag)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .occlude()
                     .when_some(extension, |view, extension| view.child(extension)),
             )
             .when(!self.view.disable_color_picker(cx), move |v| {
@@ -236,10 +294,8 @@ impl StickerWindow {
     fn create_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let root_entity = cx.entity();
         Button::new("create")
-            .border_0()
-            .bg(rgba(0x00000000))
+            .ghost()
             .icon(IconName::Plus)
-            .opacity(0.8)
             .dropdown_menu(move |mut menu, window, _| {
                 for (id, sticker_type) in [
                     ("text", StickerType::Markdown),

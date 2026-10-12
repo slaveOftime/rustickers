@@ -18,11 +18,11 @@ pub mod schedule;
 
 use std::sync::{Arc, Mutex};
 
-use gpui::{Context, Entity, Window, prelude::*};
-use gpui_component::{
+use crate::gpui_component::{
     input::{InputEvent, InputState, TextareaState},
     slider::SliderState,
 };
+use gpui::{Context, Entity, Window, prelude::*};
 
 use crate::{
     model::{
@@ -118,7 +118,8 @@ impl CommandSticker {
         } = init;
 
         let cmd = serde_json::from_str::<CommandContent>(&content).unwrap_or_default();
-        let open_in_settings = open_in_settings && (cmd.auto_close || cmd.run_without_window);
+        // Opening from the manager is inspection, never implicit execution.
+        let open_in_settings = open_in_settings && selection.is_none();
 
         let title = cx.new(|cx| {
             InputState::new(window, cx)
@@ -154,7 +155,17 @@ impl CommandSticker {
 
         let result_html_entity = match &cmd.result {
             CommandResult::Html(Some(html)) if !open_in_settings => {
-                Some(cx.new(|cx| SimpleWebView::new(html.as_str(), window, cx)))
+                match SimpleWebView::try_new(html.as_str(), window, cx) {
+                    Ok(entity) => Some(entity),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "WebView backend refused the command-output HTML preview; \
+                             falling back to an empty surface"
+                        );
+                        None
+                    }
+                }
             }
             _ => None,
         };
@@ -307,6 +318,7 @@ impl CommandSticker {
                 return;
             }
 
+            let _ = sticker_events_tx.send(StickerWindowEvent::Created { id });
             let _ = entity.update(cx, |this, cx| {
                 this.error = None;
                 cx.notify();
@@ -359,6 +371,15 @@ impl super::Sticker for CommandSticker {
 
     fn use_default_bg(&self) -> bool {
         self.show_editing_view()
+    }
+
+    fn begin_edit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.process.is_some() {
+            return;
+        }
+        self.stop_schedule();
+        self.open_in_settings = true;
+        cx.notify();
     }
 
     fn disable_color_picker(&self) -> bool {

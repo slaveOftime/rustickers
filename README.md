@@ -1,136 +1,171 @@
 # Rustickers
 
-A lightweight desktop sticker app for notes, timers, command output, and file previews.
-
-Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), powered by local SQLite, and designed to stay fast and simple.
+A lightweight desktop sticker app for notes, timers, command output, file previews, and sketches. Built with [GPUI Kit](https://crates.io/crates/gpui-kit) and local SQLite.
 
 ![Rustickers demo](./screenshots/demo1.png)
 
-## Highlights
+## Run
 
-- **Markdown notes**: quick editing, preview mode, and **Ctrl+S** save.
-- **Timers**: countdown timers with an audible alert on completion.
-- **Command stickers**: pin command output, with optional cron scheduling, env vars, and working directory. A scheduled sticker keeps running in the background even when its window is closed, and the sticker list shows which ones are running or waiting on their next tick.
-- **File / URL preview**: preview files, folders, or URLs and pin them as stickers. Any number of previews can be open side by side; asking for the same files again raises the window that already shows them.
-- **Paint stickers**: freehand drawing space for quick sketches.
-
-## Global hotkeys
-
-- **Show main window**: `Ctrl + Alt + R` (macOS also supports `Cmd + Alt + R`)
-- **Toggle quick file preview**: `Ctrl/Cmd + Alt`
-- **Open command for selected text**: `Ctrl/Cmd + Space` (consumed instead of forwarded to the active app)
-- **Dismiss transient Rustickers windows**: `Esc` is consumed for selection popups, quick previews, and selected-text command runs
-- **Save in editor/markdown views**: `Ctrl + S`
-
-## Quick start
-
-Prerequisite: stable Rust toolchain.
-
-Run the desktop app:
+Install stable Rust, then:
 
 ```bash
-cargo run
+cargo run --bin rustickers
+cargo run --bin rst --no-default-features --features cli -- --help
 ```
 
-Run the CLI:
-
-```bash
-cargo run --bin rusticker --no-default-features --features cli -- --help
-```
-
-Build release binaries:
+For release binaries:
 
 ```bash
 cargo build --release --bin rustickers
-cargo build --release --bin rusticker --no-default-features --features cli
+cargo build --release --no-default-features --features cli --bin rst
 ```
 
-Outputs are written to `target/release/`.
+## Desktop shortcuts
 
-## CLI commands
+These are the defaults. Edit and save the four global shortcuts in **Settings**; changes take effect immediately and survive restart. Use Cmd instead of Ctrl on macOS.
 
-`rusticker` is the scripting surface for the app. It writes to the same database the app reads, so
-changes apply immediately when the app is running and on next launch when it is not.
-
-| Command | What it does |
+| Shortcut | Action |
 | --- | --- |
-| `list [--state open\|close\|all] [--type <t>] [-s <text>] [-n <limit>]` | Find stickers |
-| `show <id> [--content-only]` | Everything stored about one sticker |
-| `result <id>` | What a command sticker last produced |
-| `open <id>` / `close <id>` | Show or hide a sticker's window |
-| `delete <id> [-y]` | Remove a sticker permanently |
-| `view <path-or-url>` | Preview a file, folder or URL |
-| `markdown [-c <text>] [-f <file>]` | Create a note sticker |
-| `cmd <command> [...]` | Create a command sticker |
-| `skill [list\|show <name>\|run <name>]` | Worked examples |
+| Ctrl+Shift+R | Show the manager |
+| Ctrl+Shift+V | Open or dismiss TXTs |
+| Ctrl+Alt | Toggle quick file preview |
+| Ctrl+Shift+Space (Cmd on macOS) | Send selected text to a command sticker |
+| Esc | Dismiss a transient window |
+| Ctrl+S | Save editor content |
 
-All of them accept the shared appearance options `--width`, `--height`, `--left`, `--top`,
-`--color` (yellow, green, blue, pink, gray), `--top-most` and `--closed`. Markdown and command
-stickers default to 400×300; file and URL stickers are sized from their content.
+Command stickers support scheduled runs, including while their window is closed. File previews never encrypt or overwrite the source file.
 
-Passing a single file path or URL is treated as `view <source>` automatically, and trailing
-options are forwarded.
+## Manager
+
+The manager organizes stickers by **Text / Commands / Timers / Sketches / Files**, with dedicated **Scheduled** and **Selection commands** views. Search titles, command lines, folders, and cron expressions instantly. Hover a row for Open/Delete icon actions; Enter opens and Delete asks for confirmation. Command stickers open for inspection/settings without automatically rerunning.
+
+**Settings**, at the bottom of the sidebar, brings together master-password management, clipboard collection, and editable global shortcuts. Shortcut changes are staged until **Save shortcuts**; **Use defaults** fills the defaults without applying them. The sidebar collapses in narrow windows; Ctrl/Cmd+F focuses search, and arrows/Enter navigate and open the collection.
+
+## TXTs: saved text and clipboard history
+
+TXTs combines Markdown stickers (open or closed) with disposable clipboard captures. Search, filter by **All / Text / Clipboard**, and navigate with arrows or Page keys. Each item shows up to three lines; hover its trailing actions to rename, edit, save, lock, or delete. TXTs closes when it loses focus.
+
+- **Enter** pastes to the previous app when opened through the global shortcut; from the manager, it copies instead. Ctrl/Cmd+Enter always copies.
+- **F2 / double-click** opens the normal sticker editor. Editing a capture first saves it as a sticker.
+- **Save as sticker** (Ctrl/Cmd+R) turns a capture into a closed sticker.
+- **Lock / Save encrypted** (Ctrl/Cmd+L) asks for a required public title, then encrypts without opening a sticker.
+- **Rename** (Ctrl/Cmd+F2) changes a saved sticker's title; custom titles survive content edits. Locked stickers also show an editable public-title field above Unlock.
+- Deleting a capture is immediate; deleting a saved sticker requires confirmation.
+
+Clipboard collection starts **paused**. Enable it in TXTs. Captures preserve exact text and share a budget of 500 entries / 20 MiB; saved stickers are not evicted. When a new clipboard copy's content matches an already-saved text sticker (plain or locked) by digest, the saved sticker absorbs the recency and no capture row is created, keeping duplicate plaintext from lingering next to a sealed copy. Automatic paste and ownership-safe protected copying currently have a supported path only on Windows.
+
+## Protection and privacy
+
+Set or change the **Master password…** from the manager or TXTs locker. Once configured, encryption needs no password; each decryption requires it. There is no global unlock session. **Remove encryption…** is a separate authenticated action.
+
+Changing the password generates new keys and re-encrypts all supported locked text atomically. **There is no forgotten-password recovery or old-lock-format compatibility.** Titles stay public and searchable: do not put secrets in them.
+
+Internally copied decrypted text is excluded from collection, but externally copied secrets can enter history. The stored digest of an encrypted sticker lets a later copy of identical plaintext refresh the locked sticker's recency instead of adding a new plaintext capture, so the sensitive row does not silently get duplicated beside its sealed copy. Protected clipboard text is cleared after 30 seconds only if still owned; a crash may prevent clearing. Encryption does not erase OS clipboard history, other apps' copies, old database pages, backups, or the persisted digest (a digest reveals content equality and permits offline guessing of low-entropy secrets; it is omitted from redacted JSON output). Legacy locked stickers gain a digest only after an authorized edit, unlock, or password rotation; until then identical external copies cannot be recognized without decrypting. Protect backups too.
+
+## CLI
+
+`rst` separates saved stickers, text workflows, and live previews. One command has one job; there are no legacy command aliases or implicit file-path commands. Start with `rst --help`, then `rst <command> --help`.
+
+### Save and manage stickers
+
+```bash
+rst note                                      # blank editable note
+rst note "Remember this"                       # Markdown note
+rst note --file notes.md                       # exact UTF-8 file contents
+rst note --file -                              # read stdin; empty note is valid
+rst list                                      # all stickers, open and closed
+rst list --type command --state open -s tests
+rst show 42                                   # inspect stored content and settings
+rst show 42 --content-only                     # exact content, no added newline
+rst open 42
+rst close 42
+rst delete 42 --yes                            # permanent; explicit for scripts
+```
+
+Sticker IDs are positive integers. States are `all`, `open`, and `closed`. Creating a note opens it by default; `--closed` saves it without a window. Width and height must be positive; color names are validated. Deletion asks for confirmation only in an interactive terminal; JSON and redirected input require `--yes`.
 
 ### Command stickers
 
-`rusticker cmd` exposes everything a command sticker can do:
-
 ```bash
-rusticker cmd "cargo test" --result text --dir .          # run and show plain output
-rusticker cmd "npm test 2>&1 | tail -20" --shell          # use a shell for pipes and redirection
-rusticker cmd "gh pr list" --cron "0 */5 * * * *"         # re-run every five minutes
-rusticker cmd "copilot -p {{RUSTICKERS_SELECTION}}" \
-  --accept-selection --result markdown --closed           # answer whatever text you have selected
+rst command --dir . --result text -- cargo test
+rst command --title "Git status" --closed -- git status --short
+rst command --shell "npm test 2>&1"            # explicit platform shell
+rst command --cron "0 */5 * * * *" -- gh pr list
+rst result 42                                 # latest stored output, not a new run
 ```
 
-Output can be rendered five ways with `--result`: `text`, `markdown`, `html` (an embedded browser
-view), `svg` (an image) or `source` (the output is one file path or URL to preview). Other useful
-flags are `--stream`, `--no-window`, `--auto-close`, `--padding`, `--env KEY=VALUE` and `--idle`.
+Put sticker options **before `--`**; everything after it is the program's exact argument list. No second layer of command-string quoting is needed. Direct mode never invokes a shell. `--shell SCRIPT` is exclusive with direct arguments; it uses PowerShell on Windows (`pwsh` when available) and `sh` elsewhere. Shell scripts are platform-specific code.
 
-Two things are worth knowing. A command sticker does **not** run through a shell by default: the
-string is split with Windows argument rules and the program is looked up on `PATH`, so pipes and
-`&&` are literal text until you add `--shell`. And a sticker created without `--idle` is *armed*,
-meaning it runs when its window opens and again each time the app starts.
+Creation **saves a command; it does not run it in the CLI or wait for output**. The desktop runs armed commands according to their lifecycle. `--idle` saves a stopped command; selection commands are triggered only by the hotkey. Schedules remain armed when their windows are closed and wait for their first tick after creation/app launch. `--run-now` requires a schedule and applies to a manual start from the sticker window, not creation or restoration. Cron uses six fields beginning with seconds, with an optional seventh year field.
 
-An armed sticker with `--cron` also keeps running with its window **closed**, for as long as the
-app is running, so `rusticker result <id>` always has the latest output waiting. Combine it with
-`--no-window` for a schedule that never puts anything on screen. In the sticker list, a spinner
-marks a command that is running right now and a loop icon marks one waiting for its next tick.
-Press Stop in the sticker to disarm it, or delete the sticker to stop it for good.
+Working directories are checked and pinned to absolute paths at creation, including the default current directory. Repeat `--env KEY=VALUE` to set environment variables; values retain whitespace, names and duplicates are checked. Missing executables are errors unless explicitly allowed with `--allow-missing-program`; malformed commands still fail. Inert or conflicting options are rejected rather than silently ignored. `--result` supports `text`, `markdown`, `html`, `svg`, and `source`; progressive `--stream` requires text or Markdown.
 
-### Machine-readable output
-
-Add `--json` to any command to get exactly one JSON object on stdout, with an `ok` field so
-success and failure parse the same way:
+### Text to a program
 
 ```bash
-rusticker cmd "git status --short" --dir . --json   # -> {"ok":true,"id":42,...}
-rusticker result 42 --json                          # -> {"ok":true,"output":"...","has_run":true}
+rst text list                                 # saved notes + disposable captures
+rst text list --source saved --search notes
+rst text list --source clipboard --json
+rst text exec -- my-tool '{{txt}}'             # choose interactively
+rst text exec --id sticker:42 --non-interactive -- my-tool '{{txt}}'
+rst text exec --source clipboard --id clipboard:42 --non-interactive -- my-tool
 ```
 
-### Skills
+Both text commands default to `--source all --state all`. Source values are `saved`, `clipboard`, and `all`. Typed IDs (`sticker:42`, `clipboard:42`) prevent cross-table collisions. State filters apply to saved notes, not captures. Text listings are metadata/previews, not a plaintext export; locked entries expose only public titles/metadata.
 
-`rusticker skill list` is a catalogue of ready-made stickers — selection-driven AI prompts,
-scheduled watchers, HTML and SVG reports. `skill show <name>` explains one and prints the exact
-`rusticker` command it is equivalent to, and `skill run <name> --var key=value` creates it.
-`--dry-run` prints the command without creating anything.
+Quote `{{txt}}` for your shell. It is replaced only in argument tokens, never the executable. Exact text stays one argument, including quotes, newlines, and shell characters; inserted text is not expanded recursively. Without a placeholder, text is appended as one argument. Child stdin/stdout/stderr are inherited, and its exit status is returned. `--json` is incompatible with `text exec`; a child's own `--json` after `--` remains its argument.
 
-## Data and logs
+The chooser and password prompt use the controlling terminal, leaving child stdin untouched. For automation, use `--id` and `--non-interactive`; encrypted entries fail instead of prompting. Interactive decryption authorizes one use. Putting text into an interpreter's code argument can execute it, and sensitive argv can be visible to other processes.
 
-Rustickers stores data in `stickers.db` under your app data directory and writes daily-rotated logs to a sibling `logs/` directory.
+Selection **stickers** use a different placeholder: `{{RUSTICKERS_SELECTION}}`, or the `RUSTICKERS_SELECTION` environment variable. Use `--accept-selection`; these stickers default closed. Shell code must read the environment variable rather than splice the placeholder into code.
 
-Typical locations:
+### Recipes and agents
 
-- **Windows**: `%LOCALAPPDATA%\rustickers\data\stickers.db` and `%LOCALAPPDATA%\rustickers\data\logs\`
-- **macOS**: `~/Library/Application Support/rustickers/data/stickers.db` and `~/Library/Application Support/rustickers/data/logs/`
-- **Linux**: `~/.local/share/rustickers/data/stickers.db` and `~/.local/share/rustickers/data/logs/`
+```bash
+rst skill list
+rst skill show translate
+rst skill run translate --set language=Japanese --dry-run
+rst skill run note --set "text=Remember this"
+rst skill guide                               # operational Markdown guide for agents
+rst skill guide --json                        # same guide in a JSON response
+```
 
-Log level precedence:
+Recipes are bundled with the binary, expand to the same canonical commands, and are checked against the parser. `--set KEY=VALUE` is repeatable; unknown, duplicate, and missing required variables fail. `--dry-run` validates without creating storage or stickers. External tools are prerequisites, not installed automatically. `skill show` identifies incomplete recipes and platform requirements. Preview and execution share one expansion path; JSON argument arrays are authoritative, human command lines are quoted for the host shell.
 
-1. `RUSTICKERS_LOG`
-2. `RUST_LOG`
-3. fallback: `trace` (debug) / `info` (release)
+### Automation contract
 
-## Releases
+```bash
+rst --json list
+rst --data-dir ./scratch --json note "Experiment" --closed
+rst --offline command --closed -- cargo test
+```
 
-Tagging (for example `v0.1.0`) triggers GitHub Actions release artifacts for Windows and macOS (UI + CLI bundles).
+- `--json` works before or after the subcommand and returns **one object on stdout** with `ok: true` or `ok: false`. Help/version are normal text. Grammar errors exit **2**, validation/runtime failures **1**, success **0**. `text exec` is the child-stdio exception, including cancellation **130** and launch errors **126/127**.
+- `list` and `text list` return `items`, `count`, and `total`. IDs retain their command-specific integer/typed-string representation.
+- Desktop notification is `sent`, `unavailable`, `offline`, or `not_requested`. `sent` means transport delivery, **not** that a window opened or execution finished. Stored command results distinguish `armed` from `has_output`.
+- `--data-dir PATH` uses `PATH/stickers.db` and **always disables desktop IPC**, so experimental IDs cannot affect real windows. `--offline` disables IPC while using normal storage. Both propagate through recipe execution. Discovery, help, and dry-runs do not initialize storage.
+- `view PATH_OR_URL` is a transient desktop-only request; it requires an existing source or URL and enabled IPC. It does not save a sticker.
+- On Windows, Git Bash/MSYS can rewrite path-looking arguments before `rst` receives them. Set `MSYS_NO_PATHCONV=1` when literal child arguments such as `/c` must remain unchanged.
+
+## Data
+
+The app and CLI share `stickers.db`; logs live beside it in `logs/`. The CLI's `--data-dir` override is isolated and does not change the desktop's location.
+
+- Windows: `%LOCALAPPDATA%\rustickers\data\`
+- macOS: `~/Library/Application Support/rustickers/data/`
+- Linux: `~/.local/share/rustickers/`
+
+Startup imports usable raw text once from legacy clipboard storage, without recovering encrypted content. The old `clipboard.db` is left untouched and may contain sensitive data. Log level: `RUSTICKERS_LOG`, then `RUST_LOG`, then the build default.
+
+## Contributing
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the system map and [FRONTEND.md](FRONTEND.md) for desktop conventions and checks.
+
+CLI-only verification (no desktop dependencies):
+
+```bash
+cargo test --no-default-features --features cli
+cargo clippy --no-default-features --features cli --all-targets -- -D warnings
+```
+
+Process tests use temporary stores and disabled IPC. The bundled agent guide and recipes are tested against the same parser as the binary.
