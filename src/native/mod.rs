@@ -200,12 +200,6 @@ pub fn run_native(
                         crate::ipc::IpcEvent::ToggleClipboardChooser { focused_window } => {
                             let store = clipboard_handle_for_ipc.get().cloned();
                             let filter = clipboard_filter_for_ipc.get().cloned();
-                            tracing::info!(
-                                focused = ?focused_window,
-                                store_ready = store.is_some(),
-                                filter_ready = filter.is_some(),
-                                "IPC: ToggleClipboardChooser received"
-                            );
                             if let (Some(store), Some(_filter)) = (store, filter) {
                                 cx.update(|cx| {
                                     if let Err(err) = crate::native::windows::text::TextPickerWindow::toggle(

@@ -109,31 +109,15 @@ unsafe extern "system" fn keyboard_hook(
                     .matcher
                     .event(windows_key(event.vkCode), pressed, bindings::snapshot())
             };
-            // Always pass the keystroke through to the foreground window.
-            //
-            // The previous swallow-everything behaviour dropped Ctrl+Shift+V
-            // in front of the credential UI / winlogon SecureDesktop, so
-            // applications that the user wanted to receive the keystroke got
-            // nothing when our picker could not be shown there. Hosts such
-            // as mstsc.exe forward Ctrl+Shift+V straight through to the
-            // remote session; password manager reveals and other tools that
-            // bind this chord now run side-by-side with our picker instead of
-            // being silenced.
-            let _ = outcome.suppress;
-            if let Some(action) = outcome.action {
-                tracing::info!(
-                    ?action,
-                    vk = event.vkCode,
-                    foreground = foreground as u64,
-                    foreground_pid = pid,
-                    "Global hotkey matched; letting it through to the foreground app"
-                );
-            }
+            let suppress = outcome.suppress;
             dispatch(
                 &context.tx,
                 outcome,
                 (!foreground.is_null()).then_some(foreground as u64),
             );
+            if suppress {
+                return 1;
+            }
         }
     }
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
