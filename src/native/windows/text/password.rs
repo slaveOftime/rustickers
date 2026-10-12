@@ -153,7 +153,7 @@ fn open_form(
         let submit = form.clone(); let cancel = form.clone(); let closed = form.clone();
         dialog.title(title).overlay_closable(false).keyboard(false).close_button(!busy)
             .on_close(move |_, window, cx| closed.update(cx, |this, cx| { this.clear(window, cx); this.callback = None; }))
-            .child(v_flex().gap_3().on_key_down({ let form = form.clone(); move |event: &gpui::KeyDownEvent,window,cx| {
+            .child(v_flex().py_2().gap_3().on_key_down({ let form = form.clone(); move |event: &gpui::KeyDownEvent,window,cx| {
                 if event.keystroke.key == "enter" { form.update(cx,|this,cx|this.submit(window,cx)); cx.stop_propagation(); }
                 else if event.keystroke.key == "escape" { if !form.read(cx).busy { form.update(cx,|this,cx|{this.clear(window,cx);this.callback=None;});window.close_dialog(cx); } cx.stop_propagation(); }
             }})
