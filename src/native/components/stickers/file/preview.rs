@@ -269,7 +269,6 @@ impl super::FileSticker {
 
         match &self.preview {
             Some(FilePreview::Markdown { content, .. }) => div()
-                .p_2()
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
@@ -279,6 +278,7 @@ impl super::FileSticker {
                 )
                 .child(
                     TextView::markdown("file-markdown", content)
+                        .p_2()
                         .size_full()
                         .selectable(true)
                         .scrollable(true),

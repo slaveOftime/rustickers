@@ -376,6 +376,7 @@ pub fn is_code_ext(ext: &str) -> bool {
             | "yml"
             | "toml"
             | "json"
+            | "jsonl"
             | "pl"
             | "pm"
             | "groovy"

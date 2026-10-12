@@ -831,7 +831,6 @@ impl Render for MarkdownSticker {
         } else {
             body = body.child(
                 div()
-                    .p_2()
                     .flex_1()
                     .min_h_0()
                     .on_mouse_down(
@@ -842,10 +841,14 @@ impl Render for MarkdownSticker {
                             }
                         }),
                     )
-                    .child(TextView::markdown(
-                        ("markdown-text", self.id as u64),
-                        self.editor.read(cx).value().to_string(),
-                    )),
+                    .child(
+                        TextView::markdown(
+                            ("markdown-text", self.id as u64),
+                            self.editor.read(cx).value().to_string(),
+                        )
+                        .p_2()
+                        .scrollable(true),
+                    ),
             );
         }
         body.into_any_element()
