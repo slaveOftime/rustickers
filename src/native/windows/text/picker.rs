@@ -200,7 +200,7 @@ impl TextPicker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search texts ..."));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search texts…"));
         let subscription = cx.subscribe(&query, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.refilter(cx);
@@ -1023,7 +1023,7 @@ impl TextPicker {
                     .truncate()
                     .text_color(cx.theme().muted_foreground)
                     .child(if self.busy {
-                        "Working…".to_owned()
+                        "Working".to_owned()
                     } else if !self.status.is_empty() {
                         self.status.clone()
                     } else {
@@ -1074,7 +1074,7 @@ impl Render for TextPicker {
                 }).size_full().track_scroll(&self.scroll)))
                 .when(count == 0, |body| body.child(v_flex().size_full().items_center().justify_center().gap_2().px_4()
                     .child(Icon::new(IconName::DocumentText).size_6().text_color(cx.theme().muted_foreground))
-                    .child(div().text_sm().child(if self.loading { "Loading texts…" } else if !self.query.read(cx).value().is_empty() { "No matching texts" } else if self.source == SourceFilter::Text { "No saved texts yet" } else if self.source == SourceFilter::Clipboard { "No clipboard captures yet" } else { "Your text, within reach" }))
+                    .child(div().text_sm().child(if self.loading { "Loading texts" } else if !self.query.read(cx).value().is_empty() { "No matching texts" } else if self.source == SourceFilter::Text { "No saved texts yet" } else if self.source == SourceFilter::Clipboard { "No clipboard captures yet" } else { "Your text, within reach" }))
                     .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground)
                         .child(if !self.query.read(cx).value().is_empty() { "Try another search or clear the filter." } else if self.source == SourceFilter::Text { "Save a capture with its pin button or Ctrl+R to keep it." } else if self.capture_enabled { "Copied text will appear here. Saved stickers are always kept." } else { "Enable collection below, or create a text sticker." })))))
             .child(self.render_footer(cx))

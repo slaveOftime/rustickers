@@ -80,7 +80,7 @@ impl super::FileSticker {
                         .p_2()
                         .text_xs()
                         .opacity(0.85)
-                        .child("Refreshing summaries..."),
+                        .child("Refreshing summaries"),
                 )
             })
             .children(self.summaries.iter().map(|item| {

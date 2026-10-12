@@ -135,6 +135,9 @@ impl MainWindow {
             Self::loop_events(this, rx, cx).await;
         })
         .detach();
+        // Land the cursor in the search box on open. Mirrors the TXTs picker so
+        // every manager launch is one keystroke away from filtering stickers.
+        query.update(cx, |input, cx| input.focus(window, cx));
         Self {
             store,
             sticker_events_sender: tx,

@@ -176,11 +176,11 @@ impl SelectionPopup {
             SelectionPopupInit::Input => (SelectionView::Input, Vec::new(), String::new()),
         };
 
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers ..."));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Filter stickers…"));
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .submit_on_enter(true)
-                .placeholder("Type the text to send to a command sticker ...")
+                .placeholder("Type the text to send to a command sticker…")
         });
         let filtered = (0..stickers.len()).collect();
 
@@ -618,7 +618,7 @@ impl SelectionPopup {
                 h_flex()
                     .items_center()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(div().text_sm().px_2().child("Input and invoke ..."))
+                    .child(div().text_sm().px_2().child("Input and invoke"))
                     .child(div().flex_1())
                     .child(
                         Button::new("close-selection-popup")
@@ -648,7 +648,7 @@ impl SelectionPopup {
                     .when(error.is_some(), |row| row.text_color(cx.theme().danger))
                     .child(match &error {
                         Some(error) => format!("{error} · {INPUT_VIEW_HINT}"),
-                        None if self.resolving => "Looking for command stickers ...".to_string(),
+                        None if self.resolving => "Looking for command stickers".to_string(),
                         None => INPUT_VIEW_HINT.to_string(),
                     }),
             )

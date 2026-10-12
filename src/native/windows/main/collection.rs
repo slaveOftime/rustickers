@@ -107,7 +107,7 @@ impl MainWindow {
                                 .font_medium()
                                 .text_color(cx.theme().foreground)
                                 .child(if self.loading {
-                                    "Loading stickers…"
+                                    "Loading stickers"
                                 } else if self.error.is_some() {
                                     "Could not load stickers"
                                 } else if !self.query.read(cx).value().is_empty() {

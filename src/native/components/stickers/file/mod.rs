@@ -403,7 +403,7 @@ impl Render for FileSticker {
             })
             .when(
                 (self.preview.is_none() || self.summaries.is_empty()) && self.refreshing,
-                |view| view.child(div().p_2().text_sm().opacity(0.85).child("Loading ...")),
+                |view| view.child(div().p_2().text_sm().opacity(0.85).child("Loading")),
             )
             .when(
                 self.preview.is_some()

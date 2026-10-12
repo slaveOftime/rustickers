@@ -21,8 +21,8 @@ use crate::{
     text::{TextEntry, TextEntryId, protection},
 };
 use gpui::{
-    Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent, Subscription, Window,
-    div, prelude::*,
+    Context, Entity, FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent,
+    Subscription, Window, div, prelude::*,
 };
 use zeroize::Zeroizing;
 
@@ -44,6 +44,13 @@ pub struct MarkdownSticker {
     content_visible: bool,
     busy: bool,
     _changes: Subscription,
+    /// Focus handle for the locked-sticker view. Locked stickers show a centered
+    /// public-title field above an Unlock button; focusing this handle on open
+    /// puts Enter on the body onto the unlock button so the most common
+    /// follow-up action is the next keystroke. The inner title input keeps
+    /// its own handler and `stop_propagation`, so editing the title still
+    /// commits on Enter.
+    lock_focus: FocusHandle,
 }
 impl Drop for MarkdownSticker {
     fn drop(&mut self) {
@@ -102,10 +109,16 @@ impl MarkdownSticker {
             content_visible: !encrypted && !unsupported,
             busy: false,
             _changes: changes,
+            lock_focus: cx.focus_handle().tab_index(2).tab_stop(true),
         };
         if this.editing {
             this.edit_snapshot = Some(Zeroizing::new(content.to_owned()));
             this.editor.focus_handle(cx).focus(window, cx);
+        } else if !this.content_visible {
+            // Locked stickers lead with the Unlock button. The first keypress on
+            // the body should open the password prompt rather than land on the
+            // editable title.
+            this.lock_focus.focus(window, cx);
         }
         let repo = text_repository();
         if let Some(repo) = repo {
@@ -740,7 +753,22 @@ impl Render for MarkdownSticker {
             body = body.child(div().text_color(cx.theme().danger).child(error.clone()));
         }
         if !self.content_visible {
+            let busy = self.busy;
+            let encrypted = self.encrypted;
             return body
+                .track_focus(&self.lock_focus)
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    // Pressing Enter while focus is on the locked-view body
+                    // (the surface that holds the title field and the Unlock
+                    // button) routes to the Unlock action instead of commit the
+                    // title. The title-input wrapper still owns its Enter handler
+                    // and stops propagation when title is focused, so editing
+                    // the title remains a single keystroke.
+                    if event.keystroke.key == "enter" && !busy && encrypted {
+                        this.request_unlock(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
                 .p_4()
                 .justify_center()
                 .child(div().text_sm().child("Public title"))
