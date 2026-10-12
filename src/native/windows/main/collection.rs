@@ -283,6 +283,37 @@ impl MainWindow {
                             .when(selected, |v| v.visible())
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .when(self.section == Section::Scheduled, |v| {
+                                v.child(
+                                    Button::new(("start-now", id as u64))
+                                        .small()
+                                        .ghost()
+                                        .icon(IconName::Play)
+                                        .accessibility_label("Start now")
+                                        .tooltip("Start now")
+                                        .disabled(running)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.start_now(id, cx);
+                                        })),
+                                )
+                            })
+                            .when(
+                                self.section == Section::Selection
+                                    && command.is_some_and(|c| c.accept_selection),
+                                |v| {
+                                    v.child(
+                                        Button::new(("run-with-selection", id as u64))
+                                            .small()
+                                            .ghost()
+                                            .icon(IconName::Forward)
+                                            .accessibility_label("Run with selection")
+                                            .tooltip("Run with selection")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_with_selection(id, cx);
+                                            })),
+                                    )
+                                },
+                            )
                             .child(
                                 Button::new(("delete-sticker", id as u64))
                                     .small()

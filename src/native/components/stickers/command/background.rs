@@ -46,6 +46,39 @@ pub fn start(cx: &mut App, store: ArcStickerStore) {
         .detach();
 }
 
+/// Run an armed command sticker once outside its schedule.
+///
+/// The latest content is fetched from the store before invoking [`run_once`], so a manual run
+/// always uses the command the user is looking at rather than the snapshot the supervisor cached.
+/// Output is persisted through the same path the scheduler uses, so the next window-open sees the
+/// new result.
+pub fn run_now(id: i64, store: ArcStickerStore, cx: &mut App) {
+    cx.spawn(async move |cx| run_via_store(id, store, cx).await)
+        .detach();
+}
+
+async fn run_via_store(id: i64, store: ArcStickerStore, cx: &mut AsyncApp) {
+    let detail = match store.get_sticker(id).await {
+        Ok(detail) => detail,
+        Err(err) => {
+            tracing::warn!(id, error = ?err, "Failed to load sticker for manual run");
+            return;
+        }
+    };
+    let content: CommandContent = match serde_json::from_str(&detail.content) {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::warn!(
+                id,
+                error = ?err,
+                "Sticker content unreadable; cannot run manually"
+            );
+            return;
+        }
+    };
+    run_once(id, content, store, cx).await;
+}
+
 struct Job {
     /// Kept so an edited expression is detected and the next fire time recomputed.
     expr: String,

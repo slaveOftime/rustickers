@@ -19,14 +19,16 @@ use crate::{
             IconName,
             stickers::{
                 Sticker,
-                command::{CommandSticker, activity as command_activity},
+                command::{
+                    CommandSticker, activity as command_activity, background as command_background,
+                },
                 file::FileSticker,
                 markdown::MarkdownSticker,
                 paint::PaintSticker,
                 timer::TimerSticker,
             },
         },
-        windows::{StickerWindowEvent, sticker::StickerWindow, text},
+        windows::{StickerWindowEvent, selection::SelectionPopup, sticker::StickerWindow, text},
     },
     storage::ArcStickerStore,
 };
@@ -478,6 +480,41 @@ impl MainWindow {
                     true
                 })
         });
+    }
+    /// Run an armed command sticker outside its schedule. Bound to the manager's Start now
+    /// action so users do not have to wait for the next cron tick to confirm a fix.
+    fn start_now(&mut self, id: i64, cx: &mut Context<Self>) {
+        tracing::info!(sticker_id = id, "Manual command run requested from manager");
+        command_background::run_now(id, self.store.clone(), cx);
+    }
+    /// Pop up the selection-routing dialog pre-populated with this sticker. The manager's
+    /// Selection section only lists commands that accept selection, so a single-row chooser
+    /// already lines up the action the user came here to take.
+    fn run_with_selection(&mut self, id: i64, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let tx = self.sticker_events_sender.clone();
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let detail = match store.get_sticker(id).await {
+                Ok(detail) => detail,
+                Err(err) => {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.error = Some(format!("Could not load sticker: {err}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let result =
+                cx.update(|cx| SelectionPopup::open(cx, tx, store, vec![detail], String::new()));
+            if let Err(err) = result {
+                let _ = entity.update(cx, |this, cx| {
+                    this.error = Some(format!("Could not open the selection popup: {err:#}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
     fn sort_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let owner = cx.entity();
