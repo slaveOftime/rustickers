@@ -537,27 +537,37 @@ impl TextPicker {
         // call through the new (or null) foreground process until the lock
         // expires -- which is why prior versions pasted into rustickers-
         // owned windows fine but failed against any other app.
+        //
+        // Some hosts are simply unreachable from an interactive-station,
+        // medium-integrity process: Winlogon's credential provider, the
+        // SecureDesktop used by UAC consent, and the RDP logon UI all
+        // live on `WinSta0\Winlogon` or run at a higher integrity level.
+        // `SetForegroundWindow` never reaches them, and `verify` rightly
+        // refuses to land a synthesized Ctrl+V in front of the wrong
+        // window. In that case degrade to copy mode and surface a hint so
+        // the user can paste manually into the original destination.
+        let mut mode_copy_only = copy_only;
         let foreground_done = if !copy_only {
             match destination {
                 None => false,
                 Some(destination) => {
-                    if let Err(err) = crate::native::clipboard::paste::foreground(Some(destination))
-                    {
-                        let _ = weak.update(cx, |this, cx| {
-                            this.busy = false;
-                            this.delivering = false;
-                            this.status = format!("Could not use text. {err}");
+                    match crate::native::clipboard::paste::foreground(Some(destination)) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            mode_copy_only = true;
+                            self.status = format!(
+                                "Pasted target is unreachable; copied to clipboard. {err}"
+                            );
                             cx.notify();
-                        });
-                        return;
+                            false
+                        }
                     }
-                    true
                 }
             }
         } else {
             false
         };
-        if !copy_only {
+        if !mode_copy_only {
             clear_popup();
             window.remove_window();
         }
@@ -573,7 +583,7 @@ impl TextPicker {
                             &filter,
                             &text,
                             destination,
-                            copy_only,
+                            mode_copy_only,
                             entry.is_encrypted(),
                             foreground_done,
                         )?;
@@ -589,9 +599,16 @@ impl TextPicker {
                     this.busy = false;
                     this.delivering = false;
                     if result.is_ok() {
-                        clear_popup();
-                        window.remove_window();
-                    } else {
+                        if !mode_copy_only {
+                            clear_popup();
+                            window.remove_window();
+                        } else if this.status.is_empty() {
+                            // Pure Ctrl+Enter or the unreachable-fallback
+                            // path: a quiet success is enough; the user
+                            // already has the focus they need to paste.
+                            this.status.clear();
+                        }
+                    } else if this.status.is_empty() {
                         this.status =
                             "Could not use text. Check the password or paste destination.".into();
                     }
