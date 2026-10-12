@@ -100,7 +100,7 @@ jobs:
         shell: bash
         run: |
           set -eo pipefail
-          count=$((cargo tree --locked --features ui --edges normal 2>/dev/null || true) | grep -E 'gpui-pre v[0-9.]' | sed -E 's|.*gpui-pre v([0-9.]+).*|\1|' | sort -u | wc -l)
+          count=$((cargo tree --locked --features ui --edges normal 2>/dev/null || true) | grep -E 'gpui-pre v[0-9.]' | sed -E 's|.*gpui-pre v([0-9.]+).*|\1|' | sort -u | wc -l | tr -d '[:space:]')
           echo "Distinct gpui-pre versions in closure: ${count}"
           test "${count}" = "1" || (
             echo "Migration must collapse to one gpui-pre family version."
