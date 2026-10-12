@@ -179,28 +179,22 @@ impl Render for CommandSticker {
         window.set_rem_size(px(14.0));
 
         let body = if self.show_editing_view() {
-            div()
+            v_flex()
+                .overflow_y_scrollbar()
                 .p_2()
-                .size_full()
-                .overflow_scrollbar()
                 .child(self.form(cx))
                 .into_any_element()
         } else {
-            div()
-                .h_full()
-                .overflow_hidden()
-                .child(
-                    v_flex()
-                        .overflow_y_scrollbar()
-                        .child(self.result_view(bg_color, cx)),
-                )
+            v_flex()
+                .overflow_y_scrollbar()
+                .child(self.result_view(bg_color, cx))
                 .into_any_element()
         };
 
         v_flex()
             .relative()
             .size_full()
-            .child(body)
+            .child(div().h_full().overflow_hidden().child(body))
             .when_some(self.error.as_ref(), |view, message| {
                 view.child(Alert::error("error", message.as_str()).bg(bg_color))
             })

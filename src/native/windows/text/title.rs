@@ -52,7 +52,7 @@ pub(crate) fn prompt(
         let submit = form.clone(); let cancel = form.clone(); let keys = form.clone();
         let state = form.read(cx);
         dialog.title(if locking { "Name and lock text" } else { "Rename title" }).keyboard(false)
-            .child(v_flex().gap_2().on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
+            .child(v_flex().py_2().gap_2().on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" => keys.update(cx, |this,cx| this.submit(window,cx)),
                     "escape" => { window.close_dialog(cx); },

@@ -110,7 +110,7 @@ impl CommandSticker {
             .child(
                 field()
                     .label(format!("Padding {}", self.padding.read(cx).value().start()))
-                    .child(Slider::new(&self.padding)),
+                    .child(Slider::new(&self.padding).px_2()),
             )
             .into_any_element()
     }
