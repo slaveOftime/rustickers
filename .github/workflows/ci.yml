@@ -56,6 +56,7 @@ jobs:
             libxrandr-dev \
             libxi-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             libwayland-dev \
             libfontconfig1-dev \
             libfreetype6-dev
@@ -96,6 +97,7 @@ jobs:
         run: cargo test --locked --features cli
 
       - name: Verify zero duplicate GPUI families
+        shell: bash
         run: |
           set -eo pipefail
           count=$((cargo tree --locked --features ui --edges normal 2>/dev/null || true) | grep -E 'gpui-pre v[0-9.]' | sed -E 's|.*gpui-pre v([0-9.]+).*|\1|' | sort -u | wc -l)

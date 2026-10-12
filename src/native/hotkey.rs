@@ -240,15 +240,16 @@ fn start_listen(tx: Sender<IpcEvent>) -> anyhow::Result<()> {
             let mut matcher = matcher.lock().unwrap_or_else(|e| e.into_inner());
             let flags_outcome = matcher.flags(modifiers, snapshot);
             dispatch(&tx, flags_outcome, None);
-            if kind == CGEventType::KeyDown || kind == CGEventType::KeyUp {
+            let is_key_down = matches!(kind, CGEventType::KeyDown);
+            if matches!(kind, CGEventType::KeyDown | CGEventType::KeyUp) {
                 let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                 let outcome = if code == 0x35 {
                     matcher.escape(
-                        kind == CGEventType::KeyDown,
+                        is_key_down,
                         crate::native::windows::has_escape_dismiss_target(),
                     )
                 } else {
-                    matcher.event(mac_key(code), kind == CGEventType::KeyDown, snapshot)
+                    matcher.event(mac_key(code), is_key_down, snapshot)
                 };
                 let suppress = outcome.suppress;
                 dispatch(&tx, outcome, None);
