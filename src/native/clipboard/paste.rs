@@ -10,7 +10,10 @@ use std::{
 #[cfg(target_os = "windows")]
 mod platform {
     use anyhow::{Result, bail};
-    use std::{thread, time::{Duration, Instant}};
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
     use windows_sys::Win32::UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,

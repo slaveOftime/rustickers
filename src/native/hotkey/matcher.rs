@@ -220,15 +220,16 @@ mod tests {
         }
     }
     fn defaults() -> Snapshot {
-        config(["Ctrl+Shift+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Shift+Space"])
+        config([
+            "Ctrl+Shift+R",
+            "Ctrl+Shift+V",
+            "Ctrl+Alt",
+            "Ctrl+Shift+Space",
+        ])
     }
     #[test]
     fn keyed_shortcuts_fire_once_and_suppress_repeat_and_release() {
-        for (code, slot, second) in [
-            (82, 0, SHIFT),
-            (86, 1, SHIFT),
-            (32, 3, SHIFT),
-        ] {
+        for (code, slot, second) in [(82, 0, SHIFT), (86, 1, SHIFT), (32, 3, SHIFT)] {
             let mut m = Matcher::default();
             let s = defaults();
             m.event(Key::Modifier(CTRL, 1), true, s);
@@ -320,7 +321,11 @@ mod tests {
         next.revision = 1;
         assert!(m.event(Key::Code(86), false, next).suppress);
         m.event(Key::Modifier(CTRL, 1), false, next);
-        assert!(m.event(Key::Modifier(SHIFT, 1), false, next).action.is_none());
+        assert!(
+            m.event(Key::Modifier(SHIFT, 1), false, next)
+                .action
+                .is_none()
+        );
         m.event(Key::Modifier(ALT, 1), true, next);
         assert_eq!(
             m.event(Key::Code(113), true, next).action,

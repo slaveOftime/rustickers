@@ -20,12 +20,12 @@ use cocoa::{
     base::{YES, nil},
 };
 
+use super::text;
 use crate::{
     model::{content::CommandContent, sticker::StickerDetail},
     native::{SelectionCommandTarget, components::IconName, windows::StickerWindowEvent},
     storage::ArcStickerStore,
 };
-use super::text;
 
 use super::{EscapeDismissTarget, set_escape_dismiss_target_active, sticker::StickerWindow};
 
@@ -425,10 +425,7 @@ impl SelectionPopup {
                 .await;
             match result {
                 Ok(_) => {
-                    tracing::debug!(
-                        bytes,
-                        "Recorded selection text to clipboard collection"
-                    );
+                    tracing::debug!(bytes, "Recorded selection text to clipboard collection");
                 }
                 Err(err) => tracing::warn!(
                     bytes,

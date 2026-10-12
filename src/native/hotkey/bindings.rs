@@ -39,7 +39,13 @@ static CONFIGURATION: LazyLock<RwLock<Configuration>> = LazyLock::new(|| {
 });
 
 pub fn default_bindings() -> [String; 4] {
-    ["Ctrl+Shift+R", "Ctrl+Shift+V", "Ctrl+Alt", "Ctrl+Shift+Space"].map(str::to_string)
+    [
+        "Ctrl+Shift+R",
+        "Ctrl+Shift+V",
+        "Ctrl+Alt",
+        "Ctrl+Shift+Space",
+    ]
+    .map(str::to_string)
 }
 pub fn bindings() -> [String; 4] {
     CONFIGURATION

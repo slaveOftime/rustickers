@@ -541,8 +541,7 @@ impl TextPicker {
             match destination {
                 None => false,
                 Some(destination) => {
-                    if let Err(err) =
-                        crate::native::clipboard::paste::foreground(Some(destination))
+                    if let Err(err) = crate::native::clipboard::paste::foreground(Some(destination))
                     {
                         let _ = weak.update(cx, |this, cx| {
                             this.busy = false;
