@@ -188,6 +188,7 @@ struct TextPicker {
     loading: bool,
     preferred_selection: Option<TextEntryId>,
     _query: Subscription,
+    _keystrokes: Subscription,
     _activation: Subscription,
 }
 impl Drop for TextPicker {
@@ -213,6 +214,38 @@ impl TextPicker {
                 this.scroll.scroll_to_item(0, ScrollStrategy::Nearest);
                 this.status.clear();
                 cx.notify();
+            }
+        });
+        // Like the selection chooser's Escape handler, intercept before GPUI
+        // resolves child actions: the query input otherwise consumes Ctrl+C.
+        let own_window_id = window.window_handle().window_id();
+        let entity = cx.weak_entity();
+        let keystrokes = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle().window_id() != own_window_id || !window.is_window_active() {
+                return;
+            }
+            let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
+            let copy = event.keystroke.key == "c" && command;
+            if !copy && event.keystroke.key != "escape" {
+                return;
+            }
+            let handled = entity.upgrade().is_some_and(|entity| {
+                entity.update(cx, |this, cx| {
+                    if window.has_active_dialog(cx) || this.busy {
+                        return false;
+                    }
+                    if copy {
+                        this.use_selected(true, true, window, cx);
+                    } else {
+                        clear_popup();
+                        window.remove_window();
+                    }
+                    true
+                })
+            });
+            if handled {
+                cx.stop_propagation();
+                window.prevent_default();
             }
         });
         let activation = cx.observe_window_activation(window, |this, window, _| {
@@ -245,6 +278,7 @@ impl TextPicker {
             loading: true,
             preferred_selection: None,
             _query: subscription,
+            _keystrokes: keystrokes,
             _activation: activation,
         };
         query.update(cx, |input, cx| input.focus(window, cx));
@@ -567,9 +601,8 @@ impl TextPicker {
                         Ok(()) => true,
                         Err(err) => {
                             mode_copy_only = true;
-                            self.status = format!(
-                                "Pasted target is unreachable; copied to clipboard. {err}"
-                            );
+                            self.status =
+                                format!("Pasted target is unreachable; copied to clipboard. {err}");
                             cx.notify();
                             false
                         }
@@ -612,12 +645,8 @@ impl TextPicker {
                     this.delivering = false;
                     if result.is_ok() {
                         if !mode_copy_only || close_after {
-                            // Paste path, foreground-degrade copy path, or the
-                            // explicit Ctrl+C shortcut all close the picker
-                            // once the clipboard write completes. The pure
-                            // Ctrl+Enter copy path stays open so the user can
-                            // pick another entry or fall back to a manual
-                            // paste without re-opening the chooser.
+                            // Ctrl+C closes only after a successful copy.
+                            // Ctrl+Enter and an unreachable paste target stay open.
                             clear_popup();
                             window.remove_window();
                         } else if this.status.is_empty() {
@@ -731,39 +760,15 @@ impl TextPicker {
         if window.has_active_dialog(cx) || self.busy {
             return;
         }
-        let focus_in_query = self.query.focus_handle(cx).contains_focused(window, cx);
-        // Menus consume Escape first; toolbar focus must not strand the utility.
-        // Ctrl+C is treated like Escape here: it must work whether the focus
-        // is sitting in the search field or on a clicked row, because the
-        // user only has one chord for "copy" across the whole OS.
-        let is_top_level_shortcut = key == "escape" || (key == "c" && command);
-        if !is_top_level_shortcut && !focus_in_query {
+        if !self.query.focus_handle(cx).contains_focused(window, cx) {
             return;
         }
         match key {
-            "escape" => {
-                if !self.busy {
-                    clear_popup();
-                    window.remove_window();
-                }
-            }
             "up" => self.move_selection(-1, cx),
             "down" => self.move_selection(1, cx),
             "pageup" => self.move_selection(-3, cx),
             "pagedown" => self.move_selection(3, cx),
-            "enter" => self.use_selected(
-                command || self.destination.is_none(),
-                false,
-                window,
-                cx,
-            ),
-            // Ctrl+C is the cross-platform muscle memory for "copy whatever
-            // is selected". Inside the chooser that is the highlighted
-            // entry, so we route through the same `use_selected` path as
-            // Ctrl+Enter -- but with `close_after = true` so the dialog
-            // hides itself once the clipboard write lands, mirroring the
-            // paste-mode success path. Locked entries are unlocked first.
-            "c" if command => self.use_selected(true, true, window, cx),
+            "enter" => self.use_selected(command || self.destination.is_none(), false, window, cx),
             "f2" if command => self.rename(window, cx),
             "f2" => self.save(false, true, window, cx),
             "delete" if self.query.read(cx).value().is_empty() => self.delete(window, cx),
@@ -1174,6 +1179,167 @@ fn dispatch_content(
 #[cfg(test)]
 mod picker_tests {
     use super::*;
+    /// Uses isolated storage and benign clipboard text. Opt-in because it opens
+    /// native windows and temporarily owns the desktop clipboard.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "opt-in Windows UI test: opens TXT pickers and temporarily writes the clipboard"]
+    fn ctrl_c_copies_selected_entry_and_closes_native_window() -> anyhow::Result<()> {
+        use crate::native::clipboard::watcher;
+        use gpui::AppContext;
+        use std::time::{Duration, Instant};
+
+        struct RestoreClipboard(Arc<CaptureFilter>, Option<String>);
+        impl Drop for RestoreClipboard {
+            fn drop(&mut self) {
+                let _ = watcher::restore_clipboard_text(&self.0, self.1.as_deref());
+            }
+        }
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("stickers.db");
+        let repository = Arc::new(futures::executor::block_on(TextRepository::open(&path))?);
+        let store = futures::executor::block_on(crate::storage::open_sqlite(&path))?;
+        let filter = CaptureFilter::new();
+        let _restore = RestoreClipboard(filter.clone(), watcher::read_clipboard_text()?);
+        let selected_text = "rustickers picker shortcut regression — selected entry";
+        futures::executor::block_on(repository.capture(selected_text, 1))?;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        gpui::application()
+            .with_quit_mode(gpui::QuitMode::Explicit)
+            .with_assets(crate::native::components::Assets)
+            .run(move |cx| {
+                crate::gpui_component::init(cx);
+                cx.spawn(async move |cx| {
+                    let result = async {
+                        // Exercise both normal search focus and focus outside the query.
+                        for query_focused in [true, false] {
+                            eprintln!("Checking Ctrl+C with query_focused={query_focused}");
+                            watcher::write_clipboard_text(&filter, "clipboard sentinel")?;
+                            let repository = repository.clone();
+                            let store = store.clone();
+                            let filter = filter.clone();
+                            let (handle, picker) = cx.update(|cx| {
+                                let mut picker_handle = None;
+                                let handle =
+                                    cx.open_window(WindowOptions::default(), |window, cx| {
+                                        let (events, _) = std::sync::mpsc::channel();
+                                        let picker = cx.new(|cx| {
+                                            TextPicker::new(
+                                                repository, store, filter, events, None, window, cx,
+                                            )
+                                        });
+                                        picker_handle = Some(picker.clone());
+                                        cx.new(|cx| Root::new(picker, window, cx))
+                                    })?;
+                                anyhow::Ok((
+                                    gpui::AnyWindowHandle::from(handle),
+                                    picker_handle.unwrap(),
+                                ))
+                            })?;
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            loop {
+                                let ready = handle.update(cx, |_, window, cx| {
+                                    !picker.read(cx).loading && window.is_window_active()
+                                })?;
+                                if ready {
+                                    break;
+                                }
+                                anyhow::ensure!(
+                                    Instant::now() < deadline,
+                                    "picker did not become ready"
+                                );
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(20))
+                                    .await;
+                            }
+                            eprintln!("Picker ready; checking modal and busy guards");
+                            handle.update(cx, |_, window, cx| {
+                                anyhow::ensure!(
+                                    picker.read(cx).filtered.len() == 1,
+                                    "expected one selected entry"
+                                );
+                                // An active modal must keep its own Ctrl+C and Escape.
+                                window
+                                    .open_dialog(cx, |dialog, _, _| dialog.title("Shortcut guard"));
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("ctrl-c").unwrap(),
+                                    cx,
+                                );
+                                anyhow::ensure!(
+                                    !picker.read(cx).busy,
+                                    "Ctrl+C must not copy behind a modal"
+                                );
+                                window.close_dialog(cx);
+                                picker.update(cx, |this, _| this.busy = true);
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("ctrl-c").unwrap(),
+                                    cx,
+                                );
+                                picker.update(cx, |this, _| this.busy = false);
+                                anyhow::ensure!(
+                                    watcher::read_clipboard_text()?.as_deref()
+                                        == Some("clipboard sentinel"),
+                                    "modal and busy guards must leave the clipboard untouched"
+                                );
+                                if !query_focused {
+                                    window.blur(cx);
+                                }
+                                anyhow::Ok(())
+                            })??;
+                            // Let modal-close effects restore focus before dispatching.
+                            cx.background_executor()
+                                .timer(Duration::from_millis(20))
+                                .await;
+                            handle.update(cx, |_, window, cx| {
+                                if query_focused {
+                                    picker
+                                        .read(cx)
+                                        .query
+                                        .clone()
+                                        .update(cx, |query, cx| query.focus(window, cx));
+                                } else {
+                                    window.blur(cx);
+                                }
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("ctrl-c").unwrap(),
+                                    cx,
+                                );
+                                anyhow::ensure!(
+                                    picker.read(cx).busy,
+                                    "Ctrl+C must reach the selected-item copy handler"
+                                );
+                                anyhow::Ok(())
+                            })??;
+                            eprintln!("Copy dispatched; waiting for window removal");
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            while handle.update(cx, |_, _, _| ()).is_ok() {
+                                anyhow::ensure!(
+                                    Instant::now() < deadline,
+                                    "successful copy did not close picker"
+                                );
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(20))
+                                    .await;
+                            }
+                            anyhow::ensure!(
+                                watcher::read_clipboard_text()?.as_deref() == Some(selected_text),
+                                "clipboard must contain the selected entry"
+                            );
+                        }
+                        anyhow::Ok(())
+                    }
+                    .await;
+                    eprintln!("Native picker regression result: {result:?}");
+                    let _ = done_tx.send(result);
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            });
+        done_rx.recv()?
+    }
+
     #[test]
     fn source_filters_keep_typed_identity_separate() {
         assert!(SourceFilter::All.includes(TextEntryId::Sticker(1)));
