@@ -85,6 +85,7 @@ impl TextPickerWindow {
         destination: Option<u64>,
     ) -> anyhow::Result<()> {
         if TEXT_POPUP.read().ok().and_then(|s| *s).is_some() && dispatch_escape(cx) {
+            tracing::info!("Picker already open; dispatched escape to close it");
             return Ok(());
         }
         let filter = GLOBAL_CAPTURE_FILTER
@@ -95,6 +96,10 @@ impl TextPickerWindow {
             .get()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Sticker backend unavailable"))?;
+        tracing::info!(
+            destination = ?destination,
+            "Picker: opening TXT chooser window"
+        );
         // Physical window geometry is an OS boundary; internal layout uses rem helpers.
         let bounds = Bounds::centered(None, size(px(300.), px(400.)), cx);
         let handle = cx.open_window(
