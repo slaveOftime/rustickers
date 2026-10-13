@@ -19,6 +19,9 @@ use std::{
 
 use crate::native::clipboard::CaptureFilter;
 
+#[cfg(target_os = "windows")]
+mod windows_capture;
+
 /// A self-contained handle on the selection helper.
 ///
 /// The single concrete type keeps tests, the GUI bootstrap, and any future IPC recipient all on
@@ -93,6 +96,13 @@ pub(super) fn capture_selection_from_window(
     filter: &Arc<CaptureFilter>,
     source: Option<u64>,
 ) -> anyhow::Result<Option<String>> {
+    // Desktop focus and a native edit's collapsed selection are definitive:
+    // return before waiting for modifiers or touching the clipboard. Unknown
+    // apps retain the full asynchronous Copy timeout for compatibility.
+    #[cfg(target_os = "windows")]
+    if windows_capture::known_empty_selection(source) {
+        return Ok(None);
+    }
     // SendInput does not neutralize physically held modifiers. In particular,
     // Ctrl+Shift+Space must not turn our Ctrl+C into Ctrl+Shift+C. Never fake
     // releases of keys still held by the user.

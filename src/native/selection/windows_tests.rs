@@ -11,10 +11,10 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT},
         WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-            GetWindowThreadProcessId, KillTimer, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
-            SW_SHOW, SetForegroundWindow, SetTimer, ShowWindow, TranslateMessage, UnregisterClassW,
-            WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
-            WS_OVERLAPPEDWINDOW,
+            GetShellWindow, GetWindowThreadProcessId, KillTimer, MSG, PM_REMOVE, PeekMessageW,
+            RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, ShowWindow,
+            TranslateMessage, UnregisterClassW, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            WM_TIMER, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
 };
@@ -210,6 +210,99 @@ fn captures_after_shortcut_release_and_slow_copy() -> anyhow::Result<()> {
             "Verified selection capture: held_modifiers={held_modifiers}, copy_delay={delay}ms, has_selection={}",
             captured.is_some()
         );
+    }
+
+    // A native edit with only a caret has a definitive empty selection. Do
+    // not inject Copy or wait out the clipboard timeout in this common case.
+    let value: Vec<u16> = SELECTED.encode_utf16().chain(Some(0)).collect();
+    let edit = unsafe {
+        CreateWindowExW(
+            0,
+            windows_sys::core::w!("Edit"),
+            value.as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            300,
+            100,
+            hwnd,
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        )
+    };
+    anyhow::ensure!(!edit.is_null(), "create native edit fixture");
+    unsafe {
+        SetFocus(edit);
+        SendMessageW(edit, 0xb1, 0, 0);
+    } // EM_SETSEL: caret only.
+    pump();
+    let generation = crate::native::clipboard::watcher::clipboard_generation();
+    let started = Instant::now();
+    let worker = thread::spawn(capture_selection);
+    wait_until(|| worker.is_finished());
+    anyhow::ensure!(worker.join().unwrap()?.is_none());
+    let elapsed = started.elapsed();
+    anyhow::ensure!(
+        elapsed < Duration::from_millis(150),
+        "empty native selection took {elapsed:?}"
+    );
+    anyhow::ensure!(
+        crate::native::clipboard::watcher::clipboard_generation() == generation,
+        "empty selection must leave the clipboard untouched"
+    );
+    eprintln!("Empty native selection returned in {elapsed:?}");
+
+    // The same edit must still copy normally when its text is selected.
+    unsafe {
+        SendMessageW(edit, 0xb1, 0, -1);
+    } // EM_SETSEL: select all.
+    let worker = thread::spawn(capture_selection);
+    wait_until(|| worker.is_finished());
+    anyhow::ensure!(worker.join().unwrap()?.as_deref() == Some(SELECTED));
+    unsafe {
+        SetFocus(hwnd);
+        DestroyWindow(edit);
+    }
+
+    // No foreground application is already a definitive no-selection result.
+    let generation = crate::native::clipboard::watcher::clipboard_generation();
+    let started = Instant::now();
+    anyhow::ensure!(capture_selection_from_window(&CaptureFilter::new(), None)?.is_none());
+    anyhow::ensure!(started.elapsed() < Duration::from_millis(150));
+    anyhow::ensure!(crate::native::clipboard::watcher::clipboard_generation() == generation);
+
+    // Activate the real desktop without clicking icons or sending Copy. This
+    // validates shell classification, not just a made-up window class string.
+    let desktop = unsafe { GetShellWindow() };
+    if !desktop.is_null() {
+        unsafe {
+            let current = GetCurrentThreadId();
+            let desktop_thread = GetWindowThreadProcessId(desktop, std::ptr::null_mut());
+            windows_sys::Win32::System::Threading::AttachThreadInput(current, desktop_thread, 1);
+            SetForegroundWindow(desktop);
+            windows_sys::Win32::System::Threading::AttachThreadInput(current, desktop_thread, 0);
+        }
+        wait_until(|| unsafe { GetForegroundWindow() } == desktop);
+        let generation = crate::native::clipboard::watcher::clipboard_generation();
+        let started = Instant::now();
+        let worker = thread::spawn(capture_selection);
+        wait_until(|| worker.is_finished());
+        anyhow::ensure!(worker.join().unwrap()?.is_none());
+        let elapsed = started.elapsed();
+        anyhow::ensure!(
+            elapsed < Duration::from_millis(150),
+            "desktop capture took {elapsed:?}"
+        );
+        anyhow::ensure!(crate::native::clipboard::watcher::clipboard_generation() == generation);
+        eprintln!("Desktop selection returned in {elapsed:?}");
+        unsafe {
+            SetForegroundWindow(hwnd);
+            SetFocus(hwnd);
+        }
+        wait_until(|| unsafe { GetForegroundWindow() } == hwnd);
+    } else {
+        eprintln!("Desktop latency check skipped: this session has no shell window");
     }
 
     // A queued request whose source no longer has focus must not send Copy or
