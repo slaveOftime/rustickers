@@ -320,7 +320,7 @@ impl StickerWindow {
             height: bounds.size.height.to_f64() as i32,
             display_id,
             display_uuid,
-            virtual_desktop_id: platform::current_virtual_desktop_id(window),
+            virtual_desktop_id: self.virtual_desktop_id.clone(),
             native_left: native_rect.map(|rect| rect.left),
             native_top: native_rect.map(|rect| rect.top),
             native_width: native_rect.map(|rect| rect.width),

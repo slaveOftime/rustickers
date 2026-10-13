@@ -141,8 +141,8 @@ impl StickerWindow {
 
     /// Preview whatever the active file manager has selected, or the file path or URL on the
     /// clipboard when nothing is selected.
-    pub fn open_file_preview(
-        cx: &mut App,
+    pub async fn open_file_preview(
+        cx: &mut AsyncApp,
         sticker_events_tx: mpsc::Sender<StickerWindowEvent>,
         store: ArcStickerStore,
     ) -> anyhow::Result<()> {
@@ -162,13 +162,17 @@ impl StickerWindow {
             ));
         }
 
-        Self::open_file_preview_with_sources(
-            cx,
-            sticker_events_tx,
-            store,
-            sources,
-            PreviewOptions::default(),
-        )
+        // Explorer automation is COM too: it may pump callbacks, so resolve
+        // sources before acquiring the App for window creation.
+        cx.update(|cx| {
+            Self::open_file_preview_with_sources(
+                cx,
+                sticker_events_tx,
+                store,
+                sources,
+                PreviewOptions::default(),
+            )
+        })
     }
 
     pub fn open_file_preview_with_sources(
@@ -470,14 +474,22 @@ impl StickerWindow {
 
         // GPUI places the window from logical coordinates, which is not precise enough across
         // monitors, so claim the exact placement back as soon as the window exists.
-        cx.defer(move |cx| {
+        cx.spawn(async move |cx| {
+            // A deferred effect still holds App. Capture only the native handle
+            // in an update, then let shell COM pump with no GPUI borrow held.
+            let native = handle.update(cx, |_, window, _| {
+                platform::VirtualDesktopWindow::capture(window)
+            });
+            if let Ok(Some(native)) = native {
+                native.restore(virtual_desktop_id.as_deref());
+            }
             let _ = handle.update(cx, |_, window, _| {
-                platform::restore_virtual_desktop(window, virtual_desktop_id.as_deref());
                 if let Some(rect) = restore_rect {
                     platform::apply_window_rect(window, rect);
                 }
             });
-        });
+        })
+        .detach();
 
         if focus && !hidden {
             // Opening a window from the global-hotkey callback can happen while Rustickers is

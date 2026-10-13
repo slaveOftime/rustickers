@@ -34,6 +34,8 @@ use windows::{
     core::w,
 };
 
+/// Resolve the foreground file manager's selection without holding a GPUI borrow.
+/// Windows shell automation can dispatch UI callbacks while waiting for COM/RPC.
 pub fn selected_files_from_active_manager() -> anyhow::Result<Vec<PathBuf>> {
     #[cfg(target_os = "windows")]
     {

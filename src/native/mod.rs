@@ -53,7 +53,7 @@ pub fn run_native(
         .with_assets(components::Assets)
         .with_http_client(http::ReqwestClient::new());
 
-    // Must run after the platform (and its hidden message window) exists,
+    // Must run after the platform (and its hidden top-level window) exists,
     // but before the event loop starts dispatching messages.
     power_guard::install();
 
@@ -90,17 +90,15 @@ pub fn run_native(
                         }
                         crate::ipc::IpcEvent::ToggleFilePreview => {
                             if let Some(store) = store_handle_clone.get() {
-                                cx.update(|cx| {
-                                    if let Err(err) = StickerWindow::open_file_preview(
-                                        cx,
-                                        sticker_events_tx_for_ipc.clone(),
-                                        store.clone(),
-                                    ) {
-                                        tracing::warn!(error = ?err, "Failed to toggle file sticker preview");
-                                    } else {
-                                        cx.refresh_windows();
-                                    }
-                                });
+                                if let Err(err) = StickerWindow::open_file_preview(
+                                    cx,
+                                    sticker_events_tx_for_ipc.clone(),
+                                    store.clone(),
+                                ).await {
+                                    tracing::warn!(error = ?err, "Failed to toggle file sticker preview");
+                                } else {
+                                    cx.update(|cx| cx.refresh_windows());
+                                }
                             }
                         }
                         crate::ipc::IpcEvent::DismissEscapeTarget => {

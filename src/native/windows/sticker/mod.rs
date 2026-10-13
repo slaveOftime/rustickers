@@ -41,6 +41,8 @@ pub struct StickerWindow {
 
     last_bounds: Option<bounds::WindowState>,
     last_bounds_change_at: Option<Instant>,
+    /// Last successful shell query; rendering reads this without entering COM.
+    virtual_desktop_id: Option<String>,
     /// Identifies the monitor layout the sticker was last reconciled against.
     display_fingerprint: u64,
     /// While set, the monitor layout is still settling and window moves are not the user's doing.
@@ -104,6 +106,7 @@ impl StickerWindow {
         let pending_restore = bounds::pending_restore(&detail, &displays);
 
         Self {
+            virtual_desktop_id: detail.virtual_desktop_id.clone(),
             store,
             detail,
             sticker_events_tx,
@@ -131,12 +134,25 @@ impl StickerWindow {
             .spawn(cx, async move |cx| {
                 loop {
                     cx.background_executor().timer(BOUNDS_SAVE_DEBOUNCE).await;
-                    match entity
-                        .update_in(cx, |this, window, cx| this.tick_bounds_state(window, cx))
-                    {
+                    let native = match entity.update_in(cx, |this, window, cx| {
+                        (this.view.id(cx) > 0 && !this.closing)
+                            .then(|| platform::VirtualDesktopWindow::capture(window))
+                            .flatten()
+                    }) {
+                        Ok(native) => native,
                         Err(_) => break,
-                        // Applying this while the window was borrowed above would be ignored, so
-                        // it deliberately happens between updates. See `platform::ScaleResync`.
+                    };
+                    // CoCreateInstance and shell RPC can dispatch GPUI callbacks. Keep
+                    // the entire COM operation (including interface release) outside
+                    // every GPUI borrow, just like ScaleResync below.
+                    let desktop_id = native.and_then(|native| native.desktop_id());
+                    match entity.update_in(cx, |this, window, cx| {
+                        if let Some(desktop_id) = desktop_id {
+                            this.virtual_desktop_id = Some(desktop_id);
+                        }
+                        this.tick_bounds_state(window, cx)
+                    }) {
+                        Err(_) => break,
                         Ok(Some(resync)) => resync.apply(),
                         Ok(None) => {}
                     }

@@ -120,37 +120,70 @@ pub(super) fn refocus_window(window: &Window, top_most: bool) {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub(super) fn current_virtual_desktop_id(window: &Window) -> Option<String> {
-    let hwnd = hwnd(window)?;
-    let manager = virtual_desktop_manager().ok()?;
-    unsafe { manager.GetWindowDesktopId(hwnd) }
-        .ok()
-        .map(|id| format!("{id:?}"))
+/// A native handle captured during a short GPUI update. Shell COM calls can pump
+/// Windows messages, so invoke these methods only after leaving that update,
+/// never from `render`, `cx.defer`, or an entity/window update callback.
+#[derive(Clone, Copy)]
+pub(super) struct VirtualDesktopWindow {
+    #[cfg(target_os = "windows")]
+    hwnd: isize,
 }
 
-#[cfg(not(target_os = "windows"))]
-pub(super) fn current_virtual_desktop_id(_window: &Window) -> Option<String> {
-    None
-}
+impl VirtualDesktopWindow {
+    pub(super) fn capture(window: &Window) -> Option<Self> {
+        #[cfg(target_os = "windows")]
+        {
+            Some(Self {
+                hwnd: hwnd(window)?.0 as isize,
+            })
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = window;
+            None
+        }
+    }
 
-#[cfg(target_os = "windows")]
-pub(super) fn restore_virtual_desktop(window: &Window, desktop_id: Option<&str>) {
-    let Some(desktop_id) = desktop_id.and_then(|id| GUID::try_from(id).ok()) else {
-        return;
-    };
-    let Some(hwnd) = hwnd(window) else {
-        return;
-    };
-    let result = virtual_desktop_manager()
-        .and_then(|manager| unsafe { manager.MoveWindowToDesktop(hwnd, &desktop_id) });
-    if let Err(err) = result {
-        tracing::warn!(error = ?err, "Failed to restore sticker virtual desktop");
+    pub(super) fn desktop_id(self) -> Option<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd = HWND(self.hwnd as *mut _);
+            if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(hwnd)) }.as_bool() {
+                return None;
+            }
+            let manager = virtual_desktop_manager().ok()?;
+            unsafe { manager.GetWindowDesktopId(hwnd) }
+                .ok()
+                .map(|id| format!("{id:?}"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    }
+
+    pub(super) fn restore(self, desktop_id: Option<&str>) {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(desktop_id) = desktop_id.and_then(|id| GUID::try_from(id).ok()) else {
+                return;
+            };
+            let hwnd = HWND(self.hwnd as *mut _);
+            if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(hwnd)) }.as_bool() {
+                return;
+            }
+            let result = virtual_desktop_manager()
+                .and_then(|manager| unsafe { manager.MoveWindowToDesktop(hwnd, &desktop_id) });
+            if let Err(err) = result {
+                tracing::warn!(error = ?err, "Failed to restore sticker virtual desktop");
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = desktop_id;
+        }
     }
 }
-
-#[cfg(not(target_os = "windows"))]
-pub(super) fn restore_virtual_desktop(_window: &Window, _desktop_id: Option<&str>) {}
 
 /// The window's outer rectangle in native pixels.
 #[cfg(target_os = "windows")]
@@ -364,6 +397,111 @@ fn work_area(monitor: HMONITOR) -> Option<RECT> {
 #[cfg(target_os = "windows")]
 fn virtual_desktop_manager() -> windows::core::Result<IVirtualDesktopManager> {
     unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL) }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_tests {
+    use super::*;
+    use gpui::{AppContext, WindowOptions, div};
+    use windows::{
+        Win32::UI::{
+            Shell::GetWindowSubclass,
+            WindowsAndMessaging::{
+                FindWindowExW, GetWindowThreadProcessId, PBT_APMRESUMEAUTOMATIC, WM_DISPLAYCHANGE,
+                WM_POWERBROADCAST,
+            },
+        },
+        core::{PCWSTR, w},
+    };
+
+    /// Uses an isolated native window, no app startup, IPC, hotkeys, or database.
+    #[test]
+    #[ignore = "requires an interactive Windows desktop and Explorer shell"]
+    fn shell_com_runs_between_gpui_updates() {
+        let app = gpui::application();
+        crate::native::power_guard::install();
+        app.run(|cx| {
+            // The guard must find this process's hidden top-level platform window,
+            // not another GPUI application's window or only HWND_MESSAGE.
+            let mut after = None;
+            let platform_hwnd = loop {
+                let hwnd = unsafe {
+                    FindWindowExW(None, after, w!("Zed::PlatformWindow"), PCWSTR::null())
+                }
+                .expect("GPUI platform window must exist");
+                let mut process_id = 0;
+                unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+                if process_id == std::process::id() {
+                    break hwnd;
+                }
+                after = Some(hwnd);
+            };
+            let mut ref_data = 0;
+            assert!(
+                unsafe {
+                    GetWindowSubclass(
+                        platform_hwnd,
+                        Some(crate::native::power_guard::test_callback),
+                        0x5253_5449,
+                        Some(&mut ref_data),
+                    )
+                }
+                .as_bool(),
+                "wake guard must actually be installed"
+            );
+            // Sent while App is borrowed, as it would be in a nested COM pump.
+            assert_eq!(
+                unsafe {
+                    SendMessageW(
+                        platform_hwnd,
+                        WM_POWERBROADCAST,
+                        Some(WPARAM(PBT_APMRESUMEAUTOMATIC as usize)),
+                        None,
+                    )
+                }
+                .0,
+                1
+            );
+
+            let handle = cx
+                .open_window(WindowOptions::default(), |_, cx| cx.new(|_| NativeProbe))
+                .expect("open isolated native window");
+            cx.spawn(async move |cx| {
+                for _ in 0..20 {
+                    let native = handle
+                        .update(cx, |_, window, _| {
+                            VirtualDesktopWindow::capture(window).unwrap()
+                        })
+                        .unwrap();
+                    let id = native.desktop_id().expect("query native virtual desktop");
+                    native.restore(Some(&id));
+                    assert_eq!(native.desktop_id().as_deref(), Some(id.as_str()));
+                    // Exercise the exact panicking GPUI callback outside the borrow.
+                    unsafe {
+                        SendMessageW(HWND(native.hwnd as *mut _), WM_DISPLAYCHANGE, None, None);
+                    }
+                    handle.update(cx, |_, window, _| window.refresh()).unwrap();
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(10))
+                        .await;
+                }
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
+        });
+    }
+
+    struct NativeProbe;
+
+    impl gpui::Render for NativeProbe {
+        fn render(
+            &mut self,
+            _: &mut Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            div()
+        }
+    }
 }
 
 /// Windows excludes tool windows from Win+D's minimize-all operation. Preserve all existing
