@@ -49,7 +49,7 @@ TXTs combines Markdown stickers (open or closed) with disposable clipboard captu
 - **F2 / double-click** opens the normal sticker editor. Editing a capture first saves it as a sticker.
 - **Save as sticker** (Ctrl/Cmd+R) turns a capture into a closed sticker.
 - **Lock / Save encrypted** (Ctrl/Cmd+L) asks for a required public title, then encrypts without opening a sticker.
-- **Rename** (Ctrl/Cmd+F2) changes a saved sticker's title; custom titles survive content edits. Locked stickers also show an editable public-title field above Unlock.
+- **Edit title** (Ctrl/Cmd+U; Ctrl/Cmd+F2 also works) opens a title field. Enter saves the title and converts a clipboard entry to a text sticker; existing stickers keep their content and protection. Esc cancels. Custom titles survive content edits. Locked stickers also show an editable public-title field above Unlock.
 - Deleting a capture is immediate; deleting a saved sticker requires confirmation.
 
 Clipboard collection starts **paused**. Enable it in TXTs. Captures preserve exact text and share a budget of 500 entries / 20 MiB; saved stickers are not evicted. When a new clipboard copy's content matches an already-saved text sticker (plain or locked) by digest, the saved sticker absorbs the recency and no capture row is created, keeping duplicate plaintext from lingering next to a sealed copy. Automatic paste and ownership-safe protected copying currently have a supported path only on Windows.

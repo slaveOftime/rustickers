@@ -1,4 +1,4 @@
-//! Shared required public-title prompt for locking and renaming text.
+//! Shared required public-title prompt for locking and naming text.
 use crate::gpui_component::{
     ActiveTheme, Disableable, WindowExt,
     button::{Button, ButtonVariants},
@@ -42,7 +42,7 @@ pub(crate) fn prompt(
         input: cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(initial.to_owned())
-                .placeholder("Give this text a title")
+                .placeholder("Title")
         }),
         error: false,
         callback: Some(callback),
@@ -51,7 +51,7 @@ pub(crate) fn prompt(
     window.open_dialog(cx, move |dialog, _, cx| {
         let submit = form.clone(); let cancel = form.clone(); let keys = form.clone();
         let state = form.read(cx);
-        dialog.max_w(px(300.)).title(if locking { "Name and lock text" } else { "Rename title" }).keyboard(false)
+        dialog.mx_auto().max_w(px(300.)).title(if locking { "Name and lock text" } else { "Edit title" }).keyboard(false)
             .child(v_flex().py_2().gap_2().on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" => keys.update(cx, |this,cx| this.submit(window,cx)),

@@ -221,7 +221,8 @@ impl TextPicker {
             }
             let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
             let copy = event.keystroke.key == "c" && command;
-            if !copy && event.keystroke.key != "escape" {
+            let title = event.keystroke.key == "u" && command;
+            if !copy && !title && event.keystroke.key != "escape" {
                 return;
             }
             let handled = entity.upgrade().is_some_and(|entity| {
@@ -231,6 +232,8 @@ impl TextPicker {
                     }
                     if copy {
                         this.use_selected(true, true, window, cx);
+                    } else if title {
+                        this.rename(window, cx);
                     } else {
                         clear_popup();
                         window.remove_window();
@@ -984,8 +987,8 @@ impl TextPicker {
                     (
                         "rename",
                         IconName::DocumentText,
-                        "Rename… · Ctrl+F2",
-                        !saved,
+                        "Edit title… · Ctrl+U",
+                        false,
                     ),
                     ("edit", IconName::Adjustments, "Edit… · F2", false),
                     ("save", IconName::Pin, "Save as sticker · Ctrl+R", saved),
@@ -1026,34 +1029,78 @@ impl TextPicker {
         let Some(entry) = self.selected_entry() else {
             return;
         };
-        if !matches!(entry.id(), TextEntryId::Sticker(_)) {
-            return;
-        }
         let repo = self.repository.clone();
         let events = self.events.clone();
         let weak = cx.weak_entity();
         let initial = entry.title().to_owned();
+        let promoting = matches!(entry.id(), TextEntryId::Clipboard(_));
         super::title::prompt(
             window,
             cx,
             false,
             &initial,
             Box::new(move |title, window, cx| {
+                let started = weak
+                    .update(cx, |this, cx| {
+                        if this.busy {
+                            return false;
+                        }
+                        this.busy = true;
+                        this.status.clear();
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !started {
+                    return;
+                }
                 window
                     .spawn(cx, async move |cx| {
-                        let result = repo.update_title(entry.id(), &title).await;
-                        if result.is_ok()
-                            && let TextEntryId::Sticker(id) = entry.id()
-                        {
-                            let _ = events.send(StickerWindowEvent::TitleChanged { id, title });
-                        }
-                        let _ = weak.update_in(cx, |this, _, cx| {
-                            this.status = if result.is_ok() {
-                                "Title updated"
-                            } else {
-                                "Could not update title. Try again."
+                        // Keep the entry captured when the prompt opened: a
+                        // background refresh must not retarget this title edit.
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move {
+                                futures::executor::block_on(async {
+                                    match entry.id() {
+                                        TextEntryId::Clipboard(_) => {
+                                            let id = repo
+                                                .promote_titled(&entry, false, Some(&title))
+                                                .await?;
+                                            let _ = events.send(StickerWindowEvent::Created { id });
+                                            anyhow::Ok(TextEntryId::Sticker(id))
+                                        }
+                                        TextEntryId::Sticker(id) => {
+                                            repo.update_title(entry.id(), &title).await?;
+                                            let _ = events.send(StickerWindowEvent::TitleChanged {
+                                                id,
+                                                title,
+                                            });
+                                            anyhow::Ok(entry.id())
+                                        }
+                                    }
+                                })
+                            })
+                            .await;
+                        let _ = weak.update_in(cx, |this, window, cx| {
+                            this.busy = false;
+                            match result {
+                                Ok(id) => {
+                                    // Promotion changes source identity. Keep the
+                                    // newly named sticker visible in a filtered picker.
+                                    if promoting && this.source == SourceFilter::Clipboard {
+                                        this.source = SourceFilter::Text;
+                                    }
+                                    this.preferred_selection = Some(id);
+                                    this.status = "Title saved".into();
+                                }
+                                Err(_) => {
+                                    this.status =
+                                        "Could not save title. Select the text and try again."
+                                            .into()
+                                }
                             }
-                            .into();
+                            this.query.update(cx, |query, cx| query.focus(window, cx));
                             cx.notify();
                         });
                     })
@@ -1080,9 +1127,9 @@ impl TextPicker {
                         self.status.clone()
                     } else {
                         if self.destination.is_some() {
-                            "↑↓ select · Enter paste · Ctrl+C copy · F2 edit"
+                            "↑↓ select · Enter paste · Ctrl+C copy · Ctrl+U title · F2 edit"
                         } else {
-                            "↑↓ select · Ctrl+C copy · F2 edit"
+                            "↑↓ select · Ctrl+C copy · Ctrl+U title · F2 edit"
                         }
                         .into()
                     }),
@@ -1327,6 +1374,215 @@ mod picker_tests {
                     }
                     .await;
                     eprintln!("Native picker regression result: {result:?}");
+                    let _ = done_tx.send(result);
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            });
+        done_rx.recv()?
+    }
+
+    /// Real components/keyboard routing with isolated SQLite storage.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "opt-in Windows UI test: opens an isolated TXTs picker and title dialog"]
+    fn ctrl_u_names_captures_and_updates_sticker_titles() -> anyhow::Result<()> {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("titles.db");
+        let repository = Arc::new(futures::executor::block_on(TextRepository::open(&path))?);
+        let store = futures::executor::block_on(crate::storage::open_sqlite(&path))?;
+        futures::executor::block_on(repository.capture("title shortcut fixture content", 1))?;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        gpui::application()
+            .with_quit_mode(gpui::QuitMode::Explicit)
+            .with_assets(crate::native::components::Assets)
+            .run(move |cx| {
+                crate::gpui_component::init(cx);
+                cx.spawn(async move |cx| {
+                    let result = async {
+                        let repo = repository.clone();
+                        let mut picker = None;
+                        let handle = cx.update(|cx| {
+                            cx.open_window(WindowOptions::default(), |window, cx| {
+                                let (events, _) = std::sync::mpsc::channel();
+                                let view = cx.new(|cx| {
+                                    TextPicker::new(
+                                        repo,
+                                        store,
+                                        CaptureFilter::new(),
+                                        events,
+                                        None,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                                picker = Some(view.clone());
+                                cx.new(|cx| Root::new(view, window, cx))
+                            })
+                        })?;
+                        // Untyped updates do not lease Root while key dispatch
+                        // may request a frame to resolve the new dialog's focus.
+                        let handle = gpui::AnyWindowHandle::from(handle);
+                        let picker = picker.unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        loop {
+                            if handle.update(cx, |_, window, cx| {
+                                !picker.read(cx).loading && window.is_window_active()
+                            })? {
+                                break;
+                            }
+                            anyhow::ensure!(Instant::now() < deadline, "picker did not load");
+                            cx.background_executor()
+                                .timer(Duration::from_millis(20))
+                                .await;
+                        }
+                        let original = handle
+                            .update(cx, |_, _, cx| picker.read(cx).selected_entry().unwrap())?;
+                        picker.update(cx, |this, cx| {
+                            this.source = SourceFilter::Clipboard;
+                            this.refilter(cx);
+                        });
+                        for (title, saved) in [("Named capture", false), ("Updated title", true)] {
+                            handle.update(cx, |_, window, cx| {
+                                // Ctrl+U must work even if focus is outside search.
+                                window.blur(cx);
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("ctrl-u").unwrap(),
+                                    cx,
+                                );
+                                anyhow::ensure!(
+                                    window.has_active_dialog(cx),
+                                    "Ctrl+U did not open title input"
+                                );
+                                anyhow::Ok(())
+                            })??;
+                            cx.background_executor()
+                                .timer(Duration::from_millis(40))
+                                .await;
+                            handle.update(cx, |_, window, cx| {
+                                // Empty input must not commit a capture.
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("ctrl-a").unwrap(),
+                                    cx,
+                                );
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("backspace").unwrap(),
+                                    cx,
+                                );
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("enter").unwrap(),
+                                    cx,
+                                );
+                                anyhow::ensure!(
+                                    window.has_active_dialog(cx),
+                                    "empty title must keep the form open"
+                                );
+                                anyhow::Ok(())
+                            })??;
+                            // Allow the dialog to repaint after validation.
+                            cx.background_executor()
+                                .timer(Duration::from_millis(40))
+                                .await;
+                            handle.update(cx, |_, window, cx| {
+                                for ch in title.chars() {
+                                    window.dispatch_keystroke(
+                                        gpui::Keystroke {
+                                            key: ch.to_string(),
+                                            key_char: Some(ch.to_string()),
+                                            ..Default::default()
+                                        },
+                                        cx,
+                                    );
+                                }
+                                window.dispatch_keystroke(
+                                    gpui::Keystroke::parse("enter").unwrap(),
+                                    cx,
+                                );
+                                anyhow::ensure!(
+                                    !window.has_active_dialog(cx),
+                                    "Enter must close title input"
+                                );
+                                anyhow::Ok(())
+                            })??;
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            loop {
+                                let ready = handle.update(cx, |_, _, cx| {
+                                    let state = picker.read(cx);
+                                    !state.busy
+                                        && state
+                                            .selected_entry()
+                                            .is_some_and(|e| e.title() == title)
+                                })?;
+                                if ready {
+                                    break;
+                                }
+                                anyhow::ensure!(
+                                    Instant::now() < deadline,
+                                    "title did not save/refresh: {title}"
+                                );
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(20))
+                                    .await;
+                            }
+                            let rows = repository
+                                .snapshot(TextSources::new(true, true), "")
+                                .await?;
+                            anyhow::ensure!(rows.len() == 1, "naming must not duplicate the text");
+                            anyhow::ensure!(
+                                matches!(rows[0].id(), TextEntryId::Sticker(_)),
+                                "capture must become a text sticker"
+                            );
+                            anyhow::ensure!(rows[0].title() == title && !rows[0].is_encrypted());
+                            anyhow::ensure!(
+                                rows[0].multiline_preview() == original.multiline_preview(),
+                                "title editing must preserve content"
+                            );
+                            if !saved {
+                                anyhow::ensure!(
+                                    repository.get(original.id()).await.is_err(),
+                                    "promoted capture must be absorbed"
+                                );
+                            }
+                            eprintln!("Ctrl+U and Enter saved {title:?}");
+                        }
+                        let before = repository
+                            .snapshot(TextSources::new(true, true), "")
+                            .await?;
+                        handle.update(cx, |_, window, cx| {
+                            window
+                                .dispatch_keystroke(gpui::Keystroke::parse("ctrl-u").unwrap(), cx);
+                        })?;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(40))
+                            .await;
+                        handle.update(cx, |_, window, cx| {
+                            window
+                                .dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), cx);
+                            anyhow::ensure!(
+                                !window.has_active_dialog(cx),
+                                "Escape must cancel the form"
+                            );
+                            anyhow::Ok(())
+                        })??;
+                        let after = repository
+                            .snapshot(TextSources::new(true, true), "")
+                            .await?;
+                        anyhow::ensure!(before[0].title() == after[0].title());
+                        handle.update(cx, |_, window, cx| {
+                            picker.update(cx, |this, _| this.busy = true);
+                            window
+                                .dispatch_keystroke(gpui::Keystroke::parse("ctrl-u").unwrap(), cx);
+                            anyhow::ensure!(
+                                !window.has_active_dialog(cx),
+                                "busy picker must not open title input"
+                            );
+                            window.remove_window();
+                            anyhow::Ok(())
+                        })??;
+                        anyhow::Ok(())
+                    }
+                    .await;
                     let _ = done_tx.send(result);
                     cx.update(|cx| cx.quit());
                 })
