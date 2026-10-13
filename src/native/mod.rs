@@ -156,10 +156,14 @@ pub fn run_native(
                             if let Some(store) = store_handle_clone.get() {
                                 let store = store.clone();
                                 let tx = sticker_events_tx_for_ipc.clone();
-                                let selection = match clipboard_filter_for_ipc.get() {
-                                    Some(filter) => crate::native::selection::capture_selection_with_filter(filter),
-                                    None => crate::native::selection::capture_selection(),
-                                };
+                                let source = crate::native::selection::foreground_window();
+                                let filter = clipboard_filter_for_ipc.get().cloned()
+                                    .unwrap_or_else(crate::native::clipboard::CaptureFilter::new);
+                                // Leave the source focused and the UI message pump running
+                                // while shortcut modifiers release and Copy is processed.
+                                let selection = cx.background_executor().spawn(async move {
+                                    crate::native::selection::capture_selection_from_window(&filter, source)
+                                }).await;
                                 let selection = match selection {
                                     Ok(selection) => selection,
                                     Err(err) => {
