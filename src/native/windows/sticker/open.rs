@@ -20,7 +20,9 @@ use std::{
 use crate::gpui_component::Root;
 use gpui::{
     AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Pixels, Point, Size, Styled,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    base::{TextViewDefaults, TextViewStyle},
+    point, px, size,
 };
 use url::Url;
 
@@ -431,6 +433,11 @@ impl StickerWindow {
         } else {
             resolved.map(|resolved| resolved.rect)
         };
+
+        TextViewDefaults::new()
+            .with_style(TextViewStyle::default())
+            .with_inherit_text_color(true)
+            .install(cx);
 
         let handle = cx.open_window(
             WindowOptions {

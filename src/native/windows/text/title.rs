@@ -6,7 +6,7 @@ use crate::gpui_component::{
     input::{Input, InputState},
     v_flex,
 };
-use gpui::{App, Context, Entity, Window, div, prelude::*};
+use gpui::{App, Context, Entity, Window, div, prelude::*, px};
 type TitleCallback = Box<dyn FnOnce(String, &mut Window, &mut App)>;
 struct TitleForm {
     input: Entity<InputState>,
@@ -51,7 +51,7 @@ pub(crate) fn prompt(
     window.open_dialog(cx, move |dialog, _, cx| {
         let submit = form.clone(); let cancel = form.clone(); let keys = form.clone();
         let state = form.read(cx);
-        dialog.title(if locking { "Name and lock text" } else { "Rename title" }).keyboard(false)
+        dialog.max_w(px(300.)).title(if locking { "Name and lock text" } else { "Rename title" }).keyboard(false)
             .child(v_flex().py_2().gap_2().on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" => keys.update(cx, |this,cx| this.submit(window,cx)),

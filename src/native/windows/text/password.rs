@@ -7,7 +7,7 @@ use crate::gpui_component::{
     v_flex,
 };
 use crate::text::TextRepository;
-use gpui::{Context, Entity, Window, div, prelude::*};
+use gpui::{Context, Entity, Window, div, prelude::*, px};
 use std::sync::{Arc, Mutex, OnceLock};
 use zeroize::Zeroizing;
 
@@ -151,7 +151,7 @@ fn open_form(
     window.open_dialog(cx, move |dialog, _, cx| {
         let state = form.read(cx); let busy = state.busy; let settings = state.repository.is_some();
         let submit = form.clone(); let cancel = form.clone(); let closed = form.clone();
-        dialog.title(title).overlay_closable(false).keyboard(false).close_button(!busy)
+        dialog.max_w(px(300.)).title(title).overlay_closable(false).keyboard(false).close_button(!busy)
             .on_close(move |_, window, cx| closed.update(cx, |this, cx| { this.clear(window, cx); this.callback = None; }))
             .child(v_flex().py_2().gap_3().on_key_down({ let form = form.clone(); move |event: &gpui::KeyDownEvent,window,cx| {
                 if event.keystroke.key == "enter" { form.update(cx,|this,cx|this.submit(window,cx)); cx.stop_propagation(); }

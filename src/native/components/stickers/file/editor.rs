@@ -23,7 +23,8 @@ impl super::FileSticker {
         self.preview_editor = Some(cx.new(move |cx| {
             let mut state = EditorState::new(window, cx)
                 .placeholder("Edit file content, ctrl+s to save")
-                .default_value(initial_content);
+                .default_value(initial_content)
+                .folding(true);
             if let Some(language) = code_language.as_ref() {
                 state = state.language(language);
             }
