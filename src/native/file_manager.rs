@@ -25,16 +25,17 @@ use windows::{
         UI::{
             Shell::{
                 IShellBrowser, IShellFolderViewDual, IShellWindows, IWebBrowserApp,
-                SID_STopLevelBrowser, ShellWindows,
+                SID_STopLevelBrowser, SVGIO_BACKGROUND, SWC_DESKTOP, SWFO_NEEDDISPATCH,
+                ShellWindows,
             },
-            WindowsAndMessaging::{FindWindowExW, GetForegroundWindow},
+            WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetForegroundWindow},
         },
     },
     core::Interface,
     core::w,
 };
 
-/// Resolve the foreground file manager's selection without holding a GPUI borrow.
+/// Resolve the foreground file manager or Windows desktop selection without a GPUI borrow.
 /// Windows shell automation can dispatch UI callbacks while waiting for COM/RPC.
 pub fn selected_files_from_active_manager() -> anyhow::Result<Vec<PathBuf>> {
     #[cfg(target_os = "windows")]
@@ -96,6 +97,11 @@ fn get_shell_browser_window(browser: &IWebBrowserApp) -> Option<HWND> {
 
 #[cfg(target_os = "windows")]
 fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
+    selected_files_windows_for_window(unsafe { GetForegroundWindow() })
+}
+
+#[cfg(target_os = "windows")]
+fn selected_files_windows_for_window(foreground_window: HWND) -> anyhow::Result<Vec<PathBuf>> {
     struct ComGuard;
     impl Drop for ComGuard {
         fn drop(&mut self) {
@@ -106,7 +112,6 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()? };
     let _com_guard = ComGuard;
 
-    let foreground_window = unsafe { GetForegroundWindow() };
     if foreground_window.0.is_null() {
         return Ok(Vec::new());
     }
@@ -115,6 +120,16 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
 
     let shell_windows: IShellWindows =
         unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
+    // The desktop is not an ordinary ShellWindows entry. Its browser service
+    // exposes the same folder-view automation through the active Shell view.
+    if is_desktop_window(foreground_window) {
+        let folder_view = desktop_folder_view(&shell_windows)?;
+        let mut paths = selected_paths(&folder_view)?;
+        // Virtual icons (This PC, Recycle Bin, etc.) have namespace paths, not
+        // previewable files. Preserve selected file/shortcut paths as-is.
+        paths.retain(|path| path.is_absolute() && path.exists());
+        return Ok(paths);
+    }
     let count = unsafe { shell_windows.Count()? };
 
     let mut foreground_fallback_paths: Vec<PathBuf> = Vec::new();
@@ -147,43 +162,10 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
             Err(_) => continue,
         };
 
-        let selected_items = match unsafe { folder_view.SelectedItems() } {
-            Ok(i) => i,
+        let current_paths = match selected_paths(&folder_view) {
+            Ok(paths) => paths,
             Err(_) => continue,
         };
-
-        let selected_count = match unsafe { selected_items.Count() } {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        if selected_count <= 0 {
-            continue;
-        }
-
-        let mut current_paths: Vec<PathBuf> = Vec::new();
-        for idx in 0..selected_count {
-            let item_index = VARIANT::from(idx);
-            let item_dispatch = match unsafe { selected_items.Item(&item_index) } {
-                Ok(item) => item,
-                Err(_) => continue,
-            };
-
-            let folder_item: windows::Win32::UI::Shell::FolderItem = match item_dispatch.cast() {
-                Ok(item) => item,
-                Err(_) => continue,
-            };
-
-            let path_bs = match unsafe { folder_item.Path() } {
-                Ok(path) => path,
-                Err(_) => continue,
-            };
-
-            let path_str = path_bs.to_string();
-            if !path_str.trim().is_empty() {
-                current_paths.push(PathBuf::from(path_str));
-            }
-        }
 
         if current_paths.is_empty() {
             continue;
@@ -214,6 +196,57 @@ fn selected_files_windows() -> anyhow::Result<Vec<PathBuf>> {
 
     Ok(Vec::new())
 }
+
+#[cfg(target_os = "windows")]
+fn is_desktop_window(hwnd: HWND) -> bool {
+    let mut name = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, &mut name) };
+    matches!(
+        String::from_utf16_lossy(&name[..len.max(0) as usize]).as_str(),
+        "Progman" | "WorkerW"
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn desktop_folder_view(shell_windows: &IShellWindows) -> anyhow::Result<IShellFolderViewDual> {
+    let location = VARIANT::from(windows::Win32::UI::Shell::CSIDL_DESKTOP as i32);
+    let root = VARIANT::default();
+    let mut hwnd = 0;
+    let dispatch = unsafe {
+        shell_windows.FindWindowSW(&location, &root, SWC_DESKTOP, &mut hwnd, SWFO_NEEDDISPATCH)
+    }?;
+    let service: IServiceProvider = dispatch.cast()?;
+    let browser: IShellBrowser = unsafe { service.QueryService(&SID_STopLevelBrowser) }?;
+    let view = unsafe { browser.QueryActiveShellView() }?;
+    // The background object exposes IDispatch first; the folder automation
+    // interface lives on that object rather than directly on IShellView.
+    let dispatch: windows::Win32::System::Com::IDispatch =
+        unsafe { view.GetItemObject(SVGIO_BACKGROUND) }?;
+    Ok(dispatch.cast()?)
+}
+
+#[cfg(target_os = "windows")]
+fn selected_paths(folder_view: &IShellFolderViewDual) -> anyhow::Result<Vec<PathBuf>> {
+    let items = unsafe { folder_view.SelectedItems() }?;
+    let count = unsafe { items.Count() }?;
+    let mut paths = Vec::new();
+    for ix in 0..count {
+        let Ok(item) = (unsafe { items.Item(&VARIANT::from(ix)) }) else {
+            continue;
+        };
+        let Ok(path) = (unsafe { item.Path() }) else {
+            continue;
+        };
+        let path = path.to_string();
+        if !path.trim().is_empty() {
+            paths.push(PathBuf::from(path));
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests;
 
 #[cfg(target_os = "macos")]
 fn selected_files_macos() -> anyhow::Result<Vec<PathBuf>> {

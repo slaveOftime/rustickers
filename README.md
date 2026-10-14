@@ -28,7 +28,7 @@ These are the defaults. Edit and save the four global shortcuts in **Settings**;
 | --- | --- |
 | Ctrl+Shift+R | Show the manager |
 | Ctrl+Shift+V | Open or dismiss TXTs |
-| Ctrl+Alt | Toggle quick file preview |
+| Ctrl+Alt | Preview selected files in Explorer or on the Windows desktop |
 | Ctrl+Shift+Space (Cmd on macOS) | Send selected text to a command sticker |
 | Esc | Dismiss a transient window |
 | Ctrl+S | Save editor content |
