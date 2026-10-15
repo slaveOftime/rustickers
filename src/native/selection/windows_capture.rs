@@ -1,4 +1,4 @@
-//! Cheap, conservative empty-selection checks; unknown apps still use Copy.
+//! Native empty-selection checks and terminal-safe Copy policy.
 use windows_sys::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{
@@ -20,6 +20,9 @@ fn native_text_class(class: &str) -> bool {
         "RichEdit20A",
         "RichEdit20W",
         "RICHEDIT50W",
+        // Windows 11 Notepad's Microsoft 365 RichEdit plain-text canvas:
+        // https://devblogs.microsoft.com/math-in-office/windows-11-notepad/
+        "RichEditD2DPT",
     ]
     .iter()
     .any(|known| class.eq_ignore_ascii_case(known))
@@ -30,6 +33,9 @@ pub(super) fn known_empty_selection(source: Option<u64>) -> bool {
         return true; // No foreground application to copy from.
     };
     let hwnd = source as HWND;
+    if matches!(class_name(hwnd).as_str(), "Progman" | "WorkerW") {
+        return true;
+    }
     let thread = unsafe { GetWindowThreadProcessId(hwnd, std::ptr::null_mut()) };
     if thread == 0 {
         return false; // Invalid/stale handle: let the normal focus check reject it.
@@ -61,10 +67,26 @@ pub(super) fn known_empty_selection(source: Option<u64>) -> bool {
         } != 0;
         return ok && packed_selection_is_empty(selection);
     }
-    // Desktop shell windows cannot supply a text selection. Do not classify
-    // Explorer's file windows, consoles, browsers, or missing caret information
-    // as empty: many real selections are not represented by a Win32 caret.
-    matches!(class_name(hwnd).as_str(), "Progman" | "WorkerW")
+    // Missing caret information alone does not prove an empty selection.
+    false
+}
+
+pub(super) fn copy_is_unsafe(source: u64) -> bool {
+    terminal_class(&class_name(source as HWND))
+}
+
+fn terminal_class(class: &str) -> bool {
+    // With no selection, Ctrl+C is SIGINT/break, not a harmless Copy attempt.
+    // UI Automation may read their selection, but must never fall back to keys.
+    matches!(
+        class,
+        "ConsoleWindowClass"
+            | "CASCADIA_HOSTING_WINDOW_CLASS"
+            | "mintty"
+            | "PuTTY"
+            | "VirtualConsoleClass"
+            | "VirtualConsoleClassMain"
+    )
 }
 
 fn packed_selection_is_empty(selection: usize) -> bool {
@@ -81,8 +103,25 @@ mod tests {
         assert!(native_text_class("Edit"));
         assert!(native_text_class("RichEdit20W"));
         assert!(native_text_class("RICHEDIT50W"));
+        assert!(native_text_class("RichEDitD2DPT"));
         assert!(!native_text_class("RichEditCustomWidget"));
         assert!(!native_text_class("Chrome_WidgetWin_1"));
+    }
+
+    #[test]
+    fn terminal_windows_must_never_receive_a_blind_copy() {
+        for class in [
+            "ConsoleWindowClass",
+            "CASCADIA_HOSTING_WINDOW_CLASS",
+            "mintty",
+            "PuTTY",
+            "VirtualConsoleClass",
+            "VirtualConsoleClassMain",
+        ] {
+            assert!(terminal_class(class));
+        }
+        assert!(!terminal_class("Chrome_WidgetWin_1"));
+        assert!(!terminal_class("Notepad"));
     }
 
     #[test]

@@ -124,6 +124,8 @@ unsafe extern "system" fn keyboard_hook(
 }
 #[cfg(target_os = "windows")]
 mod windows_listener;
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests;
 #[cfg(target_os = "windows")]
 fn start_listen(tx: Sender<IpcEvent>) -> anyhow::Result<()> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG};

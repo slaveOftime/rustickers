@@ -33,6 +33,8 @@ These are the defaults. Edit and save the four global shortcuts in **Settings**;
 | Esc | Dismiss a transient window |
 | Ctrl+S | Save editor content |
 
+On Windows, the selection shortcut reads selected text directly through accessibility when supported, without changing the clipboard. Recognized terminal windows never receive a blind Ctrl+C that could interrupt a running CLI; if their selection cannot be read, the dialog asks for manual input. Other apps retain clipboard-based capture as a fallback.
+
 Command stickers support scheduled runs, including while their window is closed. File previews never encrypt or overwrite the source file.
 
 ## Manager

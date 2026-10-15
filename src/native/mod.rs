@@ -56,6 +56,7 @@ pub fn run_native(
     // Must run after the platform (and its hidden top-level window) exists,
     // but before the event loop starts dispatching messages.
     power_guard::install();
+    selection::initialize();
 
     let main_window_handle = Arc::new(OnceLock::<AnyWindowHandle>::new());
     let store_handle = Arc::new(OnceLock::<ArcStickerStore>::new());

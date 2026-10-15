@@ -65,6 +65,7 @@ unsafe extern "system" fn source_proc(
 }
 
 struct Fixture {
+    class: *const u16,
     hwnd: HWND,
     foreground: HWND,
     clipboard: Option<String>,
@@ -87,7 +88,7 @@ impl Drop for Fixture {
         unsafe {
             SetForegroundWindow(self.foreground);
             DestroyWindow(self.hwnd);
-            UnregisterClassW(CLASS, GetModuleHandleW(std::ptr::null()));
+            UnregisterClassW(self.class, GetModuleHandleW(std::ptr::null()));
         }
     }
 }
@@ -120,6 +121,10 @@ fn captures_after_shortcut_release_and_slow_copy() -> anyhow::Result<()> {
         "release modifiers before testing"
     );
     let foreground = unsafe { GetForegroundWindow() };
+    anyhow::ensure!(
+        !foreground.is_null(),
+        "Unlock Windows and activate a window before running this desktop test"
+    );
     let previous = arboard::Clipboard::new()?.get_text().ok();
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let class = WNDCLASSW {
@@ -150,6 +155,7 @@ fn captures_after_shortcut_release_and_slow_copy() -> anyhow::Result<()> {
     };
     anyhow::ensure!(!hwnd.is_null(), "create source window");
     let _fixture = Fixture {
+        class: CLASS,
         hwnd,
         foreground,
         clipboard: previous,
@@ -253,7 +259,8 @@ fn captures_after_shortcut_release_and_slow_copy() -> anyhow::Result<()> {
     );
     eprintln!("Empty native selection returned in {elapsed:?}");
 
-    // The same edit must still copy normally when its text is selected.
+    // The same edit must still capture selected text, using accessibility when
+    // available or retaining the clipboard fallback for legacy native controls.
     unsafe {
         SendMessageW(edit, 0xb1, 0, -1);
     } // EM_SETSEL: select all.
@@ -263,6 +270,89 @@ fn captures_after_shortcut_release_and_slow_copy() -> anyhow::Result<()> {
     unsafe {
         SetFocus(hwnd);
         DestroyWindow(edit);
+    }
+
+    // A terminal without an accessibility selection must never receive Ctrl+C
+    // (which would interrupt a real CLI). Use terminal-class fixture windows,
+    // not the user's terminal, with Copy counted as an observable signal.
+    for (ix, terminal_class) in [
+        windows_sys::core::w!("ConsoleWindowClass"),
+        windows_sys::core::w!("CASCADIA_HOSTING_WINDOW_CLASS"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(source_proc),
+            hInstance: instance,
+            lpszClassName: terminal_class,
+            ..Default::default()
+        };
+        anyhow::ensure!(unsafe { RegisterClassW(&class) } != 0);
+        let terminal = unsafe {
+            CreateWindowExW(
+                0,
+                terminal_class,
+                terminal_class,
+                WS_OVERLAPPEDWINDOW,
+                40,
+                40,
+                320,
+                200,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            )
+        };
+        anyhow::ensure!(!terminal.is_null());
+        let restore = Fixture {
+            class: terminal_class,
+            hwnd: terminal,
+            foreground: hwnd,
+            clipboard: arboard::Clipboard::new()?.get_text().ok(),
+        };
+        unsafe {
+            ShowWindow(terminal, SW_SHOW);
+            SetForegroundWindow(terminal);
+            SetFocus(terminal);
+        }
+        wait_until(|| unsafe { GetForegroundWindow() } == terminal);
+        if ix == 0 {
+            simulate(&EventType::KeyPress(Key::ControlLeft)).unwrap();
+            simulate(&EventType::KeyPress(Key::ShiftLeft)).unwrap();
+            wait_until(|| unsafe { GetAsyncKeyState(VK_CONTROL as i32) } < 0
+                && unsafe { GetAsyncKeyState(VK_SHIFT as i32) } < 0);
+        }
+        COPY_COUNT.store(0, Ordering::SeqCst);
+        let generation = crate::native::clipboard::watcher::clipboard_generation();
+        let started = Instant::now();
+        let worker = thread::spawn(capture_selection);
+        wait_until(|| worker.is_finished());
+        anyhow::ensure!(worker.join().unwrap()?.is_none());
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_millis(250),
+            "terminal capture was slow: {:?}",
+            started.elapsed()
+        );
+        anyhow::ensure!(
+            COPY_COUNT.load(Ordering::SeqCst) == 0,
+            "terminal received Ctrl+C"
+        );
+        anyhow::ensure!(crate::native::clipboard::watcher::clipboard_generation() == generation);
+        anyhow::ensure!(unsafe { GetForegroundWindow() } == terminal);
+        eprintln!("Terminal returned without Copy in {:?}", started.elapsed());
+        if ix == 0 {
+            anyhow::ensure!(
+                unsafe { GetAsyncKeyState(VK_CONTROL as i32) } < 0
+                    && unsafe { GetAsyncKeyState(VK_SHIFT as i32) } < 0,
+                "capture must not synthesize modifier releases"
+            );
+            simulate(&EventType::KeyRelease(Key::ShiftLeft)).unwrap();
+            simulate(&EventType::KeyRelease(Key::ControlLeft)).unwrap();
+        }
+        drop(restore);
+        wait_until(|| unsafe { GetForegroundWindow() } == hwnd);
     }
 
     // No foreground application is already a definitive no-selection result.

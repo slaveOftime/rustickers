@@ -1,13 +1,9 @@
-//! Cross-platform clipboard-based selection capture.
+//! Foreground text selection capture, using Windows accessibility before Copy.
 //!
-//! The capture helper used to communicate directly with the arboard clipboard, but as soon as the
-//! clipboard history collector came online (M1+) it became responsible for flipping an internal
-//! flag so the watcher does not stash the temporary marker we drop on the clipboard.
-//!
-//! Callers that need this protection construct a [`selection_with_filter`] closure via
-//! [`SelectionCaptureService::new`], which holds the [`CaptureFilter`] the watcher has been
-//! built with. In tests and CLIs without a watcher the helper still works because the default
-//! is "always treat the write as internal" via a dedicated filter.
+//! Native/accessibility reads leave input and clipboard untouched. Where Copy
+//! is safe and necessary, use the watcher's [`CaptureFilter`] to keep temporary
+//! markers and restoration writes out of history. UI callers run capture on a
+//! worker; a slow application must not block its own input/message pump.
 
 use anyhow::Context;
 use rdev::{EventType, Key, simulate};
@@ -20,7 +16,15 @@ use std::{
 use crate::native::clipboard::CaptureFilter;
 
 #[cfg(target_os = "windows")]
+mod windows_accessibility;
+#[cfg(target_os = "windows")]
 mod windows_capture;
+
+/// Warm the accessibility apartment before the first selection shortcut.
+pub(super) fn initialize() {
+    #[cfg(target_os = "windows")]
+    windows_accessibility::initialize();
+}
 
 /// A self-contained handle on the selection helper.
 ///
@@ -51,11 +55,12 @@ impl Default for SelectionCaptureService {
     }
 }
 
-/// Copy and read the current text selection from the active application.
+/// Read the current text selection from the active application.
 ///
-/// Returns `Ok(None)` when the active application has no direct text selection. The previous
-/// clipboard content is restored afterwards. The temporary marker and the restore step go
-/// through [`CaptureFilter::note_internal_write`] so the history collector never ingests them.
+/// Windows prefers UI Automation without synthesizing input. Recognized terminal
+/// windows never receive a blind Ctrl+C; unreadable selections return `Ok(None)`
+/// so the caller can ask for manual input. Safe clipboard-based fallbacks restore
+/// prior text and mark temporary writes through [`CaptureFilter::note_internal_write`].
 pub fn capture_selection() -> anyhow::Result<Option<String>> {
     capture_selection_with_filter(&CaptureFilter::new())
 }
@@ -96,12 +101,25 @@ pub(super) fn capture_selection_from_window(
     filter: &Arc<CaptureFilter>,
     source: Option<u64>,
 ) -> anyhow::Result<Option<String>> {
-    // Desktop focus and a native edit's collapsed selection are definitive:
-    // return before waiting for modifiers or touching the clipboard. Unknown
-    // apps retain the full asynchronous Copy timeout for compatibility.
     #[cfg(target_os = "windows")]
-    if windows_capture::known_empty_selection(source) {
-        return Ok(None);
+    {
+        // Read without input first: native controls and accessibility providers
+        // can prove empty selections without waiting for shortcut key release.
+        if windows_capture::known_empty_selection(source) {
+            return Ok(None);
+        }
+        verify_foreground(source)?;
+        let source = source.expect("verified foreground");
+        match windows_accessibility::read(source) {
+            windows_accessibility::SelectionRead::Empty => return Ok(None),
+            windows_accessibility::SelectionRead::Text(text) => return Ok(Some(text)),
+            windows_accessibility::SelectionRead::Unavailable => {}
+        }
+        // A failed/unsupported accessibility provider must not turn capture
+        // into Ctrl+C/SIGINT against a running shell or terminal CLI.
+        if windows_capture::copy_is_unsafe(source) {
+            return Ok(None);
+        }
     }
     // SendInput does not neutralize physically held modifiers. In particular,
     // Ctrl+Shift+Space must not turn our Ctrl+C into Ctrl+Shift+C. Never fake
@@ -192,6 +210,8 @@ fn restore_clipboard(
     filter.record_internal_generation();
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod windows_browser_tests;
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests;
 
